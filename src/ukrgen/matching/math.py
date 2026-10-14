@@ -497,11 +497,13 @@ def get_operand_io(n: ast_node, opd : str) -> tuple[bool,bool]:
 
     def mark_io(n: ast_node):
         if isinstance(n, expression_node):
-            if isinstance(n.left, operand_ref):
+            if isinstance(n.left, operand_ref) and n.left.name == opd:
+                # The destination of a MOVE is written, not read. An operand that
+                # is also read (an accumulator) shows up as an input elsewhere,
+                # e.g. as the left side of the ADD below the MOVE.
                 if operation.MOVE == n.op:
-                    if n.left.name == opd:
-                        io[1] = True
-                if n.left.name == opd:
+                    io[1] = True
+                else:
                     io[0] = True
             if n.right is not None:
                 if isinstance(n.right, operand_ref):

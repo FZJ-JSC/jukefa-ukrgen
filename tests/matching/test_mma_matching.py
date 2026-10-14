@@ -358,3 +358,22 @@ class test_mm_matching(unittest.TestCase):
         self.assertEqual((True,False), get_operand_io(self.mm_req, "B"))
         self.assertEqual((True,True), get_operand_io(self.mm_req, "C"))
 
+    def test_operand_io_pure_output(self):
+        """
+        A MOVE destination that is never read is an output only - otherwise the
+        data movement solver demands a load of a register that is about to be
+        overwritten.
+        """
+        self.assertEqual((False,True), get_operand_io(HW_FMUL_AST, "cdreg"))
+        self.assertEqual((True,False), get_operand_io(HW_FMUL_AST, "adreg"))
+        # an accumulator is read by the ADD, so it stays both
+        self.assertEqual((True,True), get_operand_io(HW_FMA_AST, "cdreg"))
+
+        pack = expression_node(
+            operation.MOVE, operand_ref(name="Y", indices=('m','n')),
+            expression_node(operation.MUL,
+                            operand_ref(name="X", indices=('m','n')),
+                            operand_ref(name="kappa", indices=(None,None))))
+        self.assertEqual((False,True), get_operand_io(pack, "Y"))
+        self.assertEqual((True,False), get_operand_io(pack, "X"))
+
