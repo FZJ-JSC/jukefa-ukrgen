@@ -14,7 +14,7 @@ from asmgen.asmblocks.op import (
     operation_modifier as opmod,
     operand_modifier as opdmod,
     opd3_modifier as d3mod,
-    opdna1_modifier as dna1mod,
+    opmem_modifier as memmod,
     register_type as rgt
 )
 from asmgen.registers import asm_data_type as adt
@@ -22,7 +22,7 @@ from asmgen.registers import asm_data_type as adt
 from asmgen.asmblocks.sve import sve
 from asmgen.asmblocks.sme import sme
 from asmgen.asmblocks.rvv import rvv
-from asmgen.asmblocks.avx_fma import avx512
+from asmgen.asmblocks.avx import avx512
 from asmgen.asmblocks.neon import neon
 
 
@@ -98,12 +98,12 @@ class test_signature_filters(unittest.TestCase):
         sigs = [sig for sig in sigs if sig.operands['adreg'].dt == adt.FP32]
 
         self.assertTrue(len(sigs) > 0)
-        self.assertTrue(any(dna1mod.STRUCT not in sig.modifiers for sig in sigs))
+        self.assertTrue(any(memmod.STRUCT not in sig.modifiers for sig in sigs))
 
         sigs = filter_by_operand_count(sigs, 'load', 0, 4)
 
         self.assertTrue(len(sigs) > 0)
-        self.assertTrue(all(dna1mod.STRUCT in sig.modifiers for sig in sigs))
+        self.assertTrue(all(memmod.STRUCT in sig.modifiers for sig in sigs))
 
 
     def test_sme_fp16_row_move_step_filters_vec_to_vec(self):

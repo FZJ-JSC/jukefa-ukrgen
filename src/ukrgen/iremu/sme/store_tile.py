@@ -4,7 +4,7 @@ Emulation for storing a single tile register in SME
 
 
 # enables signature:
-#  - opdna1 1 tile with
+#  - opmem 1 tile with
 #    - gp reg col offset, continuous rows
 #    - gp reg row offset, continuous cols
 #    - gp reg cols and rows

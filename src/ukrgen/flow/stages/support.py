@@ -18,9 +18,9 @@ from ...specializers.asm import lsc_specializer
 from .isaparam import isaparam_stage
 
 asmgen_modules = {
-    'avx128' : 'avx_fma',
-    'avx256' : 'avx_fma',
-    'avx512' : 'avx_fma',
+    'avx128' : 'avx',
+    'avx256' : 'avx',
+    'avx512' : 'avx',
     'rvv'    : 'rvv',
     'rvv071' : 'rvv071',
     'neon'   : 'neon',

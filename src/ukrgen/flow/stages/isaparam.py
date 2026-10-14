@@ -1,6 +1,5 @@
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
-from ...specializers.asm import lsc_specializer
 from .stage import stage
 
 from asmgen.registers import reg_tracker,asm_data_type as adt
@@ -37,10 +36,6 @@ class isaparam_stage(stage):
             ('freg',self.context.gen.max_fregs),
             ('vreg',self.context.gen.max_vregs),
             ('treg',self.context.gen.max_tregs(adt.FP64))])
-
-        self.context.specializer = lsc_specializer(
-                model=None,
-                gen=self.context.gen)
 
         self.context.params.update(self.params)
         return []

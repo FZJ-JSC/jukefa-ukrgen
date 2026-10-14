@@ -4,15 +4,24 @@
 # Copyright (C) 2021 Stepan Nassyr <s.nassyr@xcpp.org>
 # ------------------------------------------------------------------------------
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from asmgen.asmblocks.noarch import asmgen
 from asmgen.registers import asm_data_type as adt
-from ..models.load_store_cpu import load_store_cpu
-from ..models.load_store_operations import lsc_operation
-from ..models.offset_mapper import offset_mapper
-from ..specializers.asm import lsc_specializer,op_support
-from ..generators.mm import mm_op
 
 from .stage_param import stage_param
+
+if TYPE_CHECKING:
+    # TODO: Fix/rewrite model/specializer/generator
+    #       For now the TYPE_CHECKING enables import from already-reworked stages
+    from asmgen.registers import reg_tracker
+    from ..models.load_store_cpu import load_store_cpu
+    from ..models.load_store_operations import lsc_operation
+    from ..models.offset_mapper import offset_mapper
+    from ..specializers.asm import lsc_specializer, op_support
+    from ..generators.mm import mm_op
 
 class ukr_context:
     """
@@ -22,7 +31,7 @@ class ukr_context:
     """
     def __init__(self):
         self.gen             : asmgen = None
-        self.rt              : register_tracker = None
+        self.rt              : reg_tracker = None
         self.params          : dict[str,stage_param] = dict()
 
         self.model           : load_store_cpu = None

@@ -20,19 +20,17 @@ from .templates import (
 from ...flow.stage_engine import stage_engine
 from ...flow.ukr_context import ukr_context
 
-from ...flow.stages import (
-    stage,
-    support_stage,
-    datatype_stage,
-    dimension_stage,
-    mm_sto_stage,
-    lsc_model_stage,
-    irmod_inserter_stage,
-    lsc_mru_stage,
-    lsc_schedule_stage,
-    specialize_lsc_stage,
-    blis_ukr_codegen_stage
-)
+from ...flow.stages.stage import stage
+from ...flow.stages.support import support_stage
+from ...flow.stages.datatype import datatype_stage
+from ...flow.stages.dimension import dimension_stage
+from ...flow.stages.sto import mm_sto_stage
+from ...flow.stages.model import lsc_model_stage
+from ...flow.stages.irmod import irmod_inserter_stage
+from ...flow.stages.mru import lsc_mru_stage
+from ...flow.stages.schedule import lsc_schedule_stage
+from ...flow.stages.specialize import specialize_lsc_stage
+from ...flow.stages.codegen import blis_ukr_codegen_stage
 
 class config_prolog:
     def __init__(self, config : dict[str,str|list[str]]):

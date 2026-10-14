@@ -24,7 +24,7 @@ from asmgen.asmblocks.op import (
     operand_type as ot,
     operand_role as orl,
     register_type as rgt,
-    opdna1_modifier as dna1mod,
+    opmem_modifier as dna1mod,
     opd3_modifier as d3mod,
     move_modifier as mvmod,
     operand_modifier as opdmod
