@@ -46,13 +46,20 @@ class argparse_prolog:
             return
 
         for pname in params:
+            param = s.get_param(pname)
+            if param.flag:
+                self.parser.add_argument(
+                    f"--{pname}",
+                    action="store_true",
+                    help=param.description)
+                continue
             self.parser.add_argument(
                 f"--{pname}",
-                nargs="+" if s.get_param(pname).multi else None,
-                help=s.get_param(pname).description,
-                default=s.get_param(pname).default,
-                choices=s.get_param(pname).choices,
-                required=s.get_param(pname).required)
+                nargs="+" if param.multi else None,
+                help=param.description,
+                default=param.default,
+                choices=param.choices,
+                required=param.required)
 
 
         args, self.rest = self.parser.parse_known_args()
