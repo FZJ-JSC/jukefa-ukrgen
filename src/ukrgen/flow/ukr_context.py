@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from ..models.offset_mapper import offset_mapper
     from ..specializers.asm import lsc_specializer, op_support
     from ..generators.mm import mm_op
+    from ..support.op import op_support_builder
+    from .stages.ukr.ukr import ukr_composition
 
 class ukr_context:
     """
@@ -31,6 +33,9 @@ class ukr_context:
     """
     def __init__(self):
         self.gen             : asmgen = None
+        self.composition     : type[ukr_composition] = None
+        self.osb             : op_support_builder = None
+        self.to_choices      : dict[str,list[str]] = dict()
         self.rt              : reg_tracker = None
         self.params          : dict[str,stage_param] = dict()
 

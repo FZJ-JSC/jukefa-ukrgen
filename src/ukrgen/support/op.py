@@ -17,6 +17,7 @@ from asmgen.registers import (
     adt_size
 )
 from asmgen.asmblocks.op import (
+    operand_role as orl,
     operation,
     operand_shape,
     operand_type as otype,
@@ -221,7 +222,9 @@ class op_support_builder:
             sigs : list[opsig] = getattr(self.gen, opname).get_signatures()
             for sig in sigs:
                 for opd_name,osh in sig.operands.items():
-                    if osh.dt is not None:
+                    # only data operands: the base address register's UINT64 says
+                    # nothing about which data types can be loaded
+                    if osh.dt is not None and osh.orole == orl.DATA:
                         dts.add(osh.dt)
 
         return dts

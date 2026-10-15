@@ -17,27 +17,7 @@ from ...specializers.asm import lsc_specializer
 
 from .isaparam import isaparam_stage
 
-asmgen_modules = {
-    'avx128' : 'avx',
-    'avx256' : 'avx',
-    'avx512' : 'avx',
-    'rvv'    : 'rvv',
-    'rvv071' : 'rvv071',
-    'neon'   : 'neon',
-    'sve'    : 'sve',
-    'sme'    : 'sme',
-}
-
-asmgen_map = {
-    'avx128' : 'fma128',
-    'avx256' : 'fma256',
-    'avx512' : 'avx512',
-    'rvv'    : 'rvv',
-    'rvv071' : 'rvv071',
-    'neon'   : 'neon',
-    'sve'    : 'sve',
-    'sme'    : 'sme',
-}
+from ..isa_map import asmgen_modules, asmgen_map
 
 def get_ukr_components(ukr : str) -> list[str]:
     if "gemm" == ukr:

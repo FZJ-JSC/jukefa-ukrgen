@@ -1,192 +1,69 @@
-# ------------------------------------------------------------------------------
-# SPDX-License-Identifier: MIT OR GPL-3.0-or-later
-# Copyright (C) 2021 Stepan Nassyr <s.nassyr@fz-juelich.de>
-# Copyright (C) 2021 Stepan Nassyr <s.nassyr@xcpp.org>
-# ------------------------------------------------------------------------------
+"""
+Data types of the microkernel's components
+"""
+
+import logging
 
 from asmgen.registers import asm_data_type as adt
 
-from .stage import stage
-from .variant import variant_stage
-
-from ..ukr_context import ukr_context
 from ..stage_param import stage_param
+from ..ukr_context import ukr_context
+from .stage import stage
+from ...support.op import op_support_builder
 
-from .ukr import ukr_composition_map
 
-import itertools
+def dt_names(dts) -> list[str]:
+    """
+    Every name, aliases included, that refers to one of the given data types.
 
+    Iterating asm_data_type skips aliases (FP64 for DOUBLE, FP32 for SINGLE, ...),
+    so the names are taken from __members__ to accept either spelling.
 
-def extend_adtstr_list(initial_list : list[str]):
-    initial_list=list(set(initial_list))
-
-    initial_dts = {adt[name] for name in initial_list}
-    initial_values = {dt.value for dt in initial_dts}
-
-    extended_dts = [dt for dt in adt if dt.value in initial_values]
-    extended_dts.sort(key= lambda dt: (dt.value, dt.name))
-
-    return [dt.name for dt in extended_dts]
+    :param dts: data types to name
+    :return: sorted names
+    """
+    wanted = set(dts)
+    return sorted(name for name, dt in adt.__members__.items() if dt in wanted)
 
 
 class datatype_stage(stage):
+    """
+    Asks for the data type of every component that has one of its own.
+
+    The choices are every data type the ISA can load or store, not only those
+    some full implementation supports: checking matches and data resolutions for
+    every combination takes minutes. A combination that turns out to be
+    unsupported is reported by the stage that solves for implementations.
+    """
+
     def __init__(self, context : ukr_context):
         super().__init__(context)
 
+        self.debug = logging.getLogger("DATATYPE").debug
 
+        osb = op_support_builder(gen=context.gen)
+        osb.determine_base_support()
+        context.osb = osb
 
-        ukr = context.params["ukr"].value
-        composition = ukr_composition_map[ukr]
+        choices = dt_names(osb.get_all_ldst_opd_dts())
 
-        component_list = []
-
-        component_list = composition.get_parameterized_components()
-        self.component_list = component_list
-
-        # Get ISA supported datatypes
-        op = context.params["op"].value
-
-        a_choices = []
-        for sup in context.specializer.op_support_map[op]:
-            a_choices.append(sup.triple.a.name)
-        a_choices = extend_adtstr_list(a_choices)
-
-        b_choices = []
-        for sup in context.specializer.op_support_map[op]:
-            b_choices.append(sup.triple.b.name)
-        b_choices = extend_adtstr_list(b_choices)
-
-        c_choices = []
-        for sup in context.specializer.op_support_map[op]:
-            c_choices.append(sup.triple.c.name)
-        c_choices = extend_adtstr_list(c_choices)
-
-
-        # Set choices per component
-        component_choices = {}
-        for c in component_list:
-            choices = set()
-            sup_tiles = composition.get_component_sup_tiles(c)
-            if "a" in sup_tiles:
-                choices.update(a_choices)
-            if "b" in sup_tiles:
-                choices.update(b_choices)
-            if "c" in sup_tiles:
-                choices.update(c_choices)
-
-            component_choices[c] = list(choices)
-
-        for c in component_list:
-            if not component_choices[c]:
-                raise ValueError(f"No datatype choices for component {c}")
-            name = f"{c}-data-type"
-
-            self.params[name] = stage_param(
+        for comp in context.composition.get_typed_components():
+            self.params[f"{comp}-data-type"] = stage_param(
                     value=None,
-                    description=f"Data type for component {c}",
-                    choices=component_choices[c],
-                    required=True
-                    )
+                    description=f"Data type of {comp}",
+                    choices=choices)
 
+    def progress(self):
+        composition = self.context.composition
 
-    def progress(self) -> list[stage]:
+        own = {comp: adt[self.params[f"{comp}-data-type"].value]
+               for comp in composition.get_typed_components()}
 
-        self.context.component_types = {
-            k : adt[self.params[f"{k}-data-type"].value] \
-                    for k in self.component_list
-        }
+        self.context.component_dts = {
+            comp.name: own[composition.dt_source(comp.name)]
+            for comp in composition.get_components()}
 
-        op = self.context.params["op"].value
-        cdts = self.context.component_types
-        ukr = self.context.params["ukr"].value
+        self.debug(f"component data types: {self.context.component_dts}")
 
-        composition = ukr_composition_map[ukr]
-        components = composition.get_components()
-        sups = self.context.specializer.op_support_map[op]
-
-        for c in components:
-            real_c = composition.get_component_reference(c)
-            cdts[c] = cdts[real_c]
-
-        sup_tile_components = composition.get_sup_tile_components()
-
-        self.op_support_list = []
-        for sup in sups:
-            # example:
-            # component : tileset
-            # A : {a,b}
-            # B : {a,b}
-            # C : {c}
-            # AB : {c}
-            # alpha->C : {c}
-            # beta->C : {c}
-
-            # combinations:
-            # A, B, C
-            # B, A, C
-            # A, B, AB
-            # B, A, AB
-            # A, B, alpha
-            # B, A, alpha
-            # A, B, beta
-            # B, A, beta
-
-            # sup = fp64, fp64, fp64
-            # all cdts fp64:
-            #
-            # ==> add
-
-            # sup = fp16, fp16, fp32
-            # cdts: A,B: FP16, rest: FP32
-            #
-            # ==> add
-            # sup = fp32, fp32, fp32
-            # cdts: A,B: FP16, rest: FP32
-            #
-            # ==> don't add
-
-            # sup = fp8e5m2, fp16, fp32
-            # cdts: A: fp16, B: fp8e5m2, C: fp32
-            # combinations:
-            # A, B, C     <- invalid
-            # B, A, C     <- valid
-            # A, B, AB    <- invalid
-            # B, A, AB    <- valid
-            # A, B, alpha <- invalid
-            # B, A, alpha <- valid
-            # A, B, beta  <- invalid
-            # B, A, beta  <- valid
-            #
-            # ==> add
-            
-            components_mapped = set()
-            for a,b,c in itertools.product(sup_tile_components['a'],
-                                           sup_tile_components['b'],
-                                           sup_tile_components['c']):
-                combination_components = [x for x in (a,b,c) if x is not None]
-
-                if len({a,b,c}) < len(combination_components):
-                    continue
-
-                if ((sup.triple.a == cdts[a]) and
-                    (sup.triple.b == cdts[b]) and
-                    (sup.triple.c == cdts[c])):
-                    components_mapped.update(combination_components)
-
-            if components_mapped == set(components):
-                self.op_support_list.append(sup)
-
-        self.context.component_dts = cdts
-
-        if len(self.op_support_list) == 1:
-            self.context.sup = self.op_support_list[0]
-        elif len(self.op_support_list) == 0:
-            raise ValueError(f"No valid op support")
-
-        self.context.op_support_list = self.op_support_list
         self.context.params.update(self.params)
-
-        if len(self.op_support_list) > 1:
-            return [variant_stage]
-        else:
-            return list()
+        return []
