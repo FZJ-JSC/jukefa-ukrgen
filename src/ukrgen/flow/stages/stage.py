@@ -24,6 +24,14 @@ class early_exit(Exception):
         self.code = code
 
 
+class stage_error(Exception):
+    """
+    A problem with the user's parameters a stage can only detect while running,
+    e.g. a data type combination with no implementation. Reported without a
+    traceback.
+    """
+
+
 class stage:
 
     def __init__(self, context : ukr_context):

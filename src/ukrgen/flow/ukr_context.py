@@ -36,6 +36,7 @@ class ukr_context:
         self.composition     : type[ukr_composition] = None
         self.osb             : op_support_builder = None
         self.to_choices      : dict[str,list[str]] = dict()
+        self.to_candidates   : dict[str,dict] = dict()
         self.rt              : reg_tracker = None
         self.params          : dict[str,stage_param] = dict()
 

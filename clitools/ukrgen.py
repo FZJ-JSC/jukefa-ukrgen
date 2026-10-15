@@ -9,17 +9,10 @@ import sys
 
 from argparse import ArgumentParser
 
-from ukrgen.flow.stages.stage import stage
-from ukrgen.flow.stages.support import support_stage
+from ukrgen.flow.stages.stage import stage, stage_error
+from ukrgen.flow.stages.setup import setup_stage
 from ukrgen.flow.stages.datatype import datatype_stage
-from ukrgen.flow.stages.dimension import dimension_stage
-from ukrgen.flow.stages.sto import mm_sto_stage
-from ukrgen.flow.stages.model import lsc_model_stage
-from ukrgen.flow.stages.mru import lsc_mru_stage
-from ukrgen.flow.stages.schedule import lsc_schedule_stage
-from ukrgen.flow.stages.specialize import specialize_lsc_stage
-from ukrgen.flow.stages.irmod import irmod_inserter_stage
-from ukrgen.flow.stages.codegen import blis_ukr_codegen_stage
+from ukrgen.flow.stages.solve import solve_stage
 
 from ukrgen.flow.ukr_context import ukr_context
 from ukrgen.flow.stage_engine import stage_engine
@@ -27,12 +20,6 @@ from ukrgen.flow.stage_engine import stage_engine
 from ukrgen.logging import setup_loggers
 
 helpargs=['-h','--help']
-
-def helpexit_if_last_parser(rest : list[str], parser : ArgumentParser):
-    if any(a in rest for a in helpargs):
-        if not [a for a in rest if a not in helpargs]:
-            parser.print_help()
-            sys.exit(0)
 
 class argparse_prolog:
     def __init__(self, parser : ArgumentParser):
@@ -62,8 +49,18 @@ class argparse_prolog:
                 required=param.required)
 
 
+        # With --help, stop at the first stage still missing a required argument:
+        # the help then shows everything given so far plus what this stage needs.
+        # Parsing first would fail on that missing argument instead of helping.
+        argv = sys.argv[1:]
+        if any(a in argv for a in helpargs):
+            def given(pname):
+                return any(a == f"--{pname}" or a.startswith(f"--{pname}=") for a in argv)
+            if any(s.get_param(p).required and not given(p) for p in params):
+                self.parser.print_help()
+                sys.exit(0)
+
         args, self.rest = self.parser.parse_known_args()
-        helpexit_if_last_parser(rest=self.rest, parser=self.parser)
 
         for pname in params:
 
@@ -97,17 +94,15 @@ def main():
 
     setup_loggers(debugall=debugall, debug_systems=debug_systems)
 
+    # The flow is being reworked onto operation signatures. It currently ends
+    # once every STO has a hardware implementation chosen; the later stages
+    # (STO generation, model, scheduling, codegen) still run on the old asmgen
+    # API and are reconnected as they are ported.
     stages = [
-        support_stage,
+        setup_stage,
         datatype_stage,
-        dimension_stage,
-        mm_sto_stage,
-        lsc_model_stage,
-        specialize_lsc_stage,
-        irmod_inserter_stage,
-        lsc_mru_stage,
-        lsc_schedule_stage,
-        blis_ukr_codegen_stage]
+        solve_stage,
+    ]
 
     prolog = argparse_prolog(parser=parser)
 
@@ -115,7 +110,11 @@ def main():
                       ctx=ukr_ctx,
                       prolog=prolog)
 
-    se.run()
+    try:
+        result = se.run()
+    except stage_error as err:
+        print(f"error: {err}", file=sys.stderr)
+        sys.exit(2)
 
     # prolog won't print help if there are any parameters not consumed
     # by stages
@@ -123,7 +122,18 @@ def main():
         parser.print_help()
         sys.exit(0)
 
-    print(ukr_ctx.asmblocks["full_function"])
+    if not result.completed:
+        print(result.output)
+        sys.exit(result.code)
+
+    if "full_function" in ukr_ctx.asmblocks:
+        print(ukr_ctx.asmblocks["full_function"])
+        return
+
+    for sto, chosen in ukr_ctx.to_choices.items():
+        for enc in chosen:
+            print(f"--{sto}-to \"{enc}\"")
+    print("(the flow currently ends after choosing implementations)", file=sys.stderr)
 
 if __name__ == "__main__":
     main()

@@ -8,21 +8,17 @@ from copy import deepcopy
 import logging
 
 def setup_loggers(debugall : bool =False, debug_systems : set[str] = list()):
+    """
+    Show warnings by default, debug output for the named subsystems, or
+    everything with debugall.
 
-    baselevel = logging.WARNING
-    if debugall:
-        baselevel = logging.DEBUG
+    Each module logs to a logger named after its subsystem (STO, MATCHING,
+    SOLVE, ...). Previously the root logger was set to DEBUG and only a fixed
+    list of subsystems was turned back down, so any logger missing from that
+    list printed all of its debug output.
+    """
+    logging.basicConfig(level=logging.DEBUG if debugall else logging.WARNING)
 
-    logging.basicConfig(level=logging.DEBUG)
-
-    for name in ["STO", "LSC", "LSCIRMOD",
-                 "ADDR", "CODEGEN", "FNGEN",
-                 "SCHED", "MRU", "BLISPATCH"]:
-        logger = logging.getLogger(name)
-
-        if name in debug_systems:
-            print(f"{name} debug output enabled")
-            logger.setLevel(logging.DEBUG)
-        else:
-            logger.setLevel(baselevel)
-
+    for name in debug_systems:
+        print(f"{name} debug output enabled")
+        logging.getLogger(name).setLevel(logging.DEBUG)
