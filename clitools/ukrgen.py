@@ -130,9 +130,11 @@ def main():
         print(ukr_ctx.asmblocks["full_function"])
         return
 
-    for sto, chosen in ukr_ctx.to_choices.items():
-        for enc in chosen:
-            print(f"--{sto}-to \"{enc}\"")
+    for sto in ukr_ctx.to_parts[0]:
+        encodings = [part[sto].encoding for part in ukr_ctx.to_parts]
+        if 1 == len(set(encodings)):
+            encodings = encodings[:1]
+        print(f"--{sto}-to " + " ".join(f'"{enc}"' for enc in encodings))
     print("(the flow currently ends after choosing implementations)", file=sys.stderr)
 
 if __name__ == "__main__":

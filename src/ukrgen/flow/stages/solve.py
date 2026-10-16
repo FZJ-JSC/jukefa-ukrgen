@@ -5,6 +5,7 @@ Choosing how each STO is implemented in hardware ("to"s)
 from __future__ import annotations
 
 import difflib
+import itertools
 import logging
 from dataclasses import dataclass
 
@@ -14,8 +15,8 @@ from asmgen.registers import asm_data_type as adt
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
-from .ukr.ukr import sto_description, sto_kind
-from ...matching.math import transformation as tf
+from .ukr.ukr import ukr_composition, sto_description, sto_kind, read_access
+from ...matching.math import transformation as tf, get_operand_io
 from ...support.data_move import (
     resolution_registry,
     tfr_key,
@@ -39,7 +40,7 @@ def default_registry() -> resolution_registry:
     return registry
 
 
-@dataclass
+@dataclass(frozen=True)
 class store_candidate:
     """
     One way to write a component to memory
@@ -54,6 +55,41 @@ class store_candidate:
 
     def encode(self) -> str:
         return f"{self.component}.{self.rtype.name}:{self.rsln.unique_tag}"
+
+
+@dataclass(frozen=True)
+class store_choice:
+    """
+    One way to store every component of a store STO
+    """
+    stores : tuple[store_candidate, ...]
+
+    def encode(self) -> str:
+        return " ; ".join(s.encode() for s in self.stores)
+
+
+@dataclass(frozen=True)
+class chosen_to:
+    """
+    The implementation chosen for one STO in one part
+
+    :param encoding: its selection string
+    :param impl: the implementation - an operation chain or a store choice
+    """
+    encoding : str
+    impl : resolved_operation_chain | store_choice
+
+
+@dataclass(frozen=True)
+class to_io:
+    """
+    Register types an implementation takes operands in and leaves them in
+
+    :param reads: operand -> register type the implementation reads it in
+    :param writes: operand -> register type it leaves it in
+    """
+    reads : dict[str, rgt]
+    writes : dict[str, rgt]
 
 
 def produced_rtype(impl: resolved_operation_chain, component: str) -> rgt | None:
@@ -71,11 +107,82 @@ def produced_rtype(impl: resolved_operation_chain, component: str) -> rgt | None
     return None
 
 
+def consumed_rtype(impl: resolved_operation_chain, component: str) -> rgt | None:
+    """
+    Register type an implementation reads a component in
+
+    :param impl: implementation of a compute STO
+    :param component: requirement operand name
+    :return: register type of the first read of it, or None if it is not read
+    """
+    for res, step in zip(impl.resolved_chain, impl.math_chain):
+        for hw_name, math_name in step.name_mapping.items():
+            if math_name == component and get_operand_io(step.hw_ast, hw_name)[0]:
+                return res.compute_sg.representative.operands[hw_name].rtype
+    return None
+
+
+def io_of(sto: sto_description, impl: resolved_operation_chain | store_choice) -> to_io:
+    """
+    Register types the implementation of an STO reads and writes its operands in
+    """
+    if sto_kind.STORE == sto.kind:
+        return to_io(reads={s.component: s.rtype for s in impl.stores}, writes={})
+
+    reads, writes = {}, {}
+    for op in sto.operands:
+        is_read, is_written = sto.io(op)
+        if is_read and (rtype := consumed_rtype(impl, op)) is not None:
+            reads[op] = rtype
+        if is_written and (rtype := produced_rtype(impl, op)) is not None:
+            writes[op] = rtype
+    return to_io(reads=reads, writes=writes)
+
+
+def check_part_chain(composition: type[ukr_composition],
+                     ios: dict[str, to_io]) -> list[str]:
+    """
+    Find where one part's implementations disagree about register types: an STO
+    reading a component left in registers by an earlier STO must read it in the
+    register type that STO left it in. With fused implementations each part is
+    its own chain - a part whose mm accumulates in ZA needs a scale and a store
+    working from ZA, while another part's work from Z registers.
+
+    Only components already in registers are checked; loaded and zeroed ones
+    have no earlier producer.
+
+    :param composition: the microkernel
+    :param ios: STO name -> register types its chosen implementation uses
+    :return: one line per disagreement; empty if the chain is consistent
+    """
+    flow = composition.dataflow()
+    held: dict[str, tuple[rgt, str]] = {}
+    problems = []
+    for block in composition.get_blocks():
+        for name in block.stos:
+            io = ios[name]
+            for op in composition.get_sto(name).operands:
+                if read_access.RESIDENT != flow[(name, op)].read:
+                    continue
+                reads, left = io.reads.get(op), held.get(op)
+                if reads is not None and left is not None and reads != left[0]:
+                    problems.append(f"{name} reads {op} from {reads.name}, but "
+                                    f"{left[1]} leaves it in {left[0].name}")
+            for op, rtype in io.writes.items():
+                held[op] = (rtype, name)
+    return problems
+
+
 class solve_stage(stage):
     """
     For every STO, finds the hardware implementations available for the chosen
-    ISA and data types and asks which to use (--<sto>-to). A compute STO can be
-    given several, to be fused - e.g. an SME outer product next to SVE FMAs.
+    ISA and data types and asks which to use (--<sto>-to).
+
+    Fusing implementations - e.g. an SME outer product next to SVE FMAs - splits
+    the microtile into parts, each with its own chain of implementations through
+    every STO: what one part's mm leaves in ZA, that part's scale and store must
+    take from ZA. So every --<sto>-to takes one value per part, or a single value
+    used by every part. The number of parts is the longest list given.
 
     --list-to-candidates prints every candidate and stops.
 
@@ -90,12 +197,11 @@ class solve_stage(stage):
         self.debug = logging.getLogger("SOLVE").debug
 
         for sto in context.composition.get_sto_descriptions():
-            what = ("implementation(s); several are fused"
-                    if sto_kind.COMPUTE == sto.kind else "store implementation")
             self.params[f"{sto.name}-to"] = stage_param(
                     value=None,
-                    description=f"{sto.name}: {what}. A candidate string or its index "
-                                f"from --list-to-candidates",
+                    description=f"Implementation of {sto.name}: one per part of the "
+                                f"microtile, or one for all parts. A candidate string "
+                                f"or its index from --list-to-candidates",
                     required=False,
                     multi=True)
 
@@ -120,14 +226,15 @@ class solve_stage(stage):
         return dict(sorted(zip(encodings, impls)))
 
     def store_candidates(self, sto: sto_description, registry: resolution_registry,
-                         producible: dict[str, set[rgt]]) -> dict[str, store_candidate]:
+                         producible: dict[str, set[rgt]]) -> dict[str, store_choice]:
         """
-        Ways to store each component of a store STO, for every register type an
-        earlier STO could leave it in
+        Ways to store all components of a store STO: one store per component, for
+        every register type an earlier STO could leave it in
         """
-        cands: dict[str, store_candidate] = {}
+        per_component = []
         for comp in sto.store_components:
             dt = self.context.component_dts[comp]
+            stores = []
             for rtype in sorted(producible.get(comp, set()), key=lambda r: r.name):
                 seen = set()
                 for tfs in (frozenset({tf.NONE}), frozenset()):
@@ -136,9 +243,11 @@ class solve_stage(stage):
                         if rsln.unique_tag in seen or not self.steps_supported(rsln, dt):
                             continue
                         seen.add(rsln.unique_tag)
-                        cand = store_candidate(component=comp, rtype=rtype, rsln=rsln)
-                        cands[cand.encode()] = cand
-        return dict(sorted(cands.items()))
+                        stores.append(store_candidate(component=comp, rtype=rtype, rsln=rsln))
+            per_component.append(stores)
+
+        choices = [store_choice(stores=combo) for combo in itertools.product(*per_component)]
+        return dict(sorted((c.encode(), c) for c in choices))
 
     def steps_supported(self, rsln: transformation_resolution, dt: adt) -> bool:
         """
@@ -184,7 +293,9 @@ class solve_stage(stage):
         """
         composition = self.context.composition
         dts = " ".join(f"{c}={dt.name}" for c, dt in self.context.component_dts.items())
-        lines = [f"{self.context.params['ukr'].value} on {self.context.params['isa'].value}: {dts}"]
+        lines = [f"{self.context.params['ukr'].value} on {self.context.params['isa'].value}: {dts}",
+                 "Give each --<sto>-to one candidate per part of the microtile, or one "
+                 "for all parts."]
 
         for block in composition.get_blocks():
             for name in block.stos:
@@ -241,34 +352,39 @@ class solve_stage(stage):
             raise early_exit(self.listing(candidates))
 
         composition = self.context.composition
-        chosen_rtype: dict[str, set[rgt]] = {}
+        order = [name for block in composition.get_blocks() for name in block.stos]
 
-        for block in composition.get_blocks():
-            for name in block.stos:
-                sto = composition.get_sto(name)
-                cands = candidates[name]
-                chosen = self.select(name, self.params[f"{name}-to"].value or [], cands)
+        given = {name: self.params[f"{name}-to"].value or [] for name in order}
+        nparts = max([len(values) for values in given.values()] + [1])
 
-                if sto_kind.COMPUTE == sto.kind:
-                    for enc in chosen:
-                        for op in sto.operands:
-                            if sto.io(op)[1]:
-                                rtype = produced_rtype(cands[enc], op)
-                                if rtype is not None:
-                                    chosen_rtype.setdefault(op, set()).add(rtype)
-                else:
-                    if len(chosen) != 1:
-                        raise stage_error(f"--{name}-to takes exactly one candidate")
-                    store = cands[chosen[0]]
-                    produced = chosen_rtype.get(store.component, set())
-                    if store.rtype not in produced:
-                        raise stage_error(
-                            f"--{name}-to stores {store.component} from "
-                            f"{store.rtype.name}, but the chosen implementations leave "
-                            f"it in {sorted(r.name for r in produced)}")
+        parts: list[dict[str, str]] = [dict() for _ in range(nparts)]
+        for name in order:
+            values = given[name]
+            if values and len(values) not in (1, nparts):
+                raise stage_error(f"--{name}-to has {len(values)} values for {nparts} "
+                                  f"parts: give one per part, or one for all parts")
+            chosen = self.select(name, values, candidates[name])
+            if 1 == len(chosen):
+                chosen = chosen * nparts
+            for part, enc in zip(parts, chosen):
+                part[name] = enc
 
-                self.context.to_choices[name] = chosen
-                self.debug(f"{name}: {chosen}")
+        problems = []
+        for i, part in enumerate(parts):
+            ios = {name: io_of(composition.get_sto(name), candidates[name][enc])
+                   for name, enc in part.items()}
+            where = f"part {i + 1}: " if nparts > 1 else ""
+            problems.extend(where + p for p in check_part_chain(composition, ios))
+        if problems:
+            raise stage_error("the chosen implementations disagree about register types:\n" +
+                              "\n".join(f"  {p}" for p in problems))
+
+        self.context.to_parts = [
+            {name: chosen_to(encoding=enc, impl=candidates[name][enc])
+             for name, enc in part.items()}
+            for part in parts]
+        for i, part in enumerate(parts):
+            self.debug(f"part {i + 1}: {part}")
 
         self.context.to_candidates = candidates
         self.context.params.update(self.params)
