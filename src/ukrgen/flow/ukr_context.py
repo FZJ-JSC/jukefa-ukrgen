@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from ..support.op import op_support_builder
     from .stages.ukr.ukr import ukr_composition
     from .stages.solve import chosen_to
+    from .stages.sto import sto_tiling
 
 class ukr_context:
     """
@@ -53,7 +54,10 @@ class ukr_context:
         self.sched_map       : dict[str,tuple[list[str],bool]] = dict()
         self.specialization_order : list[str] = list()
 
-        self.stos            : dict[str,list[mm_op]] = dict()
+        # one dict per part of the microtile: STO name -> its tiling
+        self.stos            : list[dict[str,sto_tiling]] = list()
+        self.dims            : dict[str,int] = dict()
+        self.order           : tuple[str,...] = tuple()
         self.irs             : dict[str,list[lsc_operation]] = dict()
         self.asmblocks       : dict[str,str] = dict()
 

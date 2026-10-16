@@ -1,63 +1,67 @@
-# ------------------------------------------------------------------------------
-# SPDX-License-Identifier: MIT OR GPL-3.0-or-later
-# Copyright (C) 2021 Stepan Nassyr <s.nassyr@fz-juelich.de>
-# Copyright (C) 2021 Stepan Nassyr <s.nassyr@xcpp.org>
-# ------------------------------------------------------------------------------
+"""
+Microtile size along each index and the order to tile it in
+"""
 
-from .stage import stage
-from .unvec import unvec_stage
-from .ukr import ukr_composition_map
-from ..ukr_context import ukr_context
 from ..stage_param import stage_param
-from ...specializers.asm import op_support
-from ...components.tile import copy_with_vecdir
+from ..ukr_context import ukr_context
+from .stage import stage, stage_error
+
+
+def composition_indices(composition) -> list[str]:
+    """
+    Every index of the composition's STOs, in order of first appearance
+    """
+    indices = []
+    for block in composition.get_blocks():
+        for name in block.stos:
+            for idx in composition.get_sto(name).indices:
+                if idx not in indices:
+                    indices.append(idx)
+    return indices
+
 
 class dimension_stage(stage):
+    """
+    Asks how many extents of the chosen implementations the microtile spans
+    along each index (--m 2 with an SVE fma bound to m: two vectors), and the
+    tiling order, outermost index first.
+    """
+
     def __init__(self, context : ukr_context):
         super().__init__(context)
-        
 
-        ukr = self.context.params["ukr"].value
+        composition = context.composition
+        self.indices = composition_indices(composition)
 
-        composition = ukr_composition_map[ukr]
-
-        dimensions = set()
-        # get dimensions by investigating all STO descriptions
-        for sto in composition.get_sto_descriptions():
-            for dims in sto.dimensions.values():
-                for d in dims:
-                    if not d.is_dynamic:
-                        dimensions.add(str(d))
-
-        dimensions = sorted(list(dimensions))
-
-        for dim in dimensions:
-            self.params[dim] = stage_param(
+        for idx in self.indices:
+            self.params[idx] = stage_param(
                     value=None,
-                    description=f"Microkernel dimension {dim}")
+                    description=f"Microtile size along {idx}, in extents of the "
+                                f"chosen implementations")
 
-
-        default_order = "".join(sorted(dimensions))
-        default_order = default_order+default_order.upper()
+        loops = [b.loop_index for b in composition.get_blocks() if b.is_loop]
+        default = loops + [i for i in self.indices if i not in loops]
         self.params["order"] = stage_param(
-                value=default_order,
-                default=default_order,
-                description="Order in which to tile the kernel",
-                required=False
-                )
+                value=",".join(default),
+                default=",".join(default),
+                description="Tiling order, outermost index first, comma separated "
+                            "(single-letter indices may be run together: kmn)",
+                required=False)
 
-    def progress(self) -> list[stage]:
+    def progress(self):
+        dims = {}
+        for idx in self.indices:
+            value = str(self.params[idx].value)
+            if not value.isdigit() or int(value) < 1:
+                raise stage_error(f"--{idx} must be a positive integer, got {value}")
+            dims[idx] = int(value)
 
+        raw = self.params["order"].value
+        order = raw.split(",") if "," in raw else list(raw)
+        if sorted(order) != sorted(self.indices):
+            raise stage_error(f"--order must list each of {self.indices} once, got {raw}")
 
+        self.context.dims = dims
+        self.context.order = tuple(order)
         self.context.params.update(self.params)
-
-
-        # Do we need to unvec?
-        #if self.context.params["op"].value == "fma" and \
-        #        self.context.sup.b_tile.is_vector and \
-        #        self.context.sup.a_tile.is_vector:
-
-        #    return [unvec_stage]
-        #else:
-        #    return list()
         return []

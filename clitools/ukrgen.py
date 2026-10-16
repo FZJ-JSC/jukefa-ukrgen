@@ -13,6 +13,8 @@ from ukrgen.flow.stages.stage import stage, stage_error
 from ukrgen.flow.stages.setup import setup_stage
 from ukrgen.flow.stages.datatype import datatype_stage
 from ukrgen.flow.stages.solve import solve_stage
+from ukrgen.flow.stages.dimension import dimension_stage
+from ukrgen.flow.stages.sto import sto_stage
 
 from ukrgen.flow.ukr_context import ukr_context
 from ukrgen.flow.stage_engine import stage_engine
@@ -95,13 +97,15 @@ def main():
     setup_loggers(debugall=debugall, debug_systems=debug_systems)
 
     # The flow is being reworked onto operation signatures. It currently ends
-    # once every STO has a hardware implementation chosen; the later stages
-    # (STO generation, model, scheduling, codegen) still run on the old asmgen
-    # API and are reconnected as they are ported.
+    # once every STO is tiled with its chosen implementation; the later stages
+    # (model, scheduling, codegen) still run on the old asmgen API and are
+    # reconnected as they are ported.
     stages = [
         setup_stage,
         datatype_stage,
         solve_stage,
+        dimension_stage,
+        sto_stage,
     ]
 
     prolog = argparse_prolog(parser=parser)
@@ -135,7 +139,7 @@ def main():
         if 1 == len(set(encodings)):
             encodings = encodings[:1]
         print(f"--{sto}-to " + " ".join(f'"{enc}"' for enc in encodings))
-    print("(the flow currently ends after choosing implementations)", file=sys.stderr)
+    print("(the flow currently ends after tiling the STOs; see --print-stos)", file=sys.stderr)
 
 if __name__ == "__main__":
     main()
