@@ -77,7 +77,11 @@ def main():
 
     ukr_ctx = ukr_context()
 
-    parser = ArgumentParser(add_help=False)
+    # No abbreviations: the parser grows stage by stage, so an option of a
+    # later stage would be taken for an abbreviation of an earlier one's -
+    # --m (a dimension) for --mm-to, silently replacing the chosen
+    # implementation.
+    parser = ArgumentParser(add_help=False, allow_abbrev=False)
 
     parser.add_argument("--debug",
                         help="Enables debug output for a specific subsystem; without any arguments, all debug output is enabled",
