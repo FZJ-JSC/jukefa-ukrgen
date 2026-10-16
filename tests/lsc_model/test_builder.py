@@ -385,3 +385,63 @@ class test_branches(unittest.TestCase):
         text = self.prog.render()
         self.assertIn("case beta==0 and alpha==1:", text)
         self.assertIn("case otherwise:", text)
+
+
+class test_register_reuse(unittest.TestCase):
+    """
+    With fewer data registers than tiles: same data, same register; new data
+    where it costs the fewest reloads
+    """
+
+    @staticmethod
+    def optimal(seq, regs):
+        held, loads = set(), 0
+        for i, t in enumerate(seq):
+            if t in held:
+                continue
+            loads += 1
+            if len(held) == regs:
+                rest = seq[i + 1:]
+                held.remove(max(held, key=lambda x: rest.index(x) if x in rest else len(seq)))
+            held.add(t)
+        return loads
+
+    def test_fewest_reloads(self):
+        for order, regs in (("knm", 3), ("kmn", 2), ("mkn", 5), ("nmk", 4)):
+            with self.subTest(order=order, regs=regs):
+                ctx, _ = run(m="4", n="3", k="2", order=order)
+                seq = {c: [op.coord(c) for op in ctx.stos[0]["mm"].ops] for c in ("A", "B")}
+                regs_a, regs_b = min(regs, 8), min(regs, 6)
+                body = program_builder(ctx, data_regs={"A": regs_a, "B": regs_b},
+                                       preload=False).build().blocks[0].body
+                self.assertEqual(self.optimal(seq["A"], regs_a), len(loads(body, "A")))
+                self.assertEqual(self.optimal(seq["B"], regs_b), len(loads(body, "B")))
+
+    def test_held_tile_keeps_its_register(self):
+        ctx, _ = run(m="4", n="3", k="1", order="knm")
+        body = program_builder(ctx, data_regs={"A": 3}, preload=False).build().blocks[0].body
+        held, i = {}, 0
+        seq = [op.coord("A") for op in ctx.stos[0]["mm"].ops]
+        for op in body:
+            if isinstance(op, lsc_load) and "A" == addr_comp(op):
+                held[data(op)] = seq[i]
+            elif isinstance(op, lsc_transformation):
+                (reg,) = [r for r in read_regs(op) if "A" == r[0]]
+                self.assertEqual(seq[i], held[reg])
+                i += 1
+
+
+class test_resolve_order(unittest.TestCase):
+
+    def test_order_of_loads(self):
+        ctx, _ = run()
+        for order, first in ((["A", "B"], "A"), (["B", "A"], "B")):
+            with self.subTest(order=order):
+                body = program_builder(ctx, preload=False, resolve_order=order).build().blocks[0].body
+                self.assertEqual(first, addr_comp(loads(body)[0]))
+
+    def test_stage_parameter(self):
+        ctx, res = run(stages=TO_STAGES + [model_stage], **{"resolve-order": ["B", "A"]})
+        self.assertTrue(res.completed)
+        with self.assertRaisesRegex(stage_error, "--resolve-order"):
+            run(stages=TO_STAGES + [model_stage], **{"resolve-order": ["B", "X"]})

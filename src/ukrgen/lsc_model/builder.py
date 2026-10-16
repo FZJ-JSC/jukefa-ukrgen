@@ -81,12 +81,14 @@ class program_builder:
     :param data_regs: component -> data registers to use; components left out
                       get one per distinct tile they need
     :param preload: whether loop blocks preload streamed operands
+    :param resolve_order: components in the order an operation loads them
     """
 
     def __init__(self, ctx, part: int = 0,
                  addressing: dict[str, addressing_plan] | None = None,
                  data_regs: dict[str, int] | None = None,
-                 preload: bool = True):
+                 preload: bool = True,
+                 resolve_order: list[str] | None = None):
         self.ctx = ctx
         self.gen = ctx.gen
         self.comp = ctx.composition
@@ -127,7 +129,15 @@ class program_builder:
                             seen.append(op.coord(name))
         self.coords = coords
 
+        # the order an operation's components get their data in: which
+        # component's memory is touched first
+        self.resolve_order = resolve_order or [c.name for c in self.comp.get_components()]
+
         self.holder: dict[vreg, tuple] = {}
+        self.future: list[dict] = []
+        self.pos = 0
+        self.clock = 0
+        self.last_access: dict[vreg, int] = {}
         self.used: dict[str, tuple] = {}
         self.phases: dict[str, list] = {}
         self.addr_setup: dict[tuple[str, int], int] = {}
@@ -136,14 +146,55 @@ class program_builder:
 
     def reg_of(self, comp: str, rtype, coord: tuple) -> vreg:
         """
-        The register holding a component's tile: one per distinct tile, or
-        cycling through the data registers the user allowed
+        The register for a component's tile. A tile still held keeps its
+        register. With a register per tile, each tile has its own, in order of
+        first use. With fewer, new data goes to a free register, else to one
+        holding data not needed again in this section - the one accessed
+        longest ago, so a reload lands far from its last reads - else to the
+        one holding data needed furthest ahead. That loads as rarely as the
+        registers allow.
         """
-        rank = self.coords[comp].index(coord)
+        for reg, held in self.holder.items():
+            if reg.owner == comp and reg.rtype == rtype and held == (comp, coord):
+                return self._touch(reg)
         ring = self.data_regs.get(comp, len(self.coords[comp]))
-        reg = vreg(comp, rtype, rank % ring)
+        if ring >= len(self.coords[comp]):
+            return self._touch(vreg(comp, rtype, self.coords[comp].index(coord)))
+
+        regs = [vreg(comp, rtype, i) for i in range(ring)]
+        free = [r for r in regs if r not in self.holder]
+        if free:
+            return self._touch(free[0])
+        upcoming = {r: self.next_use(*self.holder[r]) for r in regs}
+        dead = [r for r in regs if upcoming[r] is None]
+        if dead:
+            return self._touch(min(dead, key=lambda r: self.last_access.get(r, -1)))
+        return self._touch(max(regs, key=lambda r: upcoming[r]))
+
+    def _touch(self, reg: vreg) -> vreg:
+        self.clock += 1
+        self.last_access[reg] = self.clock
         self._use(reg)
         return reg
+
+    def next_use(self, comp: str, coord: tuple) -> int | None:
+        """
+        How many operations ahead of the current one a tile is needed again in
+        this section; None if it is not
+        """
+        for ahead, needs in enumerate(self.future[self.pos + 1:], start=1):
+            if needs.get(comp) == coord:
+                return ahead
+        return None
+
+    def begin_section(self, stos_ops: list[tuple[str, list]]):
+        """
+        Start emitting a run of operations - a loop iteration, a tail, a block -
+        whose tile accesses decide which registers to reuse
+        """
+        self.future = [{c: op.coord(c) for c in op.tile_strs if c in self.components}
+                       for _, ops in stos_ops for op in ops]
+        self.pos = 0
 
     def _use(self, reg: vreg):
         rtype, count = self.used.get(reg.owner, (reg.rtype, 0))
@@ -281,6 +332,7 @@ class program_builder:
         temps: dict[str, vreg] = {}
         for res, step in zip(impl.resolved_chain, impl.math_chain):
             sig = res.compute_sg.representative
+            loads: list[access_group] = []
             hws, indices, tiles, reads, writes, read_regs = [], [], [], [], [], []
             written = []
             for pos, (hw, math) in enumerate(step.name_mapping.items()):
@@ -299,7 +351,7 @@ class program_builder:
                     if is_read and strat is not None and strat.rsln.steps:
                         if self.holder.get(reg) != (math, coord):
                             access = read_access.STREAM == self.flow[(sto, math)].read
-                            items.append(access_group(
+                            loads.append(access_group(
                                 math, reg,
                                 self.move_data(sto, tiling, math, coord, reg,
                                                strat.resolved_steps, "load",
@@ -323,6 +375,8 @@ class program_builder:
                     read_regs.append(reg)
                 if is_written:
                     writes.append(pos)
+            rank = {c: i for i, c in enumerate(self.resolve_order)}
+            items += sorted(loads, key=lambda g: rank.get(g.component, len(rank)))
             opname = self.ctx.osb.ast_op_map[step.hw_ast]
             items.append(compute_item(
                 lsc_transformation(opname, indices, tiles, reads, writes,
@@ -358,6 +412,17 @@ class program_builder:
         for op in ops:
             items += self.emit_compute(sto, tiling, op, impl) if sto_kind.COMPUTE == kind \
                 else self.emit_store(sto, tiling, op)
+            self.pos += 1
+        return items
+
+    def emit_section(self, parts: list[tuple]) -> list:
+        """
+        Emit STOs' operations as one section: (sto, ops, tiling, impl) each
+        """
+        self.begin_section([(sto, ops) for sto, ops, _, _ in parts])
+        items = []
+        for sto, ops, tiling, impl in parts:
+            items += self.emit_sto(sto, ops, tiling, impl)
         return items
 
     def forget(self, components):
@@ -404,9 +469,7 @@ class program_builder:
 
         streamed = {c for sto in block.stos for c in self.comp.get_sto(sto).operands
                     if read_access.STREAM == self.flow[(sto, c)].read}
-        items = []
-        for sto in block.stos:
-            items += self.emit_sto(sto, self.stos[sto].ops)
+        items = self.emit_section([(sto, self.stos[sto].ops, None, None) for sto in block.stos])
 
         for comp in sorted(streamed):
             out.advance[comp] = self.db.add(comp, {k: iteration})
@@ -458,9 +521,8 @@ class program_builder:
         # unroll of 1 the loop itself steps by one operation.
         if block.tail and out.unroll > 1:
             self.forget(streamed)
-            items = []
-            for sto in block.stos:
-                items += self.emit_sto(sto, self.stos[sto].regenerate(counts={k: 1}))
+            items = self.emit_section([(sto, self.stos[sto].regenerate(counts={k: 1}), None, None)
+                                       for sto in block.stos])
             out.tail = _flatten(items)
             out.tail_step = extent
 
@@ -470,12 +532,10 @@ class program_builder:
         if extent != sym.const(1):
             if all(sto in self.subtails for sto in block.stos):
                 self.forget(streamed)
-                items = []
-                for sto in block.stos:
-                    items += self.emit_sto(sto, self.subtails[sto].ops,
-                                           tiling=self.subtails[sto],
-                                           impl=self.subtail_impls.get(sto, None)
-                                           and self.subtail_impls[sto].impl)
+                items = self.emit_section([
+                    (sto, self.subtails[sto].ops, self.subtails[sto],
+                     self.subtail_impls.get(sto, None) and self.subtail_impls[sto].impl)
+                    for sto in block.stos])
                 out.subtail = _flatten(items)
                 out.subtail_step = sym.const(1)
             else:
@@ -495,9 +555,7 @@ class program_builder:
     def build_block(self, block: block_description) -> ir_block:
         if block.is_loop:
             return self.build_loop(block)
-        items = []
-        for sto in block.stos:
-            items += self.emit_sto(sto, self.stos[sto].ops)
+        items = self.emit_section([(sto, self.stos[sto].ops, None, None) for sto in block.stos])
         return ir_block(name="+".join(block.stos), body=_flatten(items))
 
     def build(self) -> ir_program:

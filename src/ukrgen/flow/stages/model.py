@@ -23,7 +23,10 @@ class model_stage(stage):
     the loads did without rewinding.
 
     --<c>-data-regs gives each component's data registers, except accumulators,
-    which get one per tile they accumulate.
+    which get one per tile they accumulate. With fewer registers than tiles, a
+    tile still held keeps its register and new data goes where it costs the
+    fewest reloads. --resolve-order sets which component's data an operation
+    loads first, shaping the order memory is touched in.
 
     --print-ir prints the IR and stops.
     """
@@ -71,6 +74,13 @@ class model_stage(stage):
                                 f"through them, reloading; a component kept in registers "
                                 f"between STOs needs one per tile")
 
+        default_order = [c.name for c in composition.get_components()]
+        self.params["resolve-order"] = stage_param(
+                value=default_order, default=default_order, multi=True, required=False,
+                description="Order in which an operation's components get their data: "
+                            "which memory each operation touches first. Components left "
+                            "out follow in their declared order")
+
         self.params["no-preload"] = stage_param(
                 value=False, default=False, flag=True, required=False,
                 description="Do not load a loop's streamed operands an iteration ahead")
@@ -97,9 +107,18 @@ class model_stage(stage):
                 raise stage_error(f"--{comp}-data-regs must be a positive integer, got {value}")
             data_regs[comp] = int(value)
 
+        names = [c.name for c in self.context.composition.get_components()]
+        order = list(self.params["resolve-order"].value or [])
+        unknown = [c for c in order if c not in names]
+        if unknown or len(set(order)) != len(order):
+            raise stage_error(f"--resolve-order takes each of {', '.join(names)} at most "
+                              f"once, got {' '.join(order)}")
+        order += [c for c in names if c not in order]
+
         try:
             programs = [program_builder(self.context, part, addressing, data_regs,
-                                        preload=not self.params["no-preload"].value).build()
+                                        preload=not self.params["no-preload"].value,
+                                        resolve_order=order).build()
                         for part in range(len(self.context.to_parts))]
         except model_error as err:
             raise stage_error(str(err)) from err
