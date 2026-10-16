@@ -16,7 +16,6 @@ from ..models.load_store_operations import (
 from ..models.load_store_cpu import lsc_state
 from ..models.lsc.index import lsc_reg_index
 from ..models.lsc.reg import lsc_reg
-from ..specializers.asm import lsc_specializer
 from ..components.tile import determine_dreg_tag
 
 class reg_usage_tracker:

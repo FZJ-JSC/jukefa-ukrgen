@@ -44,6 +44,7 @@ class access_group:
     reg : vreg
     ops : list[ir_op]
     streamed : bool
+    coord : tuple = ()
 
 
 @dataclass
@@ -261,7 +262,7 @@ class program_builder:
                                 self.move_data(sto, tiling, math, coord, reg,
                                                strat.resolved_steps, "load",
                                                strat.rsln.unique_tag),
-                                access))
+                                access, coord))
                             self.holder[reg] = (math, coord)
                     elif is_read and self.holder.get(reg) != (math, coord):
                         raise model_error(
@@ -370,13 +371,28 @@ class program_builder:
                 if isinstance(item, compute_item):
                     for hw in item.op.reads:
                         last_read[item.op.regs[hw]] = pos
-            ahead: dict[int, list[access_group]] = {}
+            #
+            # That needs each register to hold one tile per iteration. A
+            # component given fewer data registers than tiles reuses them
+            # within the iteration, so its loads stay where they are.
+            tiles: dict[str, set] = {}
             for item in items:
                 if isinstance(item, access_group) and item.streamed:
+                    tiles.setdefault(item.component, set()).add(item.coord)
+            hoisted = {c for c, t in tiles.items()
+                       if self.data_regs.get(c, len(self.coords[c])) >= len(t)}
+
+            def preloaded(item):
+                return isinstance(item, access_group) and item.streamed \
+                    and item.component in hoisted
+
+            ahead: dict[int, list[access_group]] = {}
+            for item in items:
+                if preloaded(item):
                     out.prologue += item.ops
                     ahead.setdefault(last_read.get(item.reg, len(items) - 1), []).append(item)
             for pos, item in enumerate(items):
-                if isinstance(item, access_group) and item.streamed:
+                if preloaded(item):
                     continue
                 ops = _flatten([item])
                 out.body += ops

@@ -225,3 +225,33 @@ class test_model_stage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class test_register_pressure(unittest.TestCase):
+
+    GENERAL = {"A-layout": ["m:c", "k:s"], "B-layout": ["k:s", "n:c"], "C-layout": ["m:s", "n:s"],
+               "mm-to": ["fma(A.VEC:bc_load, B.VEC:direct, AB.VEC){m=1, i=n, k*=1}"],
+               "betascale-to": ["fmul(C.VEC:gather, beta.VEC:bc_load, C.VEC){m=1, i=n}"],
+               "alphascale-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
+               "store-to": ["C.VEC:scatter"], "n": "2", "k": "2"}
+
+    def test_fewer_registers_load_in_place(self):
+        # A in 8 registers: each holds two tiles per iteration, so A cannot be
+        # loaded an iteration ahead - its loads stay in the body. B still is.
+        ctx, _ = run(m="4", **self.GENERAL)
+        prog = program_builder(ctx, data_regs={"A": 4}).build()
+        mm = prog.blocks[0]
+        self.assertEqual([], loads(mm.prologue, "A"))
+        self.assertEqual(4, len(loads(mm.prologue, "B")))
+        self.assertEqual(8, len(loads(mm.body, "A")))
+        self.assertEqual(8, len(loads(mm.epilogue, "A")))
+        # no register loaded twice before its first use
+        seen = set()
+        for op in mm.body:
+            if isinstance(op, ir_mem) and "A" == op.addr.component:
+                seen.add(op.reg)
+            if isinstance(op, ir_compute):
+                for hw in op.reads:
+                    r = op.regs[hw]
+                    if "A" == r.owner:
+                        self.assertIn(r, seen)
