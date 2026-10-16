@@ -28,7 +28,7 @@ from ...support.data_move import (
 )
 from ...support.dm_resolutions.direct import direct_provider
 from ...support.dm_resolutions.strided import strided_provider
-from ...support.tiles import index_extents
+from ...support.tiles import index_extents, ONE
 from ...support.dm_resolutions.scalar_reduce import scalar_reduce_provider
 from ...support.dm_solver import resolved_operation_chain, repeat_fits
 from ...support.encoding import encode_all
@@ -245,6 +245,23 @@ class solve_stage(stage):
                     required=False,
                     multi=True)
 
+        for block in context.composition.get_blocks():
+            if not block.is_loop:
+                continue
+            for name in block.stos:
+                if sto_kind.COMPUTE != context.composition.get_sto(name).kind:
+                    continue
+                self.params[f"{name}-subtail-to"] = stage_param(
+                        value=None,
+                        description=f"Implementation for the remainder of the loop over "
+                                    f"{block.loop_index} shorter than one operation of "
+                                    f"--{name}-to: a candidate covering one element of "
+                                    f"{block.loop_index}. Only for an implementation "
+                                    f"covering more; without it the loop count must be "
+                                    f"a multiple of what that covers",
+                        required=False,
+                        multi=True)
+
         self.params["list-to-candidates"] = stage_param(
                 value=False,
                 default=False,
@@ -372,6 +389,9 @@ class solve_stage(stage):
                 where = f", inside the loop over {block.loop_index}" if block.is_loop else ""
                 lines.append("")
                 lines.append(f"{name}{where}: {len(cands)} candidate(s)")
+                if block.is_loop and sto_kind.COMPUTE == composition.get_sto(name).kind:
+                    lines.append(f"  (--{name}-subtail-to takes one covering a single element "
+                                 f"of {block.loop_index}, for a main one covering more)")
                 if not cands:
                     lines.append("    none for these data types")
                 width = len(str(max(len(cands) - 1, 0)))
@@ -415,6 +435,49 @@ class solve_stage(stage):
                 raise stage_error(f"--{name}-to: not a candidate: {value}{hint}")
         return chosen
 
+    def loop_extent(self, impl, index: str):
+        return index_extents(self.context.gen, impl).get(index, ONE)
+
+    def select_subtails(self, candidates: dict, parts: list[dict[str, str]]) -> list[dict]:
+        """
+        Subtail implementations per part: each covers one element of the loop
+        index where the main one covers more, and leaves the accumulators in
+        the registers the main one uses
+        """
+        composition = self.context.composition
+        subtails: list[dict] = [dict() for _ in parts]
+        for block in composition.get_blocks():
+            if not block.is_loop:
+                continue
+            k = block.loop_index
+            for name in block.stos:
+                key = f"{name}-subtail-to"
+                values = self.params[key].value if key in self.params else None
+                if not values:
+                    continue
+                if len(values) not in (1, len(parts)):
+                    raise stage_error(f"--{key} has {len(values)} values for {len(parts)} "
+                                      f"parts: give one per part, or one for all parts")
+                chosen = self.select(f"{name}-subtail", values, candidates[name])
+                chosen = chosen * len(parts) if 1 == len(chosen) else chosen
+                for i, enc in enumerate(chosen):
+                    main = candidates[name][parts[i][name]]
+                    impl = candidates[name][enc]
+                    if ONE == self.loop_extent(main, k):
+                        raise stage_error(
+                            f"--{key}: not needed, --{name}-to already covers one element "
+                            f"of {k} per operation")
+                    if ONE != self.loop_extent(impl, k):
+                        raise stage_error(f"--{key}: {enc} covers more than one element of {k}")
+                    for acc in sorted(composition.accumulators(name)):
+                        if produced_rtype(impl, acc) != produced_rtype(main, acc):
+                            raise stage_error(
+                                f"--{key}: {enc} leaves {acc} in "
+                                f"{produced_rtype(impl, acc).name}, the main implementation "
+                                f"in {produced_rtype(main, acc).name}")
+                    subtails[i][name] = chosen_to(encoding=enc, impl=impl)
+        return subtails
+
     def sto_operands(self, name: str) -> tuple[str, ...]:
         return self.context.composition.get_sto(name).operands
 
@@ -452,6 +515,8 @@ class solve_stage(stage):
         if problems:
             raise stage_error("the chosen implementations disagree about register types:\n" +
                               "\n".join(f"  {p}" for p in problems))
+
+        self.context.subtail_parts = self.select_subtails(candidates, parts)
 
         self.context.to_parts = [
             {name: chosen_to(encoding=enc, impl=candidates[name][enc])

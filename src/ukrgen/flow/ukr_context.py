@@ -65,6 +65,10 @@ class ukr_context:
         self.dims            : dict[str,int] = dict()
         # one LSC IR program per part
         self.programs        : list = list()
+        # per part: loop STO -> implementation for the loop's remainder below
+        # one operation, and its tiling
+        self.subtail_parts   : list[dict] = list()
+        self.subtail_stos    : list[dict] = list()
         self.order           : tuple[str,...] = tuple()
         self.irs             : dict[str,list[lsc_operation]] = dict()
         self.asmblocks       : dict[str,str] = dict()

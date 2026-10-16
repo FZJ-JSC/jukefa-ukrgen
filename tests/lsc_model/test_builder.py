@@ -81,9 +81,36 @@ class test_builder(unittest.TestCase):
         self.assertEqual([], mm.epilogue)
 
     def test_tail(self):
-        mm = self.build().blocks[0]
+        # with an unroll of 1 the loop already steps by one operation
+        self.assertEqual([], self.build().blocks[0].tail)
+        ctx, _ = run(k="2")
+        mm = program_builder(ctx).build().blocks[0]
         self.assertEqual(4, len(loads(mm.tail)))
         self.assertEqual(4, sum(isinstance(op, ir_compute) for op in mm.tail))
+        # an FMA covers one element of k: no subtail, no constraint on k
+        self.assertEqual([], mm.subtail)
+        self.assertIsNone(mm.requires_multiple)
+
+    def test_subtail(self):
+        # No implementation offered yet covers more than one element of k, so
+        # pretend the main one covers VL of them
+        import copy
+        from ukrgen.components.tile import dimension_properties as dimp, dimension_type as dimt
+        ctx, _ = run(k="2")
+        ctx.stos[0]["mm"].extents["k"] = dimp(dt=dimt.vla, size=1, sdt=dimt.vla, sd_size=1)
+        mm = program_builder(ctx).build().blocks[0]
+        self.assertEqual("VL", str(mm.requires_multiple))
+        self.assertIn("k must be a multiple of VL", program_builder(ctx).build().render())
+        # with a subtail implementation: one element of k at a time, no constraint
+        sub = copy.copy(ctx.stos[0]["mm"])
+        sub.ops = sub.regenerate(counts={"k": 1})
+        ctx.subtail_stos = [{"mm": sub}]
+        ctx.subtail_parts = [{"mm": ctx.to_parts[0]["mm"]}]
+        mm = program_builder(ctx).build().blocks[0]
+        self.assertIsNone(mm.requires_multiple)
+        self.assertEqual("1", str(mm.subtail_step))
+        self.assertEqual(4, sum(isinstance(op, ir_compute) for op in mm.subtail))
+        self.assertEqual(4, len(loads(mm.subtail)))
 
     def test_c_phases(self):
         prog = self.build()
@@ -111,6 +138,21 @@ class test_builder(unittest.TestCase):
         self.assertEqual({0}, {op.reg.index for op in loads(mm.body, "A")})
         with self.assertRaises(model_error):
             self.build(data_regs={"AB": 2})
+
+    def test_unroll(self):
+        # --k unrolls: an iteration covers --k operations' extents along k, and
+        # streamed operands advance by as much
+        ctx, _ = run(k="3")
+        prog = program_builder(ctx).build()
+        mm = prog.blocks[0]
+        self.assertEqual(3, mm.unroll)
+        self.assertEqual("3", str(mm.step))
+        self.assertEqual("1", str(mm.tail_step))
+        self.assertEqual("3", str(prog.offsets[mm.advance["A"]].along("k")))
+        # preloads reach one whole iteration ahead
+        ahead = [op for op in mm.body if isinstance(op, ir_mem)]
+        self.assertEqual({"3", "4", "5"},
+                         {str(prog.offsets[op.addr.offset].along("k")) for op in ahead})
 
     def test_rotating_registers(self):
         prog = self.build(addressing={"A": addressing_plan(2, addr_pattern.parse("rotate"))})
@@ -161,7 +203,7 @@ class test_model_stage(unittest.TestCase):
     def test_print_ir(self):
         ctx, res = run(stages=TO_STAGES + [model_stage], **{"print-ir": True})
         self.assertFalse(res.completed)
-        self.assertIn("block mm, loop over k by 1", res.output)
+        self.assertIn("block mm, loop over k by 1 per iteration (unrolled 1x)\n", res.output)
         self.assertIn("a1 of C starts at C[]", res.output)
 
     def test_programs(self):
@@ -170,6 +212,11 @@ class test_model_stage(unittest.TestCase):
         self.assertTrue(res.completed)
         self.assertEqual(1, len(ctx.programs))
         self.assertEqual({0}, {op.addr.reg for op in loads(ctx.programs[0].blocks[0].prologue, "A")})
+
+    def test_subtail_not_needed(self):
+        # the main FMA already covers one element of k
+        with self.assertRaisesRegex(stage_error, "--mm-subtail-to: not needed"):
+            run(**{"mm-subtail-to": [FMA_M]})
 
     def test_invalid_pattern(self):
         with self.assertRaisesRegex(stage_error, "--A-addr-pattern"):

@@ -149,12 +149,29 @@ class ir_block:
     the body loads the next iteration's into each register right after its
     last use, and the epilogue is the last iteration, which loads nothing.
 
+    :param step: elements of the loop index one iteration covers: the unroll
+                 times what one operation covers along it - 1 for an FMA,
+                 VL for an operation vectorizing the loop index
+    :param unroll: operations along the loop index per iteration: the size
+                   given for it, e.g. --k for gemm's loop over k
+    :param tail_step: elements one tail iteration covers: one operation of the
+                      main implementation. Only with an unroll above 1.
+    :param subtail_step: elements one subtail iteration covers: one, with the
+                         subtail implementation, for a main one covering more
+    :param requires_multiple: without a subtail where one would be needed: the
+                              loop count must be a multiple of this, which the
+                              kernel's wrapper has to ensure
     :param advance: component -> offset each address register advances per
                     iteration
     """
     name : str
     loop_index : str | None = None
-    step : int = 1
+    step : sym = field(default_factory=lambda: sym.const(1))
+    unroll : int = 1
+    tail_step : sym | None = None
+    subtail : list[ir_op] = field(default_factory=list)
+    subtail_step : sym | None = None
+    requires_multiple : sym | None = None
     prologue : list[ir_op] = field(default_factory=list)
     body : list[ir_op] = field(default_factory=list)
     epilogue : list[ir_op] = field(default_factory=list)
@@ -191,9 +208,17 @@ class ir_program:
             lines.append("")
             head = f"block {block.name}"
             if block.loop_index:
-                head += f", loop over {block.loop_index} by {block.step}"
+                head += (f", loop over {block.loop_index} by {block.step} per iteration "
+                         f"(unrolled {block.unroll}x)")
+                if block.tail:
+                    head += f", tail by {block.tail_step}"
+                if block.subtail:
+                    head += f", subtail by {block.subtail_step}"
+                if block.requires_multiple is not None:
+                    head += (f"; {block.loop_index} must be a multiple of "
+                             f"{block.requires_multiple}")
             lines.append(head)
-            for section in ("prologue", "body", "epilogue", "tail"):
+            for section in ("prologue", "body", "epilogue", "tail", "subtail"):
                 ops = getattr(block, section)
                 if ops:
                     lines.append(f"  {section}:")

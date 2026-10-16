@@ -101,8 +101,10 @@ class program_builder:
 
         # register coordinates of each component over all STOs: their rank
         # names the register, and picks the address register
+        self.subtails = ctx.subtail_stos[part] if len(ctx.subtail_stos) > part else {}
+        self.subtail_impls = ctx.subtail_parts[part] if len(ctx.subtail_parts) > part else {}
         coords: dict[str, set] = {}
-        for tiling in self.stos.values():
+        for tiling in list(self.stos.values()) + list(self.subtails.values()):
             for op in tiling.ops:
                 for name in op.tile_strs:
                     if name in self.components:
@@ -229,12 +231,12 @@ class program_builder:
 
     # --- STOs ----------------------------------------------------------------
 
-    def emit_compute(self, sto: str, tiling, op) -> list:
+    def emit_compute(self, sto: str, tiling, op, impl=None) -> list:
         """
         One STO operation: each step of the chosen implementation, with the
         data its operands need loaded first unless a register holds it
         """
-        impl = self.part[sto].impl
+        impl = impl or self.part[sto].impl
         items: list = []
         temps: dict[str, vreg] = {}
         for res, step in zip(impl.resolved_chain, impl.math_chain):
@@ -298,14 +300,22 @@ class program_builder:
                                                      "store", cand.rsln.unique_tag), False))
         return items
 
-    def emit_sto(self, sto: str, ops) -> list:
-        tiling = self.stos[sto]
+    def emit_sto(self, sto: str, ops, tiling=None, impl=None) -> list:
+        tiling = tiling or self.stos[sto]
         kind = self.comp.get_sto(sto).kind
         items = []
         for op in ops:
-            items += self.emit_compute(sto, tiling, op) if sto_kind.COMPUTE == kind \
+            items += self.emit_compute(sto, tiling, op, impl) if sto_kind.COMPUTE == kind \
                 else self.emit_store(sto, tiling, op)
         return items
+
+    def forget(self, components):
+        """
+        Registers of these components hold nothing usable any more: what a loop
+        streamed through them belongs to another iteration
+        """
+        for reg in [r for r, (c, _) in self.holder.items() if c in components]:
+            del self.holder[reg]
 
     # --- blocks ----------------------------------------------------------------
 
@@ -330,7 +340,13 @@ class program_builder:
 
     def build_loop(self, block: block_description) -> ir_block:
         k = block.loop_index
-        out = ir_block(name="+".join(block.stos), loop_index=k, step=self.ctx.dims[k])
+        # The size given for the loop index (--k for gemm) counts operations
+        # along it per iteration: the unroll. An iteration covers that many
+        # times one operation's extent along the loop index.
+        extent = sym.extent(self.stos[block.stos[0]].extents[k])
+        iteration = extent * self.ctx.dims[k]
+        out = ir_block(name="+".join(block.stos), loop_index=k, step=iteration,
+                       unroll=self.ctx.dims[k])
         out.prologue = self.zero_accumulators(block)
 
         streamed = {c for sto in block.stos for c in self.comp.get_sto(sto).operands
@@ -339,7 +355,6 @@ class program_builder:
         for sto in block.stos:
             items += self.emit_sto(sto, self.stos[sto].ops)
 
-        iteration = sym.extent(self.stos[block.stos[0]].extents[k]) * self.ctx.dims[k]
         for comp in sorted(streamed):
             out.advance[comp] = self.db.add(comp, {k: iteration})
 
@@ -369,14 +384,33 @@ class program_builder:
                 for group in ahead.get(pos, []):
                     out.body += [self.shifted(op, k, iteration) for op in group.ops]
 
-        if block.tail:
-            for comp in streamed:
-                for reg in [r for r, (c, _) in self.holder.items() if c == comp]:
-                    del self.holder[reg]
+        # The tail runs the main implementation one operation at a time along
+        # the loop index, for what the unrolled loop leaves over. With an
+        # unroll of 1 the loop itself steps by one operation.
+        if block.tail and out.unroll > 1:
+            self.forget(streamed)
             items = []
             for sto in block.stos:
                 items += self.emit_sto(sto, self.stos[sto].regenerate(counts={k: 1}))
             out.tail = _flatten(items)
+            out.tail_step = extent
+
+        # What is shorter than one operation needs the subtail: another
+        # implementation covering one element along the loop index. Without
+        # one, the loop count must be a multiple of an operation's extent.
+        if extent != sym.const(1):
+            if all(sto in self.subtails for sto in block.stos):
+                self.forget(streamed)
+                items = []
+                for sto in block.stos:
+                    items += self.emit_sto(sto, self.subtails[sto].ops,
+                                           tiling=self.subtails[sto],
+                                           impl=self.subtail_impls.get(sto, None)
+                                           and self.subtail_impls[sto].impl)
+                out.subtail = _flatten(items)
+                out.subtail_step = sym.const(1)
+            else:
+                out.requires_multiple = extent
         return out
 
     def shifted(self, op: ir_op, index: str, amount: sym) -> ir_op:

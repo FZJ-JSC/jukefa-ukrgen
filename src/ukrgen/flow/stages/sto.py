@@ -80,69 +80,97 @@ class sto_stage(stage):
                 required=False,
                 flag=True)
 
-    def tile_part(self, part: dict) -> dict[str, sto_tiling]:
+    def tile_block(self, block, chosen: dict, counts: dict[str, int],
+                   left: dict, seen: dict, tilings: dict, label: str = ""):
+        """
+        Tile one block's STOs: compute STOs with their chosen implementations,
+        store STOs the way the implementations before them left what they store
+        """
         composition = self.context.composition
         gen = self.context.gen
-        dims, order = self.context.dims, self.context.order
+        order = self.context.order
 
+        for name in block.stos:
+            sto = composition.get_sto(name)
+
+            if sto_kind.COMPUTE == sto.kind:
+                impl = chosen[name].impl
+                found = index_extents(gen, impl)
+                extents = {i: found.get(i, ONE) for i in sto.indices}
+                tiles = operand_tiles(gen, impl, sto.req)
+                lanes = lane_axes(gen, impl, sto.req, self.context.component_layouts)
+                registers = register_tiles(tiles, lanes, sto.req)
+                operands = sto.operand_indices
+                io = {op: sto.io(op) for op in operands}
+                opstr = ";".join(part_enc.split("(")[0].split("[")[0]
+                                 for part_enc in chosen[name].encoding.split(" ; "))
+                generate = generators[sto.generator]
+            else:
+                operands, tiles, extents = {}, {}, {}
+                lanes, opstr = {}, "store"
+                for comp in sto.store_components:
+                    t, indices = left[comp]
+                    operands[comp], tiles[comp] = indices, t
+                    live = [i for i in indices if i is not None]
+                    extents.update(zip(live, (t.dima, t.dimb)))
+                registers = tiles
+                io = {comp: (True, False) for comp in operands}
+                generate = generate_tiling
+
+            # the microtile has one size: every STO must cover it in the
+            # same steps along each index
+            for idx, extent in extents.items():
+                first = seen.setdefault(idx, (extent, name + label))
+                if first[0] != extent:
+                    raise stage_error(
+                        f"{name}{label} covers {fmt_dim(extent)} along {idx} per operation, "
+                        f"but {first[1]} covers {fmt_dim(first[0])}: their tilings "
+                        f"of the same microtile would not line up")
+
+            if sto_kind.COMPUTE == sto.kind:
+                for op in sto.operands:
+                    if sto.io(op)[1]:
+                        left[op] = (tiles[op], operands[op])
+
+            sto_order = tuple(i for i in order if i in extents)
+            ops = generate(order=sto_order, counts=counts, operands=operands,
+                           tiles=registers, io=io, lanes=lanes, opstr=opstr)
+            tilings[name] = sto_tiling(sto=name, order=sto_order, extents=extents,
+                                       tiles=tiles, ops=ops, registers=registers,
+                                       counts=dict(counts),
+                                       generate_args=dict(generate=generate,
+                                                          operands=operands,
+                                                          tiles=registers, io=io,
+                                                          lanes=lanes, opstr=opstr))
+
+    def tile_part(self, part: dict, subtail: dict | None = None) \
+            -> tuple[dict[str, sto_tiling], dict[str, sto_tiling]]:
+        """
+        Tile every STO of a part, and the subtail of each loop block whose
+        compute STOs all have a subtail implementation: the same block with one
+        step along the loop index, lining up with the main tiling along every
+        other index - the accumulators it adds to are the same registers
+
+        :return: the tilings and the subtail tilings
+        """
+        dims = self.context.dims
         seen: dict[str, tuple[dimp, str]] = {}
         left: dict[str, tuple[tile, tuple]] = {}
         tilings: dict[str, sto_tiling] = {}
+        subtails: dict[str, sto_tiling] = {}
+        composition = self.context.composition
 
         for block in composition.get_blocks():
-            for name in block.stos:
-                sto = composition.get_sto(name)
-
-                if sto_kind.COMPUTE == sto.kind:
-                    impl = part[name].impl
-                    found = index_extents(gen, impl)
-                    extents = {i: found.get(i, ONE) for i in sto.indices}
-                    tiles = operand_tiles(gen, impl, sto.req)
-                    lanes = lane_axes(gen, impl, sto.req, self.context.component_layouts)
-                    registers = register_tiles(tiles, lanes, sto.req)
-                    operands = sto.operand_indices
-                    io = {op: sto.io(op) for op in operands}
-                    opstr = ";".join(part_enc.split("(")[0].split("[")[0]
-                                     for part_enc in part[name].encoding.split(" ; "))
-                    generate = generators[sto.generator]
-                else:
-                    operands, tiles, extents = {}, {}, {}
-                    lanes, opstr = {}, "store"
-                    for comp in sto.store_components:
-                        t, indices = left[comp]
-                        operands[comp], tiles[comp] = indices, t
-                        live = [i for i in indices if i is not None]
-                        extents.update(zip(live, (t.dima, t.dimb)))
-                    registers = tiles
-                    io = {comp: (True, False) for comp in operands}
-                    generate = generate_tiling
-
-                # the microtile has one size: every STO must cover it in the
-                # same steps along each index
-                for idx, extent in extents.items():
-                    first = seen.setdefault(idx, (extent, name))
-                    if first[0] != extent:
-                        raise stage_error(
-                            f"{name} covers {fmt_dim(extent)} along {idx} per operation, "
-                            f"but {first[1]} covers {fmt_dim(first[0])}: their tilings "
-                            f"of the same microtile would not line up")
-
-                if sto_kind.COMPUTE == sto.kind:
-                    for op in sto.operands:
-                        if sto.io(op)[1]:
-                            left[op] = (tiles[op], operands[op])
-
-                sto_order = tuple(i for i in order if i in extents)
-                ops = generate(order=sto_order, counts=dims, operands=operands,
-                               tiles=registers, io=io, lanes=lanes, opstr=opstr)
-                tilings[name] = sto_tiling(sto=name, order=sto_order, extents=extents,
-                                           tiles=tiles, ops=ops, registers=registers,
-                                           counts=dict(dims),
-                                           generate_args=dict(generate=generate,
-                                                              operands=operands,
-                                                              tiles=registers, io=io,
-                                                              lanes=lanes, opstr=opstr))
-        return tilings
+            before = dict(left)
+            self.tile_block(block, part, dims, left, seen, tilings)
+            computes = [n for n in block.stos
+                        if sto_kind.COMPUTE == composition.get_sto(n).kind]
+            if block.is_loop and subtail and all(n in subtail for n in computes):
+                k = block.loop_index
+                self.tile_block(block, subtail, {**dims, k: 1}, before,
+                                {i: v for i, v in seen.items() if i != k},
+                                subtails, label=" (subtail)")
+        return tilings, subtails
 
     def render(self, parts: list[dict[str, sto_tiling]]) -> str:
         composition = self.context.composition
@@ -171,10 +199,16 @@ class sto_stage(stage):
                 "several parts need a partition of the microtile - which index is "
                 "split and how far each part reaches - and that is not specified yet")
 
-        parts = [self.tile_part(part) for part in self.context.to_parts]
+        subtails = self.context.subtail_parts or [{}] * len(self.context.to_parts)
+        results = [self.tile_part(part, sub)
+                   for part, sub in zip(self.context.to_parts, subtails)]
+        parts = [tilings for tilings, _ in results]
         self.context.stos = parts
+        self.context.subtail_stos = [sub for _, sub in results]
 
         text = self.render(parts)
+        if any(self.context.subtail_stos):
+            text += "\n\nsubtail\n" + self.render(self.context.subtail_stos)
         if self.params["print-stos"].value:
             raise early_exit(text)
         for line in text.splitlines():
