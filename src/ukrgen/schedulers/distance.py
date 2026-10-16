@@ -13,6 +13,7 @@ from ..models.load_store_operations import (
         lsc_store,
         lsc_zero,
         lsc_transformation,
+        lsc_move,
         lsc_add_val_off,
         lsc_addr_add,
         )
@@ -122,6 +123,7 @@ class distance_specification:
             "mma" : lsc_transformation,
             "ld" : lsc_load,
             "st" : lsc_store,
+            "mv" : lsc_move,
             "z" : lsc_zero,
             "aadd" : lsc_addr_add,
             "oadd" : lsc_add_val_off,

@@ -1,11 +1,11 @@
 """
-The LSC IR: loads, stores, moves and computations on virtual registers.
+Containers for the LSC IR the model builds.
 
-It describes what the kernel does to its registers, not the whole program.
-Every operation carries the signature group its instruction comes from, so
-codegen picks the concrete signature - which addressing form, which
-modifiers - once addresses are known. Addresses are references into the
-offset database, resolved at codegen.
+The operations are the LSC classes the schedulers and the specializer work
+on (lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation), carrying in
+addition the signatures their instructions come from and their addresses as
+records in the offset database. This module holds the blocks and programs
+around them, and renders them.
 """
 
 from __future__ import annotations
@@ -43,98 +43,35 @@ class addr_ref:
     offset : int
 
 
-@dataclass
-class ir_op:
-    pass
-
-
-@dataclass
-class ir_mem(ir_op):
+def render_op(op, db: offset_db) -> str:
     """
-    A load or store step of a data movement resolution
-
-    :param kind: "load" or "store"
-    :param reg: register loaded into or stored from
-    :param addr: where in memory
-    :param resolution: tag of the resolution the step belongs to (direct, gather, ...)
-    :param step: the data movement step
-    :param sigs: signatures that can execute it
-    :param lane: lane accessed, for a resolution moving a vector lane by lane
+    One LSC operation as built by the model, with addresses from the offset
+    database and register files from the operation's rtypes
     """
-    kind : str
-    reg : vreg
-    addr : addr_ref
-    resolution : str
-    step : object
-    sigs : object
-    lane : int | None = None
+    from ..models.load_store_operations import (
+        lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation)
 
-    def render(self, db: offset_db) -> str:
-        lane = f".el[{self.lane}]" if self.lane is not None else ""
-        where = f"{db[self.addr.offset]}@a{self.addr.reg}"
-        if "load" == self.kind:
-            return f"{self.reg}{lane} <- {self.resolution}:load {where}"
-        return f"{where} <- {self.resolution}:store {self.reg}{lane}"
+    def reg(pos: int) -> str:
+        idx = op.indices[pos]
+        rtypes = getattr(op, "rtypes", None) or []
+        rtype = rtypes[pos] if pos < len(rtypes) and rtypes[pos] is not None else None
+        text = f"{idx.component}{idx.indices[0]}" + (f".{rtype.name}" if rtype else "")
+        return text + (f".el[{idx.indices[1]}]" if len(idx.indices) > 1 else "")
 
-
-@dataclass
-class ir_move(ir_op):
-    """
-    A register-to-register step of a data movement resolution (broadcasting a
-    scalar into a vector, moving a lane)
-    """
-    src : vreg
-    dest : vreg
-    resolution : str
-    step : object
-    sigs : object
-    lane : int | None = None
-
-    def render(self, db: offset_db) -> str:
-        lane = f".el[{self.lane}]" if self.lane is not None else ""
-        return f"{self.dest} <- {self.resolution}:move {self.src}{lane}"
-
-
-@dataclass
-class ir_compute(ir_op):
-    """
-    One operation of a chosen implementation
-
-    :param sto: STO it belongs to
-    :param opname: asmgen operation
-    :param resolution: the solved operation: compute signature group and how
-                       each operand gets its data
-    :param regs: hardware operand -> register
-    :param lanes: hardware operand -> lane, for operands used by element
-    :param reads: hardware operands read
-    :param writes: hardware operands written
-    """
-    sto : str
-    opname : str
-    resolution : object
-    regs : dict[str, vreg]
-    lanes : dict[str, int]
-    reads : tuple[str, ...]
-    writes : tuple[str, ...]
-
-    def render(self, db: offset_db) -> str:
-        def show(hw):
-            lane = self.lanes.get(hw)
-            return f"{self.regs[hw]}" + (f".el[{lane}]" if lane is not None else "")
-        dests = ",".join(show(hw) for hw in self.writes)
-        srcs = ",".join(show(hw) for hw in self.reads)
-        return f"{dests} <- {self.opname}({srcs})"
-
-
-@dataclass
-class ir_zero(ir_op):
-    """
-    Zero a register: an accumulator starting from nothing
-    """
-    reg : vreg
-
-    def render(self, db: offset_db) -> str:
-        return f"{self.reg} <- 0"
+    if isinstance(op, (lsc_load, lsc_store)):
+        where = f"{db[op.offset]}@a{op.indices[0].indices[0]}"
+        if isinstance(op, lsc_load):
+            return f"{reg(1)} <- {op.rsln}:load {where}"
+        return f"{where} <- {op.rsln}:store {reg(1)}"
+    if isinstance(op, lsc_move):
+        return f"{reg(1)} <- {op.rsln}:move {reg(0)}"
+    if isinstance(op, lsc_zero):
+        return f"{reg(0)} <- 0"
+    if isinstance(op, lsc_transformation):
+        dests = ",".join(reg(i) for i in op.writes)
+        srcs = ",".join(reg(i) for i in op.reads)
+        return f"{dests} <- {op.op}({srcs})"
+    return str(op)
 
 
 @dataclass
@@ -169,13 +106,13 @@ class ir_block:
     step : sym = field(default_factory=lambda: sym.const(1))
     unroll : int = 1
     tail_step : sym | None = None
-    subtail : list[ir_op] = field(default_factory=list)
+    subtail : list = field(default_factory=list)
     subtail_step : sym | None = None
     requires_multiple : sym | None = None
-    prologue : list[ir_op] = field(default_factory=list)
-    body : list[ir_op] = field(default_factory=list)
-    epilogue : list[ir_op] = field(default_factory=list)
-    tail : list[ir_op] = field(default_factory=list)
+    prologue : list = field(default_factory=list)
+    body : list = field(default_factory=list)
+    epilogue : list = field(default_factory=list)
+    tail : list = field(default_factory=list)
     advance : dict[str, int] = field(default_factory=dict)
 
 
@@ -222,7 +159,7 @@ class ir_program:
                 ops = getattr(block, section)
                 if ops:
                     lines.append(f"  {section}:")
-                    lines.extend(f"    {op.render(db)}" for op in ops)
+                    lines.extend(f"    {render_op(op, db)}" for op in ops)
             for comp, oid in block.advance.items():
                 lines.append(f"  advance {comp} by {db[oid]} per iteration")
         return "\n".join(lines)

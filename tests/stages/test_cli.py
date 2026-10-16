@@ -26,7 +26,8 @@ class test_cli(unittest.TestCase):
             "--A-layout", "m:c", "k:s", "--B-layout", "k:s", "n:c", "--C-layout", "m:c", "n:s",
             "--mm-to", mm, "--betascale-to", "fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}",
             "--alphascale-to", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}", "--store-to", "C.VEC:direct",
-            "--m", "1", "--n", "1", "--k", "1"]
+            "--m", "1", "--n", "1", "--k", "1",
+            "--A-data-regs", "1", "--B-data-regs", "1", "--C-data-regs", "1"]
         out = cli(*args)
         self.assertEqual(0, out.returncode, out.stderr)
         chosen = next(l for l in out.stdout.splitlines() if l.startswith("--mm-to"))
@@ -65,7 +66,8 @@ class test_cli_help_and_errors(unittest.TestCase):
                   "--mm-to", "fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}",
                   "--betascale-to", "fmul(C.VEC:gather, beta.VEC:bc_load, C.VEC){i=m, n=1}",
                   "--alphascale-to", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}",
-                  "--store-to", "C.VEC:scatter", "--m", "1", "--n", "1", "--k", "1", "--bogus")
+                  "--store-to", "C.VEC:scatter", "--m", "1", "--n", "1", "--k", "1",
+                  "--A-data-regs", "1", "--B-data-regs", "1", "--C-data-regs", "1", "--bogus")
         self.assertEqual(2, out.returncode, out.stdout)
         self.assertIn("unrecognized arguments: --bogus", out.stderr)
 

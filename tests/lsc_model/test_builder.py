@@ -16,7 +16,8 @@ from ukrgen.flow.stages.model import model_stage
 from ukrgen.flow.stages.stage import stage_error
 from ukrgen.lsc_model.builder import program_builder, addressing_plan, model_error
 from ukrgen.lsc_model.addressing import addr_pattern
-from ukrgen.lsc_model.ir import ir_mem, ir_move, ir_compute, ir_zero
+from ukrgen.models.load_store_operations import (
+    lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation)
 
 TO_STAGES = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage]
 
@@ -31,7 +32,8 @@ def run(stages=TO_STAGES, **extra):
               "C-data-type": "FP64", "A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"],
               "C-layout": ["m:c", "n:s"], "mm-to": [FMA_M], "betascale-to": [BETA],
               "alphascale-to": [ALPHA], "store-to": ["C.VEC:direct"],
-              "m": "2", "n": "2", "k": "1"}
+              "m": "2", "n": "2", "k": "1",
+              "A-data-regs": "2", "B-data-regs": "2", "C-data-regs": "4"}
     params.update(extra)
     def prolog(s):
         for p in s.get_parameter_names():
@@ -41,9 +43,25 @@ def run(stages=TO_STAGES, **extra):
     return ctx, stage_engine(stages, ctx, prolog=prolog).run()
 
 
+def addr_comp(op):
+    return op.indices[0].component
+
+
+def addr_reg(op):
+    return op.indices[0].indices[0]
+
+
+def data(op):
+    return (op.indices[1].component, op.indices[1].indices[0])
+
+
+def read_regs(op):
+    return {(op.indices[i].component, op.indices[i].indices[0]) for i in op.reads}
+
+
 def loads(ops, comp=None):
-    return [op for op in ops if isinstance(op, ir_mem) and "load" == op.kind
-            and (comp is None or comp == op.addr.component)]
+    return [op for op in ops if isinstance(op, lsc_load)
+            and (comp is None or comp == addr_comp(op))]
 
 
 class test_builder(unittest.TestCase):
@@ -60,17 +78,17 @@ class test_builder(unittest.TestCase):
         prog = self.build()
         mm = prog.blocks[0]
         # the prologue zeroes the accumulators and loads the first iteration
-        self.assertEqual(4, sum(isinstance(op, ir_zero) for op in mm.prologue))
+        self.assertEqual(4, sum(isinstance(op, lsc_zero) for op in mm.prologue))
         self.assertEqual(4, len(loads(mm.prologue)))
         # the body loads the next iteration into each register right after
         # this iteration last reads it
         for pos, op in enumerate(mm.body):
-            if isinstance(op, ir_mem):
+            if isinstance(op, lsc_load):
                 later = mm.body[pos + 1:]
-                self.assertFalse(any(isinstance(c, ir_compute) and op.reg in c.regs.values()
-                                     for c in later), f"{op.reg} read after its reload")
+                self.assertFalse(any(isinstance(c, lsc_transformation) and data(op) in read_regs(c)
+                                     for c in later), f"{data(op)} read after its reload")
                 # the next iteration: one step further along k
-                self.assertEqual("1", str(prog.offsets[op.addr.offset].along("k")))
+                self.assertEqual("1", str(prog.offsets[op.offset].along("k")))
         # the last iteration loads nothing
         self.assertEqual([], loads(mm.epilogue))
         self.assertEqual(4, len(mm.epilogue))
@@ -86,7 +104,7 @@ class test_builder(unittest.TestCase):
         ctx, _ = run(k="2")
         mm = program_builder(ctx).build().blocks[0]
         self.assertEqual(4, len(loads(mm.tail)))
-        self.assertEqual(4, sum(isinstance(op, ir_compute) for op in mm.tail))
+        self.assertEqual(4, sum(isinstance(op, lsc_transformation) for op in mm.tail))
         # an FMA covers one element of k: no subtail, no constraint on k
         self.assertEqual([], mm.subtail)
         self.assertIsNone(mm.requires_multiple)
@@ -109,15 +127,14 @@ class test_builder(unittest.TestCase):
         mm = program_builder(ctx).build().blocks[0]
         self.assertIsNone(mm.requires_multiple)
         self.assertEqual("1", str(mm.subtail_step))
-        self.assertEqual(4, sum(isinstance(op, ir_compute) for op in mm.subtail))
+        self.assertEqual(4, sum(isinstance(op, lsc_transformation) for op in mm.subtail))
         self.assertEqual(4, len(loads(mm.subtail)))
 
     def test_c_phases(self):
         prog = self.build()
         epi = prog.blocks[1].body
-        self.assertEqual({0}, {op.addr.reg for op in loads(epi, "C")})
-        self.assertEqual({1}, {op.addr.reg for op in epi
-                               if isinstance(op, ir_mem) and "store" == op.kind})
+        self.assertEqual({0}, {addr_reg(op) for op in loads(epi, "C")})
+        self.assertEqual({1}, {addr_reg(op) for op in epi if isinstance(op, lsc_store)})
         # both start at C's base: the stores need no rewinding
         self.assertEqual(prog.addr_setup[("C", 0)], prog.addr_setup[("C", 1)])
 
@@ -135,7 +152,7 @@ class test_builder(unittest.TestCase):
         # one register for A: reloaded whenever another tile is needed
         mm = self.build(preload=False, data_regs={"A": 1}).blocks[0]
         self.assertEqual(2, len(loads(mm.body, "A")))
-        self.assertEqual({0}, {op.reg.index for op in loads(mm.body, "A")})
+        self.assertEqual({0}, {data(op)[1] for op in loads(mm.body, "A")})
         with self.assertRaises(model_error):
             self.build(data_regs={"AB": 2})
 
@@ -150,13 +167,13 @@ class test_builder(unittest.TestCase):
         self.assertEqual("1", str(mm.tail_step))
         self.assertEqual("3", str(prog.offsets[mm.advance["A"]].along("k")))
         # preloads reach one whole iteration ahead
-        ahead = [op for op in mm.body if isinstance(op, ir_mem)]
+        ahead = [op for op in mm.body if isinstance(op, lsc_load)]
         self.assertEqual({"3", "4", "5"},
-                         {str(prog.offsets[op.addr.offset].along("k")) for op in ahead})
+                         {str(prog.offsets[op.offset].along("k")) for op in ahead})
 
     def test_rotating_registers(self):
         prog = self.build(addressing={"A": addressing_plan(2, addr_pattern.parse("rotate"))})
-        self.assertEqual([0, 1], [op.addr.reg for op in loads(prog.blocks[0].prologue, "A")])
+        self.assertEqual([0, 1], [addr_reg(op) for op in loads(prog.blocks[0].prologue, "A")])
 
 
 class test_builder_resolutions(unittest.TestCase):
@@ -167,17 +184,17 @@ class test_builder_resolutions(unittest.TestCase):
             "fadd(AB.VEC, T0.VEC, AB.VEC){i=m, n=1, k*=1}"]})
         self.assertTrue(res.completed)
         mm = program_builder(ctx, preload=False).build().blocks[0]
-        ops = [op for op in mm.body if isinstance(op, ir_compute)]
-        self.assertEqual(["fmul", "fadd"] * 4, [op.opname for op in ops])
-        self.assertIn("T0", {r.owner for op in ops for r in op.regs.values()})
+        ops = [op for op in mm.body if isinstance(op, lsc_transformation)]
+        self.assertEqual(["fmul", "fadd"] * 4, [op.op for op in ops])
+        self.assertIn("T0", {i.component for op in ops for i in op.indices})
 
     def test_scalar_broadcast_via_register(self):
         # bc_scalar: load B's element into a scalar register, then broadcast it
         ctx, res = run(**{"mm-to": ["fma(A.VEC:direct, B.VEC:bc_scalar, AB.VEC){i=m, n=1, k*=1}"]})
         mm = program_builder(ctx, preload=False).build().blocks[0]
-        moves = [op for op in mm.body if isinstance(op, ir_move)]
+        moves = [op for op in mm.body if isinstance(op, lsc_move)]
         self.assertEqual(2, len(moves))
-        self.assertEqual({"S"}, {op.src.owner for op in moves})
+        self.assertEqual({"S"}, {op.indices[0].component for op in moves})
 
     def test_lanes_resolution(self):
         # NEON, row-major A: vectors along m loaded lane by lane
@@ -186,16 +203,16 @@ class test_builder_resolutions(unittest.TestCase):
         self.assertTrue(res.completed, res.output)
         mm = program_builder(ctx, preload=False).build().blocks[0]
         a = loads(mm.body, "A")
-        self.assertEqual([0, 1, 0, 1], [op.lane for op in a])
-        self.assertEqual({"lanes"}, {op.resolution for op in a})
+        self.assertEqual([0, 1, 0, 1], [op.properties.get("lane") for op in a])
+        self.assertEqual({"lanes"}, {op.rsln for op in a})
 
     def test_lane_fma(self):
         ctx, res = run(isa="neon", n="4", m="1", **{
             "mm-to": ["fma[bdreg:ILANE](A.VEC:direct, B.VEC:use_lane, AB.VEC){i=m, n=1, k*=1}"]})
         mm = program_builder(ctx, preload=False).build().blocks[0]
         self.assertEqual(2, len(loads(mm.body, "B")))
-        computes = [op for op in mm.body if isinstance(op, ir_compute)]
-        self.assertEqual([0, 1, 0, 1], [op.lanes["bdreg"] for op in computes])
+        computes = [op for op in mm.body if isinstance(op, lsc_transformation)]
+        self.assertEqual([0, 1, 0, 1], [op.indices[op.hw_operands.index("bdreg")].indices[1] for op in computes])
 
 
 class test_model_stage(unittest.TestCase):
@@ -211,7 +228,7 @@ class test_model_stage(unittest.TestCase):
                        **{"A-addr-regs": "2", "A-addr-pattern": "blocked:2"})
         self.assertTrue(res.completed)
         self.assertEqual(1, len(ctx.programs))
-        self.assertEqual({0}, {op.addr.reg for op in loads(ctx.programs[0].blocks[0].prologue, "A")})
+        self.assertEqual({0}, {addr_reg(op) for op in loads(ctx.programs[0].blocks[0].prologue, "A")})
 
     def test_subtail_not_needed(self):
         # the main FMA already covers one element of k
@@ -248,10 +265,39 @@ class test_register_pressure(unittest.TestCase):
         # no register loaded twice before its first use
         seen = set()
         for op in mm.body:
-            if isinstance(op, ir_mem) and "A" == op.addr.component:
-                seen.add(op.reg)
-            if isinstance(op, ir_compute):
-                for hw in op.reads:
-                    r = op.regs[hw]
-                    if "A" == r.owner:
+            if isinstance(op, lsc_load) and "A" == addr_comp(op):
+                seen.add(data(op))
+            if isinstance(op, lsc_transformation):
+                for r in read_regs(op):
+                    if "A" == r[0]:
                         self.assertIn(r, seen)
+
+
+class test_old_ir_compatibility(unittest.TestCase):
+
+    def test_distance_scheduler(self):
+        # the dependency scheduler takes the model's operations as they are,
+        # including moves between scratch and data registers
+        from ukrgen.schedulers.distance import distance_specification
+        from ukrgen.schedulers.simple_dependency_scheduler import simple_dependency_scheduler
+        ctx, _ = run(**{"mm-to": ["fma(A.VEC:direct, B.VEC:bc_scalar, AB.VEC){i=m, n=1, k*=1}"]})
+        mm = program_builder(ctx).build().blocks[0]
+        specs = [distance_specification.from_string(s)
+                 for s in ("raw:data::ld:fma:3", "raw:data::mv:fma:2")]
+        out = simple_dependency_scheduler(specs)(list(mm.body), loop=True)
+        self.assertEqual(sorted(map(id, mm.body)), sorted(map(id, out)))
+        # a broadcast's move into B0 comes after the last read of B0's old value
+        moves = [i for i, op in enumerate(out) if isinstance(op, lsc_move)]
+        self.assertTrue(moves)
+
+    def test_epilogue_owns_its_operations(self):
+        # schedulers rename registers in place: body and epilogue must not
+        # share operations or register indices
+        mm = program_builder(run()[0]).build().blocks[0]
+        body = {id(op) for op in mm.body} | {id(i) for op in mm.body for i in op.indices}
+        epi = {id(op) for op in mm.epilogue} | {id(i) for op in mm.epilogue for i in op.indices}
+        self.assertFalse(body & epi)
+
+    def test_data_registers_mandatory(self):
+        with self.assertRaisesRegex(ValueError, "C-data-regs is required"):
+            run(stages=TO_STAGES + [model_stage], **{"C-data-regs": None})

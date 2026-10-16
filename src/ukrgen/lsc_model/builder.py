@@ -10,6 +10,8 @@ second run with saved and restored state.
 
 from __future__ import annotations
 
+import copy
+
 from dataclasses import dataclass, field
 
 from asmgen.asmblocks.op import operand_modifier as omod
@@ -25,7 +27,11 @@ from ..support.data_move import (
 from ..support.dm_solver import repeat_fits
 from ..support.sig_group import group_sigs
 from .addressing import sym, offset_db, layout_strides, addr_pattern
-from .ir import vreg, addr_ref, ir_op, ir_mem, ir_move, ir_compute, ir_zero, ir_block, ir_program
+from ..components.tile import scalar_tile
+from ..models.load_store_operations import (
+    lsc_operation, lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, ldst_modifier)
+from ..models.lsc.index import lsc_reg_index
+from .ir import vreg, addr_ref, ir_block, ir_program
 
 
 class model_error(Exception):
@@ -42,14 +48,15 @@ class access_group:
     """
     component : str
     reg : vreg
-    ops : list[ir_op]
+    ops : list[lsc_operation]
     streamed : bool
     coord : tuple = ()
 
 
 @dataclass
 class compute_item:
-    op : ir_compute
+    op : lsc_transformation
+    reads : list = field(default_factory=list)
 
 
 @dataclass
@@ -195,14 +202,21 @@ class program_builder:
                 return idx
         return None
 
-    def move_data(self, sto: str, tiling, comp: str, coord: tuple, reg: vreg,
-                  steps, direction: str, tag: str) -> list[ir_op]:
+    def reg_tile(self, tiling, reg: vreg):
         """
-        The IR of one data movement: its steps in order, a repeated step once per
-        lane, each load or store at the tile's address
+        Tile a register holds: its component's register tile, a scalar for
+        scratch space
+        """
+        return tiling.registers.get(reg.owner, scalar_tile)
+
+    def move_data(self, sto: str, tiling, comp: str, coord: tuple, reg: vreg,
+                  steps, direction: str, tag: str) -> list[lsc_operation]:
+        """
+        The operations of one data movement: its steps in order, a repeated
+        step once per lane, each load or store at the tile's address
         """
         dt = self.ctx.component_dts[comp]
-        ops: list[ir_op] = []
+        ops: list[lsc_operation] = []
         for rs in steps:
             step = rs.step
             sigs = getattr(rs, "sg", None) or self.step_sigs(step, dt)
@@ -214,20 +228,30 @@ class program_builder:
                 if lane is not None:
                     vidx = self.vector_index(tiling, comp)
                     elements[vidx] = elements.get(vidx, sym()) + lane
-                if "load" == step.op:
-                    dest = self.ref_reg(step.dest, step.dest_rtype, reg)
-                    ops.append(ir_mem("load", dest,
-                                      self.address(sto, comp, direction, coord, elements),
-                                      tag, step, sigs, lane))
-                elif "store" == step.op:
-                    src = self.ref_reg(step.src[0], step.src_rtypes[0], reg)
-                    ops.append(ir_mem("store", src,
-                                      self.address(sto, comp, direction, coord, elements),
-                                      tag, step, sigs, lane))
+                if step.op in ("load", "store"):
+                    data = self.ref_reg(step.dest, step.dest_rtype, reg) if "load" == step.op \
+                        else self.ref_reg(step.src[0], step.src_rtypes[0], reg)
+                    addr = self.address(sto, comp, direction, coord, elements)
+                    mods = set()
+                    if lane is not None:
+                        mods.add(ldst_modifier.lane)
+                    if "bc_load" == tag:
+                        mods.add(ldst_modifier.bcast1)
+                    cls = lsc_load if "load" == step.op else lsc_store
+                    op = cls(comp, data.index, addr.reg, None, None,
+                             self.reg_tile(tiling, data), mods,
+                             data=_index(data, lane), rsln=tag, step=step, sigs=sigs,
+                             offset=addr.offset, rtypes=[None, data.rtype])
+                    if lane is not None:
+                        op.add_property("lane", lane)
+                    ops.append(op)
                 else:
                     src = self.ref_reg(step.src[0], step.src_rtypes[0], reg)
                     dest = self.ref_reg(step.dest, step.dest_rtype, reg)
-                    ops.append(ir_move(src, dest, tag, step, sigs, lane))
+                    ops.append(lsc_move(_index(src), _index(dest),
+                                        [self.reg_tile(tiling, src), self.reg_tile(tiling, dest)],
+                                        rsln=tag, step=step, sigs=sigs,
+                                        rtypes=[src.rtype, dest.rtype]))
         return ops
 
     # --- STOs ----------------------------------------------------------------
@@ -238,21 +262,28 @@ class program_builder:
         data its operands need loaded first unless a register holds it
         """
         impl = impl or self.part[sto].impl
+        last = impl.math_chain[-1]
+        result = last.name_mapping.get(last.hw_ast.left.name)
+        result_tile = tiling.registers.get(result, scalar_tile)
+
         items: list = []
         temps: dict[str, vreg] = {}
         for res, step in zip(impl.resolved_chain, impl.math_chain):
             sig = res.compute_sg.representative
-            regs, lanes, reads, writes = {}, {}, [], []
+            hws, indices, tiles, reads, writes, read_regs = [], [], [], [], [], []
             written = []
-            for hw, math in step.name_mapping.items():
+            for pos, (hw, math) in enumerate(step.name_mapping.items()):
                 is_read, is_written = get_operand_io(step.hw_ast, hw)
                 rtype = sig.operands[hw].rtype
+                lane = None
                 if math not in self.components:
                     reg = temps.setdefault(math, vreg(math, rtype, 0))
                     self._use(reg)
+                    tile = result_tile
                 else:
                     coord = op.coord(math)
                     reg = self.reg_of(math, rtype, coord)
+                    tile = tiling.registers[math]
                     strat = res.operand_strategies.get((hw, dmd.IN))
                     if is_read and strat is not None and strat.rsln.steps:
                         if self.holder.get(reg) != (math, coord):
@@ -268,19 +299,25 @@ class program_builder:
                         raise model_error(
                             f"{sto} reads {math}{list(coord)}, which is no longer in "
                             f"{reg}: give {math} more data registers")
-                    lane = [l for l in op.lane(math) if l is not None]
-                    if lane and omod.ILANE in sig.operands[hw].modifiers:
-                        lanes[hw] = lane[0]
+                    lanes = [l for l in op.lane(math) if l is not None]
+                    if lanes and omod.ILANE in sig.operands[hw].modifiers:
+                        lane = lanes[0]
                     if is_written:
                         written.append((reg, math, coord))
-                regs[hw] = reg
+                hws.append(hw)
+                indices.append(_index(reg, lane))
+                tiles.append(tile)
                 if is_read:
-                    reads.append(hw)
+                    reads.append(pos)
+                    read_regs.append(reg)
                 if is_written:
-                    writes.append(hw)
+                    writes.append(pos)
             opname = self.ctx.osb.ast_op_map[step.hw_ast]
-            items.append(compute_item(ir_compute(sto, opname, res, regs, lanes,
-                                                 tuple(reads), tuple(writes))))
+            items.append(compute_item(
+                lsc_transformation(opname, indices, tiles, reads, writes,
+                                   resolution=res, hw_operands=hws,
+                                   rtypes=[sig.operands[hw].rtype for hw in hws]),
+                read_regs))
             for reg, math, coord in written:
                 self.holder[reg] = (math, coord)
         return items
@@ -320,7 +357,7 @@ class program_builder:
 
     # --- blocks ----------------------------------------------------------------
 
-    def zero_accumulators(self, block: block_description) -> list[ir_op]:
+    def zero_accumulators(self, block: block_description) -> list[lsc_operation]:
         from ..flow.stages.solve import produced_rtype
         ops = []
         for sto in block.stos:
@@ -331,7 +368,9 @@ class program_builder:
                 for coord in self.coords[acc]:
                     reg = self.reg_of(acc, rtype, coord)
                     if self.holder.get(reg) != (acc, coord):
-                        ops.append(ir_zero(reg))
+                        ops.append(lsc_zero(reg.owner, reg.index,
+                                            self.stos[sto].registers[acc],
+                                            rtypes=[reg.rtype]))
                         self.holder[reg] = (acc, coord)
         if any(self.data_regs.get(a, len(self.coords[a])) < len(self.coords[a])
                for sto in block.stos for a in self.comp.accumulators(sto)):
@@ -369,8 +408,8 @@ class program_builder:
             last_read: dict[vreg, int] = {}
             for pos, item in enumerate(items):
                 if isinstance(item, compute_item):
-                    for hw in item.op.reads:
-                        last_read[item.op.regs[hw]] = pos
+                    for reg in item.reads:
+                        last_read[reg] = pos
             #
             # That needs each register to hold one tile per iteration. A
             # component given fewer data registers than tiles reuses them
@@ -396,7 +435,8 @@ class program_builder:
                     continue
                 ops = _flatten([item])
                 out.body += ops
-                out.epilogue += ops
+                # its own copies: the schedulers rename registers in place
+                out.epilogue += [_clone(o) for o in ops]
                 for group in ahead.get(pos, []):
                     out.body += [self.shifted(op, k, iteration) for op in group.ops]
 
@@ -429,15 +469,15 @@ class program_builder:
                 out.requires_multiple = extent
         return out
 
-    def shifted(self, op: ir_op, index: str, amount: sym) -> ir_op:
+    def shifted(self, op: lsc_operation, index: str, amount: sym) -> lsc_operation:
         """
-        The same access one loop iteration later
+        The same operation one loop iteration later: a copy, with a load or
+        store's address moved along the loop index
         """
-        if not isinstance(op, ir_mem):
-            return op
-        addr = addr_ref(op.addr.component, op.addr.reg,
-                        self.db.shifted(op.addr.offset, index, amount))
-        return ir_mem(op.kind, op.reg, addr, op.resolution, op.step, op.sigs, op.lane)
+        new = _clone(op)
+        if isinstance(op, (lsc_load, lsc_store)):
+            new.offset = self.db.shifted(op.offset, index, amount)
+        return new
 
     def build(self) -> ir_program:
         blocks = []
@@ -462,7 +502,32 @@ class _step:
     sg : object = None
 
 
-def _flatten(items: list) -> list[ir_op]:
+def _index(reg: vreg, lane: int | None = None) -> lsc_reg_index:
+    """
+    The LSC register index of a virtual register; a lane is a second index
+    """
+    return lsc_reg_index(reg.owner, [reg.index] + ([lane] if lane is not None else []))
+
+
+def _clone(op: lsc_operation) -> lsc_operation:
+    """
+    A copy owning its register indices and lists: the MRU renames registers by
+    rewriting op.indices in place, and widening rewrites the indices
+    themselves, so operations must not share them
+    """
+    new = copy.copy(op)
+    new.indices = [lsc_reg_index(i.component, list(i.indices)) for i in op.indices]
+    new.tiles = list(op.tiles)
+    new.reads = list(op.reads)
+    new.writes = list(op.writes)
+    new.reg_types = list(op.reg_types)
+    new.properties = dict(op.properties)
+    if hasattr(op, "mods"):
+        new.mods = copy.copy(op.mods)
+    return new
+
+
+def _flatten(items: list) -> list[lsc_operation]:
     ops = []
     for item in items:
         ops += item.ops if isinstance(item, access_group) else [item.op]

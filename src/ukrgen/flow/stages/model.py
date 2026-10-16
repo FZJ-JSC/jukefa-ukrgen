@@ -20,8 +20,10 @@ class model_stage(stage):
     access uses which (--<c>-addr-regs, --<c>-addr-pattern). A component that is
     loaded and later stored, like C, defaults to two registers and the phase
     pattern: one for its loads, one for its stores, so the stores start where
-    the loads did without rewinding. --<c>-data-regs limits a component's data
-    registers; by default it gets one per tile it needs.
+    the loads did without rewinding.
+
+    --<c>-data-regs gives each component's data registers, except accumulators,
+    which get one per tile they accumulate.
 
     --print-ir prints the IR and stops.
     """
@@ -54,12 +56,19 @@ class model_stage(stage):
                                 f"register) or phase (one register per STO and direction)",
                     required=False)
 
-        for comp in composition.get_parameterized_components():
+        # Accumulators get one register per tile they accumulate, counted
+        # automatically: fewer would mean spilling them, which needs memory
+        # to spill to that BLIS kernels don't have.
+        self.accumulators = {a for block in composition.get_blocks() if block.is_loop
+                             for sto in block.stos for a in composition.accumulators(sto)}
+        self.data_components = [c for c in composition.get_parameterized_components()
+                                if c not in self.accumulators]
+        for comp in self.data_components:
             self.params[f"{comp}-data-regs"] = stage_param(
                     value=None,
-                    description=f"Data registers for {comp}; by default one per tile "
-                                f"it needs",
-                    required=False)
+                    description=f"Data registers for {comp}. Fewer than its tiles cycles "
+                                f"through them, reloading; a component kept in registers "
+                                f"between STOs needs one per tile")
 
         self.params["no-preload"] = stage_param(
                 value=False, default=False, flag=True, required=False,
@@ -81,13 +90,11 @@ class model_stage(stage):
             addressing[comp] = addressing_plan(int(count), pattern)
 
         data_regs = {}
-        for comp in self.context.composition.get_parameterized_components():
-            value = self.params[f"{comp}-data-regs"].value
-            if value is not None:
-                if not str(value).isdigit() or int(value) < 1:
-                    raise stage_error(f"--{comp}-data-regs must be a positive integer, "
-                                      f"got {value}")
-                data_regs[comp] = int(value)
+        for comp in self.data_components:
+            value = str(self.params[f"{comp}-data-regs"].value)
+            if not value.isdigit() or int(value) < 1:
+                raise stage_error(f"--{comp}-data-regs must be a positive integer, got {value}")
+            data_regs[comp] = int(value)
 
         try:
             programs = [program_builder(self.context, part, addressing, data_regs,

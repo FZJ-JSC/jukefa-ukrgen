@@ -251,8 +251,11 @@ class solve_stage(stage):
             for name in block.stos:
                 if sto_kind.COMPUTE != context.composition.get_sto(name).kind:
                     continue
+                # optional: an empty default, so it is not a question --help
+                # stops at
                 self.params[f"{name}-subtail-to"] = stage_param(
-                        value=None,
+                        value=[],
+                        default=[],
                         description=f"Implementation for the remainder of the loop over "
                                     f"{block.loop_index} shorter than one operation of "
                                     f"--{name}-to: a candidate covering one element of "

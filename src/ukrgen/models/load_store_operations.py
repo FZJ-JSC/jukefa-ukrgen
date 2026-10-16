@@ -79,6 +79,16 @@ class ldst_modifier(Enum):
     postinc = auto()
 
 class lsc_load(lsc_operation):
+    """
+    A load of a component's data register through one of its address
+    registers.
+    Built by the LSC model, a load or store also carries where its
+    instruction comes from - the data movement resolution it is a step of,
+    that step and the signatures that can execute it - and its address as a
+    record in the model's offset database (off and stride stay unset). The
+    register it moves may belong to another owner than the address: the
+    scratch register a broadcast is loaded into first.
+    """
     def __init__(self,
                  component : str,
                  res_idx : int,
@@ -86,14 +96,26 @@ class lsc_load(lsc_operation):
                  off : lsc_offset,
                  stride : lsc_offset,
                  t : tile,
-                 mods : set[ldst_modifier]):
+                 mods : set[ldst_modifier],
+                 *,
+                 data : lsc_reg_index | None = None,
+                 rsln : str | None = None,
+                 step = None,
+                 sigs = None,
+                 offset : int | None = None,
+                 rtypes : list | None = None):
+        self.rsln = rsln
+        self.step = step
+        self.sigs = sigs
+        self.offset = offset
+        self.rtypes = rtypes
         self.off = off
         self.stride = stride
         self.mods = mods
 
         tiles = [scalar_tile, t]
         indices = [lsc_reg_index(component, [addr_idx]),
-                   lsc_reg_index(component, [res_idx])]
+                   data or lsc_reg_index(component, [res_idx])]
         # read address
         reads = [0]
         # write resource
@@ -130,6 +152,16 @@ class lsc_load(lsc_operation):
         return f"{resstr} <- {opstr} ADDR:{self.addr_idx}{offsetstr}"
 
 class lsc_store(lsc_operation):
+    """
+    A store of a component's data register through one of its address
+    registers.
+    Built by the LSC model, a load or store also carries where its
+    instruction comes from - the data movement resolution it is a step of,
+    that step and the signatures that can execute it - and its address as a
+    record in the model's offset database (off and stride stay unset). The
+    register it moves may belong to another owner than the address: the
+    scratch register a broadcast is loaded into first.
+    """
     def __init__(self,
                  component : str,
                  res_idx : int,
@@ -137,14 +169,26 @@ class lsc_store(lsc_operation):
                  off : lsc_offset,
                  stride : lsc_offset,
                  t : tile,
-                 mods : set[ldst_modifier]):
+                 mods : set[ldst_modifier],
+                 *,
+                 data : lsc_reg_index | None = None,
+                 rsln : str | None = None,
+                 step = None,
+                 sigs = None,
+                 offset : int | None = None,
+                 rtypes : list | None = None):
+        self.rsln = rsln
+        self.step = step
+        self.sigs = sigs
+        self.offset = offset
+        self.rtypes = rtypes
         self.off = off
         self.stride = stride
         self.mods = mods
 
         tiles = [scalar_tile, t]
         indices = [lsc_reg_index(component, [addr_idx]),
-                   lsc_reg_index(component, [res_idx])]
+                   data or lsc_reg_index(component, [res_idx])]
         # read resource
         reads = [0,1]
         # we write memory, not the address register
@@ -179,7 +223,8 @@ class lsc_store(lsc_operation):
         return f"ADDR:{self.addr_idx}{offsetstr} <- STORE {resstr}{poststr}"
 
 class lsc_zero(lsc_operation):
-    def __init__(self, component : str, res_idx : int, t : tile):
+    def __init__(self, component : str, res_idx : int, t : tile, *, rtypes : list | None = None):
+        self.rtypes = rtypes
 
         tiles = [t]
         indices = [lsc_reg_index(component, [res_idx])]
@@ -270,15 +315,50 @@ class lsc_debugmsg(lsc_operation):
         return self.msg
 
 
+class lsc_move(lsc_operation):
+    """
+    A register-to-register step of a data movement: broadcasting a scalar
+    loaded into a scratch register, moving a lane. Carries the resolution it
+    belongs to, the step and the signatures that can execute it.
+    """
+    def __init__(self, src : lsc_reg_index, dest : lsc_reg_index,
+                 tiles : list[tile], *, rsln : str | None = None, step = None,
+                 sigs = None, rtypes : list | None = None):
+        self.rsln = rsln
+        self.step = step
+        self.sigs = sigs
+        self.rtypes = rtypes
+        super().__init__(tiles=tiles, indices=[src, dest], reads=[0], writes=[1],
+                         reg_types=[lsc_reg_type.data, lsc_reg_type.data])
+
+    def __str__(self):
+        return f"{self.indices[1]} <- MOVE {self.indices[0]}"
+
+
 class tr_modifier(Enum):
     np = auto()
     
 class lsc_transformation(lsc_operation):
+    """
+    An arithmetic operation on data registers.
+
+    Built by the LSC model it also carries the solved operation it executes
+    (resolution: its compute signature group and how each operand gets its
+    data), the hardware operand behind each register position, and reads and
+    writes from the requirement rather than the gemm-shaped defaults.
+    """
     def __init__(self, op : str,
                  res_indices : list[lsc_reg_index],
                  tiles : list[tile],
                  reads : list[int] = [0,1,2],
-                 writes : list[int] = [2]):
+                 writes : list[int] = [2],
+                 *,
+                 resolution = None,
+                 hw_operands : list[str] | None = None,
+                 rtypes : list | None = None):
+        self.resolution = resolution
+        self.hw_operands = hw_operands
+        self.rtypes = rtypes
 
         #TODO: This is needed because registers might get replaced (for example by the
         #      minreguse_scheduler) and we need component assignments to actual data.
