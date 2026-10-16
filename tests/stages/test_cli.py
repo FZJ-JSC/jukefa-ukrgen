@@ -20,15 +20,17 @@ class test_cli(unittest.TestCase):
 
     def test_later_options_are_not_abbreviations(self):
         # --m is a dimension, not an abbreviation of --mm-to
+        mm = "fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"
         dts = [f"--{c}-data-type" for c in ("A", "B", "AB", "C")]
         args = ["--isa", "sve"] + [a for d in dts for a in (d, "FP64")] + [
             "--A-layout", "m:c", "k:s", "--B-layout", "k:s", "n:c", "--C-layout", "m:c", "n:s",
-            "--mm-to", "0", "--betascale-to", "0", "--alphascale-to", "0", "--store-to", "0",
+            "--mm-to", mm, "--betascale-to", "fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}",
+            "--alphascale-to", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}", "--store-to", "C.VEC:direct",
             "--m", "1", "--n", "1", "--k", "1"]
-        listing = cli(*args[:-12], "--list-to-candidates").stdout
-        first = next(l for l in listing.splitlines() if "--mm-to" in l).split("--mm-to ", 1)[1]
-        chosen = next(l for l in cli(*args).stdout.splitlines() if l.startswith("--mm-to"))
-        self.assertEqual(f"--mm-to {first}", chosen)
+        out = cli(*args)
+        self.assertEqual(0, out.returncode, out.stderr)
+        chosen = next(l for l in out.stdout.splitlines() if l.startswith("--mm-to"))
+        self.assertEqual(f'--mm-to "{mm}"', chosen)
 
 
 if __name__ == "__main__":

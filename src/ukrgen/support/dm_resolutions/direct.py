@@ -44,7 +44,7 @@ class direct_provider(resolution_provider):
                     unique_tag='direct',
                     steps=[
                         dm_step(op="load", dest=orig_ref(), dest_rtype=rtype,
-                                forbidden_opd_mods={orig_ref(): {omod.BCAST,omod.GLANE,omod.ILANE}},
+                                forbidden_opd_mods={orig_ref(): {omod.BCAST,omod.GLANE,omod.ILANE,omod.ROW,omod.COL}},
                                 forbidden_op_mods=STRIDED_FORMS)
                         ]))
 
@@ -56,7 +56,7 @@ class direct_provider(resolution_provider):
                     unique_tag='direct',
                     steps=[
                         dm_step(op="store", src=[orig_ref()], src_rtypes=[rtype],
-                                forbidden_opd_mods={orig_ref(): {omod.GLANE,omod.ILANE}},
+                                forbidden_opd_mods={orig_ref(): {omod.GLANE,omod.ILANE,omod.ROW,omod.COL}},
                                 forbidden_op_mods=STRIDED_FORMS)
                         ]))
             
@@ -70,7 +70,7 @@ class direct_provider(resolution_provider):
                     unique_tag='direct',
                     steps=[
                         dm_step(op="load", dest=orig_ref(), dest_rtype=rtype,
-                                forbidden_opd_mods={orig_ref(): {omod.BCAST,omod.GLANE,omod.ILANE}},
+                                forbidden_opd_mods={orig_ref(): {omod.BCAST,omod.GLANE,omod.ILANE,omod.ROW,omod.COL}},
                                 forbidden_op_mods=STRIDED_FORMS)
                         ]))
 
@@ -82,6 +82,6 @@ class direct_provider(resolution_provider):
                     unique_tag='direct',
                     steps=[
                         dm_step(op="store", src=[orig_ref()], src_rtypes=[rtype],
-                                forbidden_opd_mods={orig_ref(): {omod.GLANE,omod.ILANE}},
+                                forbidden_opd_mods={orig_ref(): {omod.GLANE,omod.ILANE,omod.ROW,omod.COL}},
                                 forbidden_op_mods=STRIDED_FORMS)
                         ]))

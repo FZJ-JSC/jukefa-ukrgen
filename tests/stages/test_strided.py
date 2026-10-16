@@ -40,9 +40,18 @@ def listing(isa, a="k", c="n", b="n"):
     return stage_engine(STAGES, ctx, prolog=prolog).run().output
 
 
-def tags(out, comp, sto):
-    lines = "\n".join(l for l in out.splitlines() if f"--{sto}-to" in l)
-    return set(re.findall(rf"{comp}\.VEC:(\w+)", lines))
+def tags(out, comp, sto, along="m"):
+    """
+    Resolutions of comp among the candidates of sto. Compute candidates are
+    restricted to vectors along one index; store candidates cover whatever the
+    implementations before them leave.
+    """
+    lines = [l for l in out.splitlines() if f"--{sto}-to" in l]
+    if "store" != sto:
+        # every operation of the candidate with vectors along that index
+        other = {"m": "n", "n": "m"}[along]
+        lines = [l for l in lines if f"i={along}" in l and f"i={other}" not in l]
+    return set(re.findall(rf"{comp}\.VEC:(\w+)", "\n".join(lines)))
 
 
 class test_strided(unittest.TestCase):
@@ -58,11 +67,22 @@ class test_strided(unittest.TestCase):
     def test_contiguous_stays_direct(self):
         out = listing("sve", a="m", c="m")
         self.assertEqual({"direct"}, tags(out, "A", "mm"))
-        self.assertEqual({"direct"}, tags(out, "C", "store"))
+        # stores from implementations with vectors along m are contiguous; those
+        # with vectors along n leave C to be scattered
+        self.assertEqual({"direct", "scatter"}, tags(out, "C", "store"))
 
     def test_row_major_c_stores_strided(self):
-        self.assertEqual({"scatter"}, tags(listing("sve"), "C", "store"))
-        self.assertEqual({"scatter", "strided"}, tags(listing("rvv"), "C", "store"))
+        # vectors along m into a row-major C scatter; vectors along n store directly
+        self.assertEqual({"direct", "scatter"}, tags(listing("sve"), "C", "store"))
+        self.assertEqual({"direct", "scatter", "strided"}, tags(listing("rvv"), "C", "store"))
+
+    def test_orientation_decides(self):
+        # the same row-major A: strided for vectors along m, broadcast elements
+        # for vectors along n - which needs no contiguous index at all
+        out = listing("sve")
+        self.assertEqual({"gather"}, tags(out, "A", "mm", along="m"))
+        self.assertNotIn("gather", tags(out, "A", "mm", along="n"))
+        self.assertIn("bc_load", tags(out, "A", "mm", along="n"))
 
     def test_lane_count_must_fit(self):
         step = dm_step(op="load", dest=orig_ref(), dest_rtype=rgt.VEC,

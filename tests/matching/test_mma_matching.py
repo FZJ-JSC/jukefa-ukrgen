@@ -104,19 +104,14 @@ class test_mm_matching(unittest.TestCase):
     def test_match_fma(self):
         solutions = solve_requirement(self.mm_req, [HW_FMA_AST])
         print_solution(solutions)
+        # Vectors are rank 1, so the orientation is the index binding (i=m with B
+        # broadcast, i=n with A broadcast), not a transposition
         self.assertEqual(6, len(solutions))
         
         expected_tfs = {
-            # direct match to vfmacc.vf c, b, a
             ((tf.NONE, tf.SCALAR_REDUCE, tf.NONE),),
-            # bcast to a, vfmacc.vv c, b, a
-            ((tf.SCALAR_REDUCE, tf.TRANSPOSE, tf.TRANSPOSE),),
-            # scalar degeneration
-            ((tf.SCALAR_REDUCE, tf.SCALAR_REDUCE, tf.SCALAR_REDUCE),),
-            # bcast to b, vfmacc.vv c, a, b
-            ((tf.TRANSPOSE, tf.SCALAR_REDUCE, tf.TRANSPOSE),),
-            # direct match to vfmacc c, a, b
             ((tf.SCALAR_REDUCE, tf.NONE, tf.NONE),),
+            ((tf.SCALAR_REDUCE, tf.SCALAR_REDUCE, tf.SCALAR_REDUCE),),
         }
         self.assertEqual(expected_tfs, self.extract_tfs(solutions))
 
@@ -124,12 +119,13 @@ class test_mm_matching(unittest.TestCase):
     def test_match_fdota(self):
         solutions = solve_requirement(self.mm_req, [HW_FDOTA_AST])
         print_solution(solutions)
+        # The reduced index r is not the output index: A and B run along k, the
+        # result is one element
         self.assertEqual(4, len(solutions))
 
         expected_tfs = {
-            ((tf.TRANSPOSE, tf.NONE, tf.SCALAR_REDUCE),),
-            ((tf.NONE, tf.TRANSPOSE, tf.SCALAR_REDUCE),),
-            ((tf.SCALAR_REDUCE, tf.SCALAR_REDUCE, tf.SCALAR_REDUCE),)
+            ((tf.NONE, tf.NONE, tf.SCALAR_REDUCE),),
+            ((tf.SCALAR_REDUCE, tf.SCALAR_REDUCE, tf.SCALAR_REDUCE),),
         }
         self.assertEqual(expected_tfs, self.extract_tfs(solutions))
 
@@ -137,13 +133,15 @@ class test_mm_matching(unittest.TestCase):
     def test_match_fopa(self):
         solutions = solve_requirement(self.mm_req, [HW_FOPA_AST])
         print_solution(solutions)
+        # bdreg (j,) binds to B's n directly; transposing is only needed with the
+        # operand slots swapped
         self.assertEqual(4, len(solutions))
 
         expected_tfs = {
-            ((tf.NONE, tf.TRANSPOSE, tf.NONE),),
-            ((tf.TRANSPOSE, tf.NONE, tf.TRANSPOSE),),
-            ((tf.SCALAR_REDUCE, tf.TRANSPOSE, tf.COL_REDUCE),),
-            ((tf.NONE, tf.SCALAR_REDUCE, tf.ROW_REDUCE),)
+            ((tf.NONE, tf.NONE, tf.NONE),),
+            ((tf.NONE, tf.NONE, tf.TRANSPOSE),),
+            ((tf.NONE, tf.SCALAR_REDUCE, tf.ROW_REDUCE),),
+            ((tf.SCALAR_REDUCE, tf.NONE, tf.COL_REDUCE),),
         }
         self.assertEqual(expected_tfs, self.extract_tfs(solutions))
 
@@ -166,25 +164,15 @@ class test_mm_matching(unittest.TestCase):
         print_solution(solutions)
 
         # Many solutions, most degenerate or redundant
-        self.assertEqual(32, len(solutions))
+        # The temporary between fmul and fadd must be laid out the same way in
+        # both: no chain vectorizes it along n in one and along m in the other
+        self.assertEqual(12, len(solutions))
 
         # only 5 actual solutions (RVV examples in comments)
         expected_tfs = {
-            # bcast to a, vfmul.vv -> vfadd.vv
-            ((tf.SCALAR_REDUCE, tf.TRANSPOSE, tf.TRANSPOSE),
-             (tf.TRANSPOSE, tf.TRANSPOSE, tf.TRANSPOSE)),
-            # swapped a,b; bcast to b, vfmul.vv -> vfadd.vv
-            ((tf.TRANSPOSE, tf.SCALAR_REDUCE, tf.TRANSPOSE),
-             (tf.TRANSPOSE, tf.TRANSPOSE, tf.TRANSPOSE)),
-            # Direct match to vfmul.vf -> vfadd.vv
-            ((tf.NONE, tf.SCALAR_REDUCE, tf.NONE),
-             (tf.NONE, tf.NONE, tf.NONE)),
-            # swapped a,b match to vfmul.vf -> vfadd.vv
-            ((tf.SCALAR_REDUCE, tf.NONE, tf.NONE),
-             (tf.NONE, tf.NONE, tf.NONE)),
-            # Scalar degeneration
-            ((tf.SCALAR_REDUCE, tf.SCALAR_REDUCE, tf.SCALAR_REDUCE),
-             (tf.SCALAR_REDUCE, tf.SCALAR_REDUCE, tf.SCALAR_REDUCE)),
+            ((tf.NONE, tf.SCALAR_REDUCE, tf.NONE), (tf.NONE, tf.NONE, tf.NONE)),
+            ((tf.SCALAR_REDUCE, tf.NONE, tf.NONE), (tf.NONE, tf.NONE, tf.NONE)),
+            ((tf.SCALAR_REDUCE, tf.SCALAR_REDUCE, tf.SCALAR_REDUCE), (tf.SCALAR_REDUCE, tf.SCALAR_REDUCE, tf.SCALAR_REDUCE)),
         }
         self.assertEqual(expected_tfs, self.extract_tfs(solutions))
 
@@ -199,12 +187,12 @@ class test_mm_matching(unittest.TestCase):
                 operand_ref(name="T0", indices=('m', 'n'))))
 
         solutions = solve_requirement(req, [HW_FMUL_AST, HW_FADD_AST])
+        # Both orientations bind without transposing
         self.assertEqual(6, len(solutions))
         
         expected_tfs = {
             ((tf.NONE, tf.NONE, tf.NONE),),
-            ((tf.TRANSPOSE, tf.TRANSPOSE, tf.TRANSPOSE),),
-            ((tf.SCALAR_REDUCE, tf.SCALAR_REDUCE, tf.SCALAR_REDUCE),)
+            ((tf.SCALAR_REDUCE, tf.SCALAR_REDUCE, tf.SCALAR_REDUCE),),
         }
         self.assertEqual(expected_tfs, self.extract_tfs(solutions))
 
@@ -222,14 +210,13 @@ class test_mm_matching(unittest.TestCase):
 
         solutions = solve_requirement(req, [HW_FMUL_AST, HW_FADD_AST])
         print_solution(solutions)
+        # Both orientations bind without transposing
         self.assertEqual(6, len(solutions))
 
         expected_tfs = {
-            ((tf.SCALAR_REDUCE, tf.TRANSPOSE, tf.TRANSPOSE),),
-            ((tf.TRANSPOSE, tf.SCALAR_REDUCE, tf.TRANSPOSE),),
             ((tf.NONE, tf.SCALAR_REDUCE, tf.NONE),),
             ((tf.SCALAR_REDUCE, tf.NONE, tf.NONE),),
-            ((tf.SCALAR_REDUCE, tf.SCALAR_REDUCE, tf.SCALAR_REDUCE),)
+            ((tf.SCALAR_REDUCE, tf.SCALAR_REDUCE, tf.SCALAR_REDUCE),),
         }
         self.assertEqual(expected_tfs, self.extract_tfs(solutions))
 
@@ -257,7 +244,9 @@ class test_mm_matching(unittest.TestCase):
             if map_and_match(v, fmul, name_mapping, index_mapping):
                 match_count += 1
                 
-        self.assertEqual(1, match_count, "Expected exactly one valid variant match")
+        # one per orientation: A*B binding i=m with B broadcast, and the
+        # commuted B*A binding i=n with A broadcast
+        self.assertEqual(2, match_count, "Expected one match per orientation")
 
     def test_extract_deepest(self):
         split_ast, dependencies = extract_deepest_operation(

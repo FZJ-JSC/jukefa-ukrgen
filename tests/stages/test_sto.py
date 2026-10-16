@@ -30,7 +30,9 @@ def run(params):
 def gemm(**extra):
     p = {"isa": "sve", "ukr": "gemm", "A-data-type": "FP64", "B-data-type": "FP64",
          "AB-data-type": "FP64", "C-data-type": "FP64",
-         "mm-to": ["0"], "betascale-to": ["0"], "alphascale-to": ["0"], "store-to": ["0"],
+         # vectors along m in every STO: their tilings must line up
+         "mm-to": ["fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"], "betascale-to": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"],
+         "alphascale-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"], "store-to": ["C.VEC:direct"],
          "A-layout": ["m:c", "k:s"], "B-layout": ["k:s", "n:c"], "C-layout": ["m:c", "n:s"],
          "m": "2", "n": "3", "k": "2"}
     p.update(extra)

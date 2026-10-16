@@ -44,9 +44,10 @@ class operand_ref:
         """
         Return the set of active dimensions
         """
-        return list(self.indices)
-
-        #return set(idx for idx in self.indices if idx is not None)
+        # Indices are names, so a shape is which of them the operand varies
+        # along - not which slot they sit in. A rank-1 vector (i,) and a matrix
+        # column (i,None) have the same shape.
+        return [idx for idx in self.indices if idx is not None]
 
     def is_dimensionally_valid(self) -> bool:
         """
@@ -85,15 +86,9 @@ class expression_node:
 
             right_indices = self.right.get_shape()
 
-            s = []
-            maxlen = max(len(left_indices), len(right_indices))
-
-            l_pad = left_indices + [None] * (maxlen - len(left_indices))
-            r_pad = right_indices + [None] * (maxlen - len(right_indices))
-
-            for l,r in zip(l_pad,r_pad):
-                s.append(l if l is not None else r)
-            return s
+            # the indices either side varies along: an outer product of a(i)
+            # and b(j) varies along both
+            return left_indices + [i for i in right_indices if i not in left_indices]
 
         elif self.op == operation.REDUCE_SUM:
 
@@ -115,18 +110,14 @@ class expression_node:
                 return False
 
 
-        # Forbid vector->scalar
-        # Allow scalar->vector
+        # Forbid vector->scalar: whatever the right side varies along, the
+        # destination must vary along too. Allow scalar->vector.
         if self.op == operation.MOVE:
             left_shape = self.left.get_shape()
             # right is not None for a MOVE
             right_shape = self.right.get_shape()
-
-            for i_in,i_out in zip(right_shape, left_shape):
-
-                # Vector -> scalar
-                if i_out is None and i_in is not None:
-                    return False
+            if any(i not in left_shape for i in right_shape):
+                return False
                 # index mismatch
                 if i_out is not None and i_in is not None:
                     if i_out != i_in:
@@ -205,78 +196,103 @@ def simplify_ast(n : ast_node) \
             left=new_left, right=new_right,
             reduce_dim=n.reduce_dim)
 
+def bind_indices(req_indices : tuple[str|None, ...],
+                 hw_indices : tuple[str|None, ...],
+                 index_mapping : dict[str, str|None]) -> Iterator[dict[str, str|None]]:
+    """
+    Every way to bind the indices of a hardware operand to those of a
+    requirement operand, consistent with the bindings so far.
+
+    Operands of equal rank bind slot by slot - a tile's rows to the
+    requirement's rows. A hardware operand of lower rank binds its indices to
+    any of the requirement operand's: a vector (i,) against A[m,k] runs along
+    m or along k, which is how both orientations of an FMA come out of one
+    hardware AST without transposing it. Requirement indices left unbound are
+    covered one element at a time.
+
+    :param req_indices: indices of the requirement operand
+    :param hw_indices: indices of the hardware operand
+    :param index_mapping: hardware index -> requirement index, so far
+    :return: each consistent extension of index_mapping
+    """
+    if len(req_indices) == len(hw_indices):
+        mapping = dict(index_mapping)
+        for r_idx, h_idx in zip(req_indices, hw_indices):
+            if h_idx is None:
+                continue
+            if mapping.setdefault(h_idx, r_idx) != r_idx:
+                return
+        yield mapping
+        return
+
+    hw_live = [h for h in hw_indices if h is not None]
+    req_live = [r for r in req_indices if r is not None]
+    if len(hw_live) > len(req_live):
+        return
+    seen = set()
+    for chosen in itertools.permutations(req_live, len(hw_live)):
+        mapping = dict(index_mapping)
+        if all(mapping.setdefault(h, r) == r for h, r in zip(hw_live, chosen)):
+            key = tuple(sorted(mapping.items(), key=str))
+            if key not in seen:
+                seen.add(key)
+                yield mapping
+
+
+def iter_matches(requirement : ast_node,
+                 hardware : ast_node,
+                 name_mapping : dict[str,str],
+                 index_mapping : dict[str,str|None]) \
+        -> Iterator[tuple[dict[str,str], dict[str,str|None]]]:
+    """
+    Every way the hardware AST matches the requirement: consistent pairs of
+    operand name and index bindings. Several exist when a lower-rank hardware
+    operand can bind to more than one requirement index.
+
+    :return: (hardware name -> requirement name, hardware index -> requirement
+             index) per match
+    """
+    if type(requirement) != type(hardware):
+        return
+    if isinstance(requirement, operand_ref):
+        names = dict(name_mapping)
+        if names.setdefault(hardware.name, requirement.name) != requirement.name:
+            return
+        for indices in bind_indices(requirement.indices, hardware.indices, index_mapping):
+            yield names, indices
+        return
+
+    if requirement.op != hardware.op:
+        return
+    indices = dict(index_mapping)
+    if requirement.reduce_dim is not None and hardware.reduce_dim is not None:
+        if indices.setdefault(hardware.reduce_dim, requirement.reduce_dim) \
+                != requirement.reduce_dim:
+            return
+    elif requirement.reduce_dim is not None or hardware.reduce_dim is not None:
+        return
+
+    for names_l, indices_l in iter_matches(requirement.left, hardware.left, name_mapping, indices):
+        if requirement.right is None and hardware.right is None:
+            yield names_l, indices_l
+        elif requirement.right is not None and hardware.right is not None:
+            yield from iter_matches(requirement.right, hardware.right, names_l, indices_l)
+
+
 def map_and_match(requirement : ast_node,
                   hardware : ast_node,
                   name_mapping : dict[str,str],
                   index_mapping : dict[str,str]) -> bool:
     """
-    Maps the indices between the requirement and hardware and checks whether
-    the hw AST matches the required AST
+    Whether the hardware AST matches the requirement; fills in the first match's
+    name and index mappings. See iter_matches for all of them.
     """
-
     debug(f"Trying to match {requirement} and {hardware}")
-
-    if type(requirement) != type(hardware):
-        debug(f"mismatch: different node types")
-        return False
-
-    if isinstance(requirement, operand_ref):
-        if hardware.name not in name_mapping:
-            name_mapping[hardware.name] = requirement.name
-        elif requirement.name != name_mapping[hardware.name]:
-            debug((f"mismatch: {hardware.name} already mapped "
-                   f"to {name_mapping[hardware.name]}, not {requirement.name}"))
-            return False
-
-        if len(requirement.indices) != len(hardware.indices):
-            debug(f"mismatch: index length between {requirement} and {hardware}")
-            return False
-
-        for r_idx, h_idx in zip(requirement.indices, hardware.indices):
-            if h_idx is None:
-                continue
-            if h_idx in index_mapping:
-                if index_mapping[h_idx] != r_idx:
-                    debug((f"mismatch: index mapping in {requirement} and {hardware}:"
-                           f" {h_idx} is mapped to {index_mapping[h_idx]} instead of {r_idx}"))
-                    return False
-            else:
-                index_mapping[h_idx] = r_idx
-
-        debug(f"match: mapped {hardware} to {requirement}")
+    for names, indices in iter_matches(requirement, hardware, name_mapping, index_mapping):
+        name_mapping.update(names)
+        index_mapping.update(indices)
         return True
-
-    if isinstance(requirement, expression_node):
-        if requirement.op != hardware.op:
-            debug(f"mismatch: {requirement.op} is not {hardware.op}")
-            return False
-            
-        if requirement.reduce_dim is not None and hardware.reduce_dim is not None:
-            if hardware.reduce_dim in index_mapping:
-                if index_mapping[hardware.reduce_dim] != requirement.reduce_dim:
-                    debug(f"mismatch: reduction dim mapping between {requirement} and {hardware}")
-                    return False
-            else:
-                index_mapping[hardware.reduce_dim] = requirement.reduce_dim
-        elif requirement.reduce_dim is not None or hardware.reduce_dim is not None:
-            debug(f"mismatch: reduction dim undefined for one but not the other")
-            return False
-
-        if not map_and_match(requirement.left, hardware.left,
-                             name_mapping, index_mapping):
-            debug(f"mismatch: left side {requirement.left} vs {hardware.left}")
-            return False
-        if requirement.right is not None and hardware.right is not None:
-            if not map_and_match(requirement.right, hardware.right,
-                                 name_mapping, index_mapping):
-                debug(f"mismatch: right side {requirement.right} vs {hardware.right}")
-                return False
-        elif requirement.right is not None or hardware.right is not None:
-            debug(f"mismatch: right side undefined for one, but not the other")
-            return False
-
-        debug(f"match: mapped {hardware} to {requirement}")
-        return True
+    return False
 
 
 def extract_operand_pairs(req: ast_node, hw: ast_node) \
@@ -383,13 +399,12 @@ def transform_operand(operand : operand_ref, tf : transformation) -> operand_ref
     if transformation.TRANSPOSE == tf and len(idx) == 2:
         idx = [idx[1],idx[0]]
     if transformation.SCALAR_REDUCE == tf:
-        if len(idx) == 2:
-            if idx[0] is not None and idx[1] is None:
-                idx[0] = None
-            elif idx[0] is None and idx[1] is not None:
-                idx[1] = None
-            else:
-                pass
+        # a vector becomes one element, whatever its rank: (i,) -> (None,),
+        # (i,None) -> (None,None). An operand varying along two indices is
+        # reduced by COL_REDUCE or ROW_REDUCE instead.
+        live = [n for n, i in enumerate(idx) if i is not None]
+        if 1 == len(live):
+            idx[live[0]] = None
     if transformation.COL_REDUCE == tf:
         if len(idx) == 2:
             if idx[0] is not None:
@@ -531,7 +546,10 @@ def is_transformation_weak(opd : operand_ref,
     is equivalent to a "stronger" transformation)
     """
     
-    if len(opd.indices) != 2:
+    if transformation.NONE == tf:
+        return False
+    # one that changes nothing - transposing a vector, reducing a scalar
+    if transform_operand(opd, tf) == opd:
         return True
 
     if tf not in TF_DEGENERACIES:
@@ -698,15 +716,16 @@ def transform_and_match(req: ast_node, hw_ast: ast_node) -> Iterator[req_solutio
         if not simplified_hw.is_dimensionally_valid():
             continue
 
-        index_mapping = {}
-        name_mapping = {}
-        
-        # 3. STRICT STRUCTURAL MATCHING
-        if map_and_match(req, simplified_hw, name_mapping, index_mapping):
-
+        seen = set()
+        for name_mapping, index_mapping in iter_matches(req, simplified_hw, {}, {}):
+            key = (tuple(sorted(name_mapping.items())),
+                   tuple(sorted(index_mapping.items(), key=str)))
+            if key in seen:
+                continue
+            seen.add(key)
             debug(f"success: {req} and {simplified_hw} match, validating variance")
-            
-            # 4. VARIANCE VALIDATION: Reject fake scalars (All-None Swallows)
+            # reject fake scalars: an index the requirement varies along must
+            # be one the hardware operand varies along
             if validate_variance(req, simplified_hw, index_mapping):
                 yield req_solution_step(
                     hw_ast=hw_ast,
@@ -837,6 +856,25 @@ def dedup_variants(variants : list[ast_node]) -> list[ast_node]:
 
     return unique_variants
 
+def operand_coverage(step: req_solution_step, math_name: str) -> frozenset[str]:
+    """
+    Requirement indices a step's hardware operand for math_name runs along -
+    after its transformations, so a scalar-reduced operand covers none
+
+    :param step: a solution step
+    :param math_name: requirement operand, e.g. a temporary of a chain
+    :return: the requirement indices bound to the operand's hardware indices
+    """
+    covered = set()
+    for ref in for_each_operand(step.logical_ast, lambda x: x):
+        if step.name_mapping.get(ref.name) != math_name:
+            continue
+        for idx in ref.indices:
+            if idx is not None and step.index_mapping.get(idx) is not None:
+                covered.add(step.index_mapping[idx])
+    return frozenset(covered)
+
+
 def solve_requirement(req: ast_node, hw_asts: list[ast_node],
                       temp_counter=0) \
         -> list[list[req_solution_step]]:
@@ -896,6 +934,17 @@ def solve_requirement(req: ast_node, hw_asts: list[ast_node],
                             break
 
 
+                # The temporary between the two must be laid out the same way on
+                # both sides: an fmul leaving it vectorized along n cannot feed
+                # an fadd reading it as a vector along m. Each step binds its
+                # indices independently, so nothing else guarantees this.
+                producer = dep_chain[-1]
+                temp = producer.name_mapping.get(producer.hw_ast.left.name)
+                consumer = next((st for st in rem_chain
+                                 if temp in st.name_mapping.values()), None)
+                if consumer is not None and \
+                        operand_coverage(consumer, temp) != operand_coverage(producer, temp):
+                    invalid_change = True
                 if not invalid_change:
                     all_valid_chains.append(dep_chain+rem_chain)
 
@@ -903,49 +952,50 @@ def solve_requirement(req: ast_node, hw_asts: list[ast_node],
 
 HW_FADD_AST = expression_node(
         op=operation.MOVE,
-        left=operand_ref(name="cdreg", indices=('i',None)),
+        left=operand_ref(name="cdreg", indices=('i',)),
         right=expression_node(
             op=operation.ADD,
-            left=operand_ref(name="adreg", indices=('i', None)),
-            right=operand_ref(name="bdreg", indices=('i', None)))
+            left=operand_ref(name="adreg", indices=('i',)),
+            right=operand_ref(name="bdreg", indices=('i',)))
         )
 
 HW_FMUL_AST = expression_node(
         op=operation.MOVE,
-        left=operand_ref(name="cdreg", indices=('i',None)),
+        left=operand_ref(name="cdreg", indices=('i',)),
         right=expression_node(
             op=operation.MUL,
-            left=operand_ref(name="adreg", indices=('i', None)),
-            right=operand_ref(name="bdreg", indices=('i', None)))
+            left=operand_ref(name="adreg", indices=('i',)),
+            right=operand_ref(name="bdreg", indices=('i',)))
         )
 
 HW_FMA_AST = expression_node(
         op=operation.MOVE,
-        left=operand_ref(name="cdreg", indices=('i', None)),
+        left=operand_ref(name="cdreg", indices=('i',)),
         right=expression_node(
             op=operation.ADD,
-            left=operand_ref(name="cdreg", indices=('i',None)),
+            left=operand_ref(name="cdreg", indices=('i',)),
             right=expression_node(
                 op=operation.MUL,
-                left=operand_ref(name="adreg", indices=('i',None)),
-                right=operand_ref(name="bdreg", indices=('i',None))
+                left=operand_ref(name="adreg", indices=('i',)),
+                right=operand_ref(name="bdreg", indices=('i',))
                 )
             )
         )
 
+# Dot product into each lane: the reduced index is not the output's
 HW_FDOTA_AST = expression_node(
         op=operation.MOVE,
-        left=operand_ref(name="cdreg", indices=('i',None)),
+        left=operand_ref(name="cdreg", indices=('i',)),
         right=expression_node(
             op=operation.ADD,
-            left=operand_ref(name="cdreg", indices=('i',None)),
+            left=operand_ref(name="cdreg", indices=('i',)),
             right=expression_node(
                 op=operation.REDUCE_SUM,
                 left=expression_node(
                     op=operation.MUL,
-                    left=operand_ref(name="adreg", indices=('i',None)),
-                    right=operand_ref(name="bdreg", indices=('i',None))),
-                reduce_dim='i')
+                    left=operand_ref(name="adreg", indices=('r',)),
+                    right=operand_ref(name="bdreg", indices=('r',))),
+                reduce_dim='r')
             )
         )
 
@@ -957,8 +1007,8 @@ HW_FOPA_AST = expression_node(
             left=operand_ref(name="cdreg", indices=('i','j')),
             right=expression_node(
                 op=operation.MUL,
-                left=operand_ref(name="adreg", indices=('i',None)),
-                right=operand_ref(name="bdreg", indices=('j',None)))
+                left=operand_ref(name="adreg", indices=('i',)),
+                right=operand_ref(name="bdreg", indices=('j',)))
             )
         )
 
