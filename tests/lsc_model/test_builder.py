@@ -301,3 +301,13 @@ class test_old_ir_compatibility(unittest.TestCase):
     def test_data_registers_mandatory(self):
         with self.assertRaisesRegex(ValueError, "C-data-regs is required"):
             run(stages=TO_STAGES + [model_stage], **{"C-data-regs": None})
+
+
+class test_register_rings(unittest.TestCase):
+
+    def test_ring_follows_first_use(self):
+        # A in 4 registers for 8 tiles (m=4, k=2): the tiles of one step of k
+        # get one register each, instead of alternating between two
+        ctx, _ = run(m="4", **test_register_pressure.GENERAL)
+        mm = program_builder(ctx, data_regs={"A": 4}).build().blocks[0]
+        self.assertEqual([0, 1, 2, 3, 0, 1, 2, 3], [data(op)[1] for op in loads(mm.body, "A")])

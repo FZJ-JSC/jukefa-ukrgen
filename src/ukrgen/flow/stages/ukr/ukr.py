@@ -365,6 +365,18 @@ class ukr_composition(ABC):
         return comp.name
 
     @classmethod
+    def sto_order(cls) -> list[str]:
+        """
+        Every STO once, in the order the kernel first runs it
+        """
+        order = []
+        for block in cls.get_blocks():
+            for name in block.stos:
+                if name not in order:
+                    order.append(name)
+        return order
+
+    @classmethod
     def block_of(cls, sto_name: str) -> block_description:
         """
         The block an STO belongs to

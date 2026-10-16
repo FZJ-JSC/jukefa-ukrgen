@@ -107,17 +107,25 @@ class program_builder:
             comp: layout_strides(comp, kinds, ctx.component_packing.get(comp, []), self.extents)
             for comp, kinds in ctx.component_strides.items()}
 
-        # register coordinates of each component over all STOs: their rank
-        # names the register, and picks the address register
         self.subtails = ctx.subtail_stos[part] if len(ctx.subtail_stos) > part else {}
         self.subtail_impls = ctx.subtail_parts[part] if len(ctx.subtail_parts) > part else {}
-        coords: dict[str, set] = {}
-        for tiling in list(self.stos.values()) + list(self.subtails.values()):
+
+        # Register coordinates of each component in the order the STOs first
+        # use them: the rank names the register and picks the address
+        # register. A component cycling through fewer registers than tiles
+        # then spreads consecutive tiles over all of them, rather than
+        # crowding the tiles of one loop step into a few - sorted coordinates
+        # would interleave the loop index.
+        coords: dict[str, list] = {}
+        order = [n for n in self.comp.sto_order() if n in self.stos]
+        for tiling in [self.stos[n] for n in order] + list(self.subtails.values()):
             for op in tiling.ops:
                 for name in op.tile_strs:
                     if name in self.components:
-                        coords.setdefault(name, set()).add(op.coord(name))
-        self.coords = {c: sorted(s) for c, s in coords.items()}
+                        seen = coords.setdefault(name, [])
+                        if op.coord(name) not in seen:
+                            seen.append(op.coord(name))
+        self.coords = coords
 
         self.holder: dict[vreg, tuple] = {}
         self.used: dict[str, tuple] = {}
