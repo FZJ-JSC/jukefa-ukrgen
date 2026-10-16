@@ -8,8 +8,9 @@ import logging
 from dataclasses import dataclass
 
 from ...components.tile import tile, dimension_properties as dimp, dimension_type as dimt
-from ...generators.tiling import tile_op, generate_tiling, generators
-from ...support.tiles import index_extents, operand_tiles, ONE
+from ...components.operation import operation
+from ...generators.tiling import generate_tiling, generators
+from ...support.tiles import index_extents, operand_tiles, lane_axes, register_tiles, ONE
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
@@ -24,14 +25,17 @@ class sto_tiling:
     :param sto: STO name
     :param order: its indices, outermost first
     :param extents: what one operation covers along each index
-    :param tiles: each operand's tile
+    :param tiles: each operand's tile: what one operation covers of it
     :param ops: the operations
+    :param registers: each operand's register tile - wider than its tile for
+                      an operand used one element at a time
     """
     sto : str
     order : tuple[str, ...]
     extents : dict[str, dimp]
     tiles : dict[str, tile]
-    ops : list[tile_op]
+    ops : list[operation]
+    registers : dict[str, tile] = None
 
 
 def fmt_dim(d: dimp) -> str:
@@ -81,15 +85,23 @@ class sto_stage(stage):
                     found = index_extents(gen, impl)
                     extents = {i: found.get(i, ONE) for i in sto.indices}
                     tiles = operand_tiles(gen, impl, sto.req)
+                    lanes = lane_axes(gen, impl, sto.req, self.context.component_layouts)
+                    registers = register_tiles(tiles, lanes, sto.req)
                     operands = sto.operand_indices
+                    io = {op: sto.io(op) for op in operands}
+                    opstr = ";".join(part_enc.split("(")[0].split("[")[0]
+                                     for part_enc in part[name].encoding.split(" ; "))
                     generate = generators[sto.generator]
                 else:
                     operands, tiles, extents = {}, {}, {}
+                    lanes, opstr = {}, "store"
                     for comp in sto.store_components:
                         t, indices = left[comp]
                         operands[comp], tiles[comp] = indices, t
                         live = [i for i in indices if i is not None]
                         extents.update(zip(live, (t.dima, t.dimb)))
+                    registers = tiles
+                    io = {comp: (True, False) for comp in operands}
                     generate = generate_tiling
 
                 # the microtile has one size: every STO must cover it in the
@@ -108,9 +120,10 @@ class sto_stage(stage):
                             left[op] = (tiles[op], operands[op])
 
                 sto_order = tuple(i for i in order if i in extents)
-                ops = generate(order=sto_order, counts=dims, operands=operands)
+                ops = generate(order=sto_order, counts=dims, operands=operands,
+                               tiles=registers, io=io, lanes=lanes, opstr=opstr)
                 tilings[name] = sto_tiling(sto=name, order=sto_order, extents=extents,
-                                           tiles=tiles, ops=ops)
+                                           tiles=tiles, ops=ops, registers=registers)
         return tilings
 
     def render(self, parts: list[dict[str, sto_tiling]]) -> str:
@@ -125,11 +138,12 @@ class sto_stage(stage):
                     where = f", inside the loop over {block.loop_index}" if block.is_loop else ""
                     ext = " ".join(f"{i}={fmt_dim(e)}" for i, e in t.extents.items())
                     tl = "  ".join(f"{o} {fmt_dim(x.dima)}x{fmt_dim(x.dimb)}"
-                                   for o, x in t.tiles.items())
+                                   for o, x in (t.registers or t.tiles).items())
                     lines.append(f"{name}{where}: {len(t.ops)} operations; "
                                  f"order {','.join(t.order)}; extents {ext}")
                     lines.append(f"  tiles: {tl}")
-                    lines.extend(f"  {op}" for op in t.ops)
+                    lines.extend("  [" + " ".join(f"{i}={p}" for i, p in op.point.items())
+                                 + f"]  {op}" for op in t.ops)
                     lines.append("")
         return "\n".join(lines).rstrip()
 

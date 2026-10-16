@@ -12,15 +12,84 @@ class operation:
                  tile_offsets : list[list[int]],
                  subindices : list[int],
                  opstr : str,
-                 tile_strs : list[str] = ['A','B','C']):
+                 tile_strs : list[str] = ['A','B','C'],
+                 *,
+                 indices : list[tuple[str|None, ...]] | None = None,
+                 io : list[tuple[bool, bool]] | None = None,
+                 lanes : list[list[int|None]] | None = None,
+                 point : dict[str, int] | None = None):
+        """
+        One operation of an STO, on register tiles of its operands.
 
+        Without indices, the operands are read as a gemm-shaped A, B, ..., C:
+        the first and last tile share their first dimension, the last two
+        their second, the last tile is written, and subindices are [m, n, k].
+
+        With indices, nothing is assumed about the shape: each tile's axes are
+        named by requirement indices, io says which tiles are read and
+        written, and lanes gives, per tile and axis, the lane of the register
+        the operation uses - an FMA by element using lane 1 of a register
+        holding two elements of B along n.
+
+        :param indices: requirement index of each axis of each tile (None for
+                        an axis the operand doesn't vary along)
+        :param io: (read, written) for each tile
+        :param lanes: lane used along each axis of each tile, None for whole
+                      registers
+        :param point: position of the operation in its STO's iteration space
+        """
         self.tiles = tiles
         self.tile_offsets = tile_offsets
         self.subindices = subindices
         self.opstr = opstr
         self.tile_strs = tile_strs
+        self.indices = indices
+        self.io = io if io is not None else \
+            [(True, False)] * (len(tiles) - 1) + [(True, True)]
+        self.lanes = lanes if lanes is not None else [[None, None] for _ in tiles]
+        self.point = point or {}
+
+    def _slot(self, name : str) -> int:
+        return self.tile_strs.index(name)
+
+    def coord(self, name : str) -> tuple[int, ...]:
+        """
+        Register offsets of an operand's tile along the indices it varies along
+        """
+        i = self._slot(name)
+        axes = self.indices[i] if self.indices is not None else (0, 1)
+        return tuple(off for off, idx in zip(self.tile_offsets[i], axes) if idx is not None)
+
+    def lane(self, name : str) -> tuple[int|None, ...]:
+        """
+        Lanes the operation uses of an operand's register, per varying index
+        """
+        i = self._slot(name)
+        axes = self.indices[i] if self.indices is not None else (0, 1)
+        return tuple(l for l, idx in zip(self.lanes[i], axes) if idx is not None)
+
+    def at(self, index : str) -> int:
+        """
+        Position of the operation along an index of its STO
+        """
+        return self.point[index]
+
+    def _str_indexed(self) -> str:
+        vlensuf = lambda d : "*VLEN" if d.dt == dimension_type.vla else ""
+        strs = []
+        for name, t, offs, idxs, lns in zip(self.tile_strs, self.tiles, self.tile_offsets,
+                                            self.indices, self.lanes):
+            dims = (t.dima, t.dimb)
+            parts = [f"{off}{vlensuf(dims[a])}" + (f".el[{lns[a]}]" if lns[a] is not None else "")
+                     for a, (off, idx) in enumerate(zip(offs, idxs)) if idx is not None]
+            strs.append(f"{name}({','.join(parts)})")
+        reads = [s for s, (r, _) in zip(strs, self.io) if r]
+        writes = [s for s, (_, w) in zip(strs, self.io) if w]
+        return f"{','.join(writes)} <- {self.opstr}({','.join(reads)})"
 
     def __str__(self) -> str:
+        if self.indices is not None:
+            return self._str_indexed()
 
         fits_in = lambda t1,t2 : 0 not in t1.tiling_of(t2)
 
@@ -136,7 +205,8 @@ class operation:
 
         idx_strs = []
         for i in range(num_tiles):
-            offsets = self.tile_offsets[i]
+            # a copy: rendering must not move the operation
+            offsets = list(self.tile_offsets[i])
             offsets[0] += offset_incs[i][0]
             offsets[1] += offset_incs[i][1]
             tile = self.tiles[i]

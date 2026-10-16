@@ -52,3 +52,27 @@ class test_tiling(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class test_lanes(unittest.TestCase):
+
+    def test_lane_positions(self):
+        # B used one element at a time out of registers holding two along n
+        ops = generate_tiling(order=("k", "n"), counts={"k": 1, "n": 4},
+                              operands={"B": ("k", "n")}, lanes={"B": ("n", 2)},
+                              io={"B": (True, False)}, opstr="fma")
+        self.assertEqual([(0, 0), (0, 0), (0, 1), (0, 1)], [op.coord("B") for op in ops])
+        self.assertEqual([(None, 0), (None, 1), (None, 0), (None, 1)],
+                         [op.lane("B") for op in ops])
+        self.assertIn("B(0,1.el[1])", str(ops[3]))
+
+    def test_rendering_does_not_move_operations(self):
+        from ukrgen.components.operation import operation
+        from ukrgen.components.tile import tile, dimension_properties as dimp, dimension_type as dimt
+        one = dimp(dt=dimt.fixed, size=1, sdt=dimt.fixed, sd_size=1)
+        vec = dimp(dt=dimt.fixed, size=2, sdt=dimt.fixed, sd_size=2)
+        # gemm-shaped, B by lane: the old rendering adds the subindex to C's offset
+        op = operation(tiles=[tile(vec, one), tile(one, vec), tile(vec, one)],
+                       tile_offsets=[[0, 0], [0, 0], [0, 0]], subindices=[0, 1, 0], opstr="fma")
+        self.assertEqual(str(op), str(op))
+        self.assertEqual([[0, 0], [0, 0], [0, 0]], op.tile_offsets)

@@ -13,7 +13,8 @@ them: the orientation is the index binding.
 from __future__ import annotations
 
 from asmgen.asmblocks.noarch import asmgen
-from asmgen.asmblocks.op import register_type as rgt
+from asmgen.asmblocks.op import register_type as rgt, operand_modifier as omod
+from asmgen.registers import adt_size
 
 from ..components.tile import (
     tile,
@@ -22,6 +23,7 @@ from ..components.tile import (
 )
 from ..matching.math import ast_node, for_each_operand, transformation as tf
 from .dm_solver import resolved_operation_chain
+from .data_move import dm_direction as dmd
 from .op import infer_hw_tile
 
 ONE = dimp(dt=dimt.fixed, size=1, sdt=dimt.fixed, sd_size=1)
@@ -91,3 +93,57 @@ def operand_tiles(gen: asmgen,
         dims += [ONE] * (2 - len(dims))
         tiles[leaf.name] = tile(dima=dims[0], dimb=dims[1])
     return tiles
+
+
+def lane_axes(gen: asmgen,
+              impl: resolved_operation_chain,
+              req: ast_node,
+              layouts: dict[str, str | None] | None = None) -> dict[str, tuple[str, int]]:
+    """
+    Operands an implementation uses one element at a time out of a register
+    holding several: an FMA by element (NEON fmla v0.2d, v1.2d, v2.d[1]) on
+    a vector of B loaded whole (use_lane). Consecutive elements along the
+    operand's index share a register, one per lane.
+
+    The lanes run along the index the operand was loaded along - the one it is
+    contiguous along in memory, or its last index if the layout is unknown.
+    Only fixed-width vectors: an element of an SVE indexed FMA is per 128-bit
+    segment and needs replicated loads, which aren't resolved yet.
+
+    :return: operand -> (index the lanes run along, lanes per register)
+    """
+    if gen.is_vla:
+        return {}
+    layouts = layouts or {}
+    leaves = {leaf.name: [i for i in leaf.indices if i is not None]
+              for leaf in for_each_operand(req, lambda x: x)}
+    found: dict[str, tuple[str, int]] = {}
+    for res, step in zip(impl.resolved_chain, impl.math_chain):
+        sig = res.compute_sg.representative
+        for hw_name, math_name in step.name_mapping.items():
+            shape = sig.operands.get(hw_name)
+            strat = res.operand_strategies.get((hw_name, dmd.IN))
+            if shape is None or omod.ILANE not in shape.modifiers or strat is None \
+                    or "use_lane" != strat.rsln.unique_tag or not leaves.get(math_name):
+                continue
+            axis = layouts.get(math_name)
+            if axis not in leaves[math_name]:
+                axis = leaves[math_name][-1]
+            found[math_name] = (axis, gen.simd_size // adt_size(shape.dt))
+    return found
+
+
+def register_tiles(tiles: dict[str, tile], lanes: dict[str, tuple[str, int]],
+                   req: ast_node) -> dict[str, tile]:
+    """
+    Register tiles: the operand tiles, widened along the lane axis for operands
+    used one element at a time
+    """
+    indices = {leaf.name: leaf.indices for leaf in for_each_operand(req, lambda x: x)}
+    regs = dict(tiles)
+    for name, (axis, count) in lanes.items():
+        dims = [tiles[name].dima, tiles[name].dimb]
+        dims[list(indices[name]).index(axis)] = dimp(dt=dimt.fixed, size=count,
+                                                     sdt=dimt.fixed, sd_size=count)
+        regs[name] = tile(dima=dims[0], dimb=dims[1])
+    return regs

@@ -13,7 +13,9 @@ from ukrgen.flow.stages.dimension import dimension_stage
 from ukrgen.flow.stages.sto import sto_stage, fmt_dim
 from ukrgen.flow.stages.stage import stage_error
 
-STAGES = [setup_stage, datatype_stage, solve_stage, dimension_stage, sto_stage]
+from ukrgen.flow.stages.layout import layout_stage
+
+STAGES = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage]
 
 
 def run(params):
@@ -29,12 +31,24 @@ def gemm(**extra):
     p = {"isa": "sve", "ukr": "gemm", "A-data-type": "FP64", "B-data-type": "FP64",
          "AB-data-type": "FP64", "C-data-type": "FP64",
          "mm-to": ["0"], "betascale-to": ["0"], "alphascale-to": ["0"], "store-to": ["0"],
+         "A-layout": ["m:c", "k:s"], "B-layout": ["k:s", "n:c"], "C-layout": ["m:c", "n:s"],
          "m": "2", "n": "3", "k": "2"}
     p.update(extra)
     return p
 
 
 class test_sto_stage(unittest.TestCase):
+
+    def test_lane_fma(self):
+        # NEON fmla by element: B loaded whole along n, one lane per operation
+        ctx, res = run(gemm(isa="neon", n="4", m="1", k="1", **{
+            "mm-to": ["fma[bdreg:ILANE](A.VEC:direct, B.VEC:use_lane, AB.VEC){i=m, n=1, k*=1}"]}))
+        self.assertTrue(res.completed)
+        mm = ctx.stos[0]["mm"]
+        self.assertEqual([(0, 0), (0, 0), (0, 1), (0, 1)], [op.coord("B") for op in mm.ops])
+        self.assertEqual([0, 1, 0, 1], [op.lane("B")[1] for op in mm.ops])
+        self.assertEqual("2", fmt_dim(mm.registers["B"].dimb))
+        self.assertIn("B(0,0.el[1])", str(mm.ops[1]))
 
     def test_tilings(self):
         ctx, res = run(gemm())
@@ -75,6 +89,7 @@ class test_sto_stage(unittest.TestCase):
     def test_pack(self):
         ctx, res = run({"isa": "sve", "ukr": "pack", "X-data-type": "FP64",
                         "Y-data-type": "FP64", "pack-to": ["0"], "store-to": ["0"],
+                        "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"],
                         "m": "3", "n": "2"})
         self.assertTrue(res.completed)
         stos = ctx.stos[0]
