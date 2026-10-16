@@ -63,6 +63,8 @@ class ukr_context:
         # one dict per part of the microtile: STO name -> its tiling
         self.stos            : list[dict[str,sto_tiling]] = list()
         self.dims            : dict[str,int] = dict()
+        # one LSC IR program per part
+        self.programs        : list = list()
         self.order           : tuple[str,...] = tuple()
         self.irs             : dict[str,list[lsc_operation]] = dict()
         self.asmblocks       : dict[str,str] = dict()

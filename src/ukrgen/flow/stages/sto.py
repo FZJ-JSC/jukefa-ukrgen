@@ -36,6 +36,19 @@ class sto_tiling:
     tiles : dict[str, tile]
     ops : list[operation]
     registers : dict[str, tile] = None
+    counts : dict[str, int] = None
+    generate_args : dict = None
+
+    def regenerate(self, counts: dict[str, int] | None = None,
+                   offset: dict[str, int] | None = None) -> list[operation]:
+        """
+        The same tiling with other counts or shifted along indices by name:
+        the tail of a loop runs one step along the loop index
+        """
+        args = dict(self.generate_args)
+        generate = args.pop("generate")
+        return generate(order=self.order, counts={**self.counts, **(counts or {})},
+                        offset=offset, **args)
 
 
 def fmt_dim(d: dimp) -> str:
@@ -123,7 +136,12 @@ class sto_stage(stage):
                 ops = generate(order=sto_order, counts=dims, operands=operands,
                                tiles=registers, io=io, lanes=lanes, opstr=opstr)
                 tilings[name] = sto_tiling(sto=name, order=sto_order, extents=extents,
-                                           tiles=tiles, ops=ops, registers=registers)
+                                           tiles=tiles, ops=ops, registers=registers,
+                                           counts=dict(dims),
+                                           generate_args=dict(generate=generate,
+                                                              operands=operands,
+                                                              tiles=registers, io=io,
+                                                              lanes=lanes, opstr=opstr))
         return tilings
 
     def render(self, parts: list[dict[str, sto_tiling]]) -> str:

@@ -16,6 +16,7 @@ from ukrgen.flow.stages.layout import layout_stage
 from ukrgen.flow.stages.solve import solve_stage
 from ukrgen.flow.stages.dimension import dimension_stage
 from ukrgen.flow.stages.sto import sto_stage
+from ukrgen.flow.stages.model import model_stage
 
 from ukrgen.flow.ukr_context import ukr_context
 from ukrgen.flow.stage_engine import stage_engine
@@ -109,9 +110,8 @@ def main():
     setup_loggers(debugall=debugall, debug_systems=debug_systems)
 
     # The flow is being reworked onto operation signatures. It currently ends
-    # once every STO is tiled with its chosen implementation; the later stages
-    # (model, scheduling, codegen) still run on the old asmgen API and are
-    # reconnected as they are ported.
+    # once the LSC model is built; the later stages (scheduling, codegen) still
+    # run on the old asmgen API and are reconnected as they are ported.
     stages = [
         setup_stage,
         datatype_stage,
@@ -119,6 +119,7 @@ def main():
         solve_stage,
         dimension_stage,
         sto_stage,
+        model_stage,
     ]
 
     prolog = argparse_prolog(parser=parser)
@@ -169,7 +170,7 @@ def main():
         if 1 == len(set(encodings)):
             encodings = encodings[:1]
         print(f"--{sto}-to " + " ".join(f'"{enc}"' for enc in encodings))
-    print("(the flow currently ends after tiling the STOs; see --print-stos)", file=sys.stderr)
+    print("(the flow currently ends after the LSC model; see --print-ir)", file=sys.stderr)
 
 if __name__ == "__main__":
     main()
