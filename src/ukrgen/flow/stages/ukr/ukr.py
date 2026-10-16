@@ -114,12 +114,23 @@ class sto_description:
     :param generator: tiling generator producing the STO (compute only)
     :param req: requirement AST (compute only)
     :param store_components: components written to memory (store only)
+    :param store_into: (stored component, memory component) pairs for a store
+                       writing one component's value into another's memory:
+                       gemm's AB into C when alpha is 1 and beta 0. Components
+                       not listed are stored into their own memory.
     """
     name: str
     kind: sto_kind
     generator: str | None = None
     req: ast_node | None = None
     store_components: tuple[str, ...] = ()
+    store_into: tuple[tuple[str, str], ...] = ()
+
+    def memory_of(self, component: str) -> str:
+        """
+        The memory component a store writes a component into
+        """
+        return dict(self.store_into).get(component, component)
 
     def __post_init__(self):
         if sto_kind.COMPUTE == self.kind:
@@ -235,6 +246,36 @@ class block_description:
         Whether the block is a loop
         """
         return self.loop_index is not None
+
+
+@dataclass(frozen=True, kw_only=True)
+class case_description:
+    """
+    One way a branch continues
+
+    :param when: scalar component -> value it must equal; empty for the default
+    :param blocks: blocks the case runs, in order
+    """
+    when: dict = field(default_factory=dict)
+    blocks: tuple[block_description, ...] = ()
+
+    @property
+    def label(self) -> str:
+        if not self.when:
+            return "otherwise"
+        return " and ".join(f"{c}=={v:g}" for c, v in self.when.items())
+
+
+@dataclass(frozen=True, kw_only=True)
+class branch_description:
+    """
+    The kernel continuing one of several ways, on run-time values of scalar
+    components - gemm's epilogue for beta 0, alpha 1 and so on. Cases are tried
+    in order and the first whose conditions all hold runs; the last is the
+    default. A branch ends the kernel: every case runs to the end, so no two
+    cases have to agree on what they leave in registers.
+    """
+    cases: tuple[case_description, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -365,12 +406,44 @@ class ukr_composition(ABC):
         return comp.name
 
     @classmethod
+    def get_branch(cls) -> branch_description | None:
+        """
+        The branch ending the kernel, if any
+        """
+        blocks = cls.get_blocks()
+        return blocks[-1] if blocks and isinstance(blocks[-1], branch_description) else None
+
+    @classmethod
+    def paths(cls) -> list[tuple[case_description | None, list[block_description]]]:
+        """
+        Every way through the kernel: the blocks before the branch, then one
+        case's. A kernel without a branch has one path, with no case.
+        """
+        prefix = [b for b in cls.get_blocks() if isinstance(b, block_description)]
+        branch = cls.get_branch()
+        if branch is None:
+            return [(None, prefix)]
+        return [(case, prefix + list(case.blocks)) for case in branch.cases]
+
+    @classmethod
+    def all_blocks(cls) -> list[block_description]:
+        """
+        Every block of every path, once each
+        """
+        found: list[block_description] = []
+        for _, blocks in cls.paths():
+            for block in blocks:
+                if not any(block is b for b in found):
+                    found.append(block)
+        return found
+
+    @classmethod
     def sto_order(cls) -> list[str]:
         """
         Every STO once, in the order the kernel first runs it
         """
         order = []
-        for block in cls.get_blocks():
+        for block in cls.all_blocks():
             for name in block.stos:
                 if name not in order:
                     order.append(name)
@@ -381,7 +454,7 @@ class ukr_composition(ABC):
         """
         The block an STO belongs to
         """
-        for block in cls.get_blocks():
+        for block in cls.all_blocks():
             if sto_name in block.stos:
                 return block
         raise KeyError(f"STO {sto_name} is in no block")
@@ -403,7 +476,30 @@ class ukr_composition(ABC):
                          and block.loop_index not in sto.live_indices(op))
 
     @classmethod
-    def dataflow(cls) -> dict[tuple[str, str], operand_access]:
+    def dataflow(cls, path: list[block_description] | None = None) \
+            -> dict[tuple[str, str], operand_access]:
+        """
+        How every STO obtains and disposes of every operand - along one path,
+        or over all of them. An STO shared by several cases must access its
+        operands the same way in each: it has one implementation.
+
+        :raises ValueError: if a shared STO's accesses differ between cases
+        """
+        if path is not None:
+            return cls._flow_of(path)
+        merged: dict[tuple[str, str], operand_access] = {}
+        for case, blocks in cls.paths():
+            for key, access in cls._flow_of(blocks).items():
+                known = merged.setdefault(key, access)
+                if known != access:
+                    raise ValueError(
+                        f"STO {key[0]} accesses {key[1]} as {known} in one case and as "
+                        f"{access} in another ({case.label if case else ''}): it has one "
+                        f"implementation, so give each case its own STO")
+        return merged
+
+    @classmethod
+    def _flow_of(cls, path: list[block_description]) -> dict[tuple[str, str], operand_access]:
         """
         How every STO obtains and disposes of every operand.
 
@@ -419,7 +515,7 @@ class ukr_composition(ABC):
         live: set[str] = set()
         shape: dict[str, tuple[str, ...]] = {}
 
-        for block in cls.get_blocks():
+        for block in path:
             streamed: set[str] = set()
 
             for sto_name in block.stos:
@@ -483,23 +579,52 @@ class ukr_composition(ABC):
         if len(set(stos)) != len(stos):
             raise ValueError(f"{cls.__name__}: duplicate STO names {stos}")
 
-        placed = [name for block in cls.get_blocks() for name in block.stos]
-        if sorted(placed) != sorted(stos):
-            raise ValueError(f"{cls.__name__}: every STO must be in exactly one block "
-                             f"(declared {stos}, placed {placed})")
+        blocks = cls.get_blocks()
+        for pos, block in enumerate(blocks):
+            if isinstance(block, branch_description) and pos != len(blocks) - 1:
+                raise ValueError(f"{cls.__name__}: a branch must end the kernel")
+        branch = cls.get_branch()
+        if branch is not None:
+            if not branch.cases or branch.cases[-1].when:
+                raise ValueError(f"{cls.__name__}: the last case of a branch must be the "
+                                 f"default, with no conditions")
+            for case in branch.cases[:-1]:
+                if not case.when:
+                    raise ValueError(f"{cls.__name__}: only the last case may be the default")
+                for comp in case.when:
+                    if comp not in names:
+                        raise ValueError(f"case {case.label} tests undeclared component {comp}")
+
+        placed = set()
+        for case, path in cls.paths():
+            in_path = [name for block in path for name in block.stos]
+            if len(set(in_path)) != len(in_path):
+                raise ValueError(f"{cls.__name__}: an STO runs twice along one path "
+                                 f"({case.label if case else 'the kernel'}): {in_path}")
+            placed |= set(in_path)
+        if placed != set(stos):
+            raise ValueError(f"{cls.__name__}: every STO must be in a block "
+                             f"(declared {sorted(stos)}, placed {sorted(placed)})")
 
         for sto in cls.get_sto_descriptions():
             for op in sto.operands:
                 if op not in names:
                     raise ValueError(f"STO {sto.name} uses undeclared component {op}")
 
-        for block in cls.get_blocks():
+        for block in cls.all_blocks():
             if block.is_loop and not any(block.loop_index in cls.get_sto(s).indices
                                          for s in block.stos):
                 raise ValueError(f"block {block.stos} loops over {block.loop_index}, "
                                  f"which none of its STOs uses")
 
-        # a store needs a value to store
+        for sto in cls.get_sto_descriptions():
+            for value, memory in sto.store_into:
+                if value not in sto.store_components or memory not in names or \
+                        storage_class.MEMORY != cls.get_component(memory).storage:
+                    raise ValueError(f"STO {sto.name} stores {value} into {memory}, which "
+                                     f"must be one of its components and in memory")
+
+        # a store needs a value to store, along every path it is on
         flow = cls.dataflow()
         for sto in cls.get_sto_descriptions():
             if sto_kind.STORE != sto.kind:

@@ -29,9 +29,19 @@ def run(params):
     return ctx, res
 
 
+CASE_TOS = {
+    # gemm's epilogue cases, all with vectors along m like the main loop
+    "alphamul-to": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
+    "add-to": ["fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}"],
+    "alphaadd-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}"],
+    "betaadd-to": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}"],
+    "store_ab-to": ["AB.VEC:direct"],
+}
+
+
 def gemm(isa, dt="FP64", **extra):
     return dict({"isa": isa, "ukr": "gemm", "A-data-type": dt, "B-data-type": dt,
-                 "AB-data-type": dt, "C-data-type": dt}, **extra)
+                 "AB-data-type": dt, "C-data-type": dt, **CASE_TOS}, **extra)
 
 
 class test_solve(unittest.TestCase):
@@ -158,13 +168,15 @@ class test_part_chain(unittest.TestCase):
 
     def test_scale_reads_wrong_register_type(self):
         problems = check_part_chain(gemm_composition, self.ios(self.T, self.V, self.V))
-        self.assertEqual(["alphascale reads AB from VEC, but mm leaves it in TILE"], problems)
+        self.assertEqual(["case otherwise: alphascale reads AB from VEC, but mm leaves it "
+                          "in TILE"], problems)
 
     def test_store_follows_last_writer(self):
         # alphascale leaves C in ZA: the store must take it from there
         problems = check_part_chain(gemm_composition,
                                     self.ios(self.T, self.T, self.V, alpha_c=self.T))
-        self.assertEqual(["store reads C from VEC, but alphascale leaves it in TILE"], problems)
+        self.assertEqual(["case otherwise: store reads C from VEC, but alphascale leaves it "
+                          "in TILE"], problems)
 
     def test_loaded_operands_unchecked(self):
         # betascale loads C from memory: nothing earlier left it anywhere

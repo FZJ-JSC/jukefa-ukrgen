@@ -27,6 +27,16 @@ def run(params):
     return ctx, stage_engine(STAGES, ctx, prolog=prolog).run()
 
 
+CASE_TOS = {
+    # gemm's epilogue cases, all with vectors along m like the main loop
+    "alphamul-to": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
+    "add-to": ["fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}"],
+    "alphaadd-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}"],
+    "betaadd-to": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}"],
+    "store_ab-to": ["AB.VEC:direct"],
+}
+
+
 def gemm(**extra):
     p = {"isa": "sve", "ukr": "gemm", "A-data-type": "FP64", "B-data-type": "FP64",
          "AB-data-type": "FP64", "C-data-type": "FP64",
@@ -35,6 +45,7 @@ def gemm(**extra):
          "alphascale-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"], "store-to": ["C.VEC:direct"],
          "A-layout": ["m:c", "k:s"], "B-layout": ["k:s", "n:c"], "C-layout": ["m:c", "n:s"],
          "m": "2", "n": "3", "k": "2"}
+    p.update(CASE_TOS)
     p.update(extra)
     return p
 
@@ -85,8 +96,10 @@ class test_sto_stage(unittest.TestCase):
             run(gemm(n="0"))
 
     def test_parts_need_partition(self):
+        # two consistent parts, both with vectors along m
         with self.assertRaisesRegex(stage_error, "partition"):
-            run(gemm(**{"mm-to": ["0", "1"]}))
+            run(gemm(**{"mm-to": ["fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}",
+                                  "fma(A.VEC:direct, B.VEC:bc_scalar, AB.VEC){i=m, n=1, k*=1}"]}))
 
     def test_pack(self):
         ctx, res = run({"isa": "sve", "ukr": "pack", "X-data-type": "FP64",

@@ -117,6 +117,19 @@ class ir_block:
 
 
 @dataclass
+class ir_case:
+    """
+    One case of the branch ending the kernel: its blocks run when every
+    condition holds, the first such case in order winning
+
+    :param when: scalar component -> value it must equal; empty for the default
+    """
+    label : str
+    when : dict
+    blocks : list[ir_block]
+
+
+@dataclass
 class ir_program:
     """
     The kernel as IR blocks, with what codegen needs to resolve addresses
@@ -131,6 +144,7 @@ class ir_program:
     strides : dict[str, dict[str, sym]]
     addr_setup : dict[tuple[str, int], int]
     registers : dict[str, tuple[rgt, int]]
+    cases : list[ir_case] = field(default_factory=list)
 
     def render(self) -> str:
         db = self.offsets
@@ -141,9 +155,9 @@ class ir_program:
             lines.append(f"strides {comp}: " + ", ".join(f"{i}={s}" for i, s in strides.items()))
         for (comp, reg), oid in sorted(self.addr_setup.items()):
             lines.append(f"a{reg} of {comp} starts at {db[oid]}")
-        for block in self.blocks:
+        def render_block(block, indent=""):
             lines.append("")
-            head = f"block {block.name}"
+            head = f"{indent}block {block.name}"
             if block.loop_index:
                 head += (f", loop over {block.loop_index} by {block.step} per iteration "
                          f"(unrolled {block.unroll}x)")
@@ -158,8 +172,15 @@ class ir_program:
             for section in ("prologue", "body", "epilogue", "tail", "subtail"):
                 ops = getattr(block, section)
                 if ops:
-                    lines.append(f"  {section}:")
-                    lines.extend(f"    {render_op(op, db)}" for op in ops)
+                    lines.append(f"{indent}  {section}:")
+                    lines.extend(f"{indent}    {render_op(op, db)}" for op in ops)
             for comp, oid in block.advance.items():
-                lines.append(f"  advance {comp} by {db[oid]} per iteration")
+                lines.append(f"{indent}  advance {comp} by {db[oid]} per iteration")
+
+        for block in self.blocks:
+            render_block(block)
+        for case in self.cases:
+            lines += ["", f"case {case.label}:"]
+            for block in case.blocks:
+                render_block(block, "  ")
         return "\n".join(lines)

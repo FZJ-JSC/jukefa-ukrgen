@@ -26,6 +26,16 @@ BETA = "fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"
 ALPHA = "fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"
 
 
+CASE_TOS = {
+    # gemm's epilogue cases, all with vectors along m like the main loop
+    "alphamul-to": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
+    "add-to": ["fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}"],
+    "alphaadd-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}"],
+    "betaadd-to": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}"],
+    "store_ab-to": ["AB.VEC:direct"],
+}
+
+
 def run(stages=TO_STAGES, **extra):
     params = {"isa": "sve", "ukr": "gemm",
               "A-data-type": "FP64", "B-data-type": "FP64", "AB-data-type": "FP64",
@@ -33,7 +43,7 @@ def run(stages=TO_STAGES, **extra):
               "C-layout": ["m:c", "n:s"], "mm-to": [FMA_M], "betascale-to": [BETA],
               "alphascale-to": [ALPHA], "store-to": ["C.VEC:direct"],
               "m": "2", "n": "2", "k": "1",
-              "A-data-regs": "2", "B-data-regs": "2", "C-data-regs": "4"}
+              "A-data-regs": "2", "B-data-regs": "2", "C-data-regs": "4", **CASE_TOS}
     params.update(extra)
     def prolog(s):
         for p in s.get_parameter_names():
@@ -132,14 +142,14 @@ class test_builder(unittest.TestCase):
 
     def test_c_phases(self):
         prog = self.build()
-        epi = prog.blocks[1].body
+        epi = prog.cases[-1].blocks[0].body
         self.assertEqual({0}, {addr_reg(op) for op in loads(epi, "C")})
         self.assertEqual({1}, {addr_reg(op) for op in epi if isinstance(op, lsc_store)})
         # both start at C's base: the stores need no rewinding
         self.assertEqual(prog.addr_setup[("C", 0)], prog.addr_setup[("C", 1)])
 
     def test_scalars_loaded_once(self):
-        epi = self.build().blocks[1].body
+        epi = self.build().cases[-1].blocks[0].body
         self.assertEqual(1, len(loads(epi, "beta")))
         self.assertEqual(1, len(loads(epi, "alpha")))
 
@@ -250,7 +260,13 @@ class test_register_pressure(unittest.TestCase):
                "mm-to": ["fma(A.VEC:bc_load, B.VEC:direct, AB.VEC){m=1, i=n, k*=1}"],
                "betascale-to": ["fmul(C.VEC:gather, beta.VEC:bc_load, C.VEC){m=1, i=n}"],
                "alphascale-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
-               "store-to": ["C.VEC:scatter"], "n": "2", "k": "2"}
+               "store-to": ["C.VEC:scatter"], "n": "2", "k": "2",
+               # the epilogue cases, also with vectors along n
+               "alphamul-to": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
+               "add-to": ["fadd(AB.VEC, C.VEC:gather, C.VEC){m=1, i=n}"],
+               "alphaadd-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:gather){m=1, i=n}"],
+               "betaadd-to": ["fma(C.VEC:gather, beta.VEC:bc_load, AB.VEC){m=1, i=n}"],
+               "store_ab-to": ["AB.VEC:scatter"]}
 
     def test_fewer_registers_load_in_place(self):
         # A in 8 registers: each holds two tiles per iteration, so A cannot be
@@ -311,3 +327,61 @@ class test_register_rings(unittest.TestCase):
         ctx, _ = run(m="4", **test_register_pressure.GENERAL)
         mm = program_builder(ctx, data_regs={"A": 4}).build().blocks[0]
         self.assertEqual([0, 1, 2, 3, 0, 1, 2, 3], [data(op)[1] for op in loads(mm.body, "A")])
+
+
+class test_branches(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        ctx, _ = run()
+        # C's default as the model stage sets it: two registers, by phase
+        cls.prog = program_builder(ctx, addressing={
+            "C": addressing_plan(2, addr_pattern.parse("phase"))}).build()
+        cls.cases = {c.label: c for c in cls.prog.cases}
+
+    def ops(self, label):
+        return [op for b in self.cases[label].blocks for op in b.body]
+
+    def test_cases(self):
+        self.assertEqual(["beta==0 and alpha==1", "beta==0", "beta==1 and alpha==1",
+                          "beta==1", "alpha==1", "otherwise"], [c.label for c in self.prog.cases])
+        self.assertEqual({"beta": 0, "alpha": 1}, self.cases["beta==0 and alpha==1"].when)
+        # the loop is emitted once, before the branch
+        self.assertEqual(["mm"], [b.name for b in self.prog.blocks])
+
+    def test_beta_zero_never_reads_c(self):
+        for label in ("beta==0 and alpha==1", "beta==0"):
+            with self.subTest(case=label):
+                self.assertEqual([], loads(self.ops(label), "C"))
+                self.assertEqual(4, sum(isinstance(op, lsc_store) for op in self.ops(label)))
+
+    def test_alpha_one_accumulates_into_ab(self):
+        ops = self.ops("alpha==1")
+        self.assertEqual(4, len(loads(ops, "C")))
+        fmas = [op for op in ops if isinstance(op, lsc_transformation)]
+        self.assertEqual({"AB"}, {op.indices[op.writes[0]].component for op in fmas})
+        # AB's registers are stored, through C's addresses
+        stores = [op for op in ops if isinstance(op, lsc_store)]
+        self.assertEqual({("C", "AB")}, {(addr_comp(op), op.indices[1].component) for op in stores})
+
+    def test_store_ab_alone(self):
+        # beta 0, alpha 1: nothing but AB stored into C
+        ops = self.ops("beta==0 and alpha==1")
+        self.assertTrue(ops)
+        self.assertTrue(all(isinstance(op, lsc_store) and "AB" == op.indices[1].component
+                            for op in ops))
+
+    def test_cases_start_alike(self):
+        # each case loads its scalars itself: no case relies on another's loads
+        for label in ("beta==0", "beta==1", "otherwise"):
+            with self.subTest(case=label):
+                self.assertEqual(1, len(loads(self.ops(label), "alpha")))
+        # and C's loads and stores take the same address registers in every case
+        self.assertEqual({0}, {addr_reg(op) for op in loads(self.ops("beta==1"), "C")})
+        self.assertEqual({1}, {addr_reg(op) for op in self.ops("beta==1")
+                               if isinstance(op, lsc_store)})
+
+    def test_render(self):
+        text = self.prog.render()
+        self.assertIn("case beta==0 and alpha==1:", text)
+        self.assertIn("case otherwise:", text)

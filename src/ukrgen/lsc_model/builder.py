@@ -31,7 +31,7 @@ from ..components.tile import scalar_tile
 from ..models.load_store_operations import (
     lsc_operation, lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, ldst_modifier)
 from ..models.lsc.index import lsc_reg_index
-from .ir import vreg, addr_ref, ir_block, ir_program
+from .ir import vreg, addr_ref, ir_block, ir_case, ir_program
 
 
 class model_error(Exception):
@@ -218,12 +218,15 @@ class program_builder:
         return tiling.registers.get(reg.owner, scalar_tile)
 
     def move_data(self, sto: str, tiling, comp: str, coord: tuple, reg: vreg,
-                  steps, direction: str, tag: str) -> list[lsc_operation]:
+                  steps, direction: str, tag: str,
+                  memory: str | None = None) -> list[lsc_operation]:
         """
         The operations of one data movement: its steps in order, a repeated
-        step once per lane, each load or store at the tile's address
+        step once per lane, each load or store at the tile's address - in
+        comp's own memory, or the memory a store writes it into
         """
-        dt = self.ctx.component_dts[comp]
+        memory = memory or comp
+        dt = self.ctx.component_dts[memory]
         ops: list[lsc_operation] = []
         for rs in steps:
             step = rs.step
@@ -239,14 +242,14 @@ class program_builder:
                 if step.op in ("load", "store"):
                     data = self.ref_reg(step.dest, step.dest_rtype, reg) if "load" == step.op \
                         else self.ref_reg(step.src[0], step.src_rtypes[0], reg)
-                    addr = self.address(sto, comp, direction, coord, elements)
+                    addr = self.address(sto, memory, direction, coord, elements)
                     mods = set()
                     if lane is not None:
                         mods.add(ldst_modifier.lane)
                     if "bc_load" == tag:
                         mods.add(ldst_modifier.bcast1)
                     cls = lsc_load if "load" == step.op else lsc_store
-                    op = cls(comp, data.index, addr.reg, None, None,
+                    op = cls(memory, data.index, addr.reg, None, None,
                              self.reg_tile(tiling, data), mods,
                              data=_index(data, lane), rsln=tag, step=step, sigs=sigs,
                              offset=addr.offset, rtypes=[None, data.rtype])
@@ -341,9 +344,11 @@ class program_builder:
                 raise model_error(f"{sto} stores {comp}{list(coord)}, which is no longer "
                                   f"in {reg}: give {comp} more data registers")
             steps = [_step(s) for s in cand.rsln.steps]
+            memory = self.comp.get_sto(sto).memory_of(comp)
             items.append(access_group(comp, reg,
                                       self.move_data(sto, tiling, comp, coord, reg, steps,
-                                                     "store", cand.rsln.unique_tag), False))
+                                                     "store", cand.rsln.unique_tag, memory),
+                                      False))
         return items
 
     def emit_sto(self, sto: str, ops, tiling=None, impl=None) -> list:
@@ -487,19 +492,34 @@ class program_builder:
             new.offset = self.db.shifted(op.offset, index, amount)
         return new
 
-    def build(self) -> ir_program:
-        blocks = []
-        for block in self.comp.get_blocks():
-            if block.is_loop:
-                blocks.append(self.build_loop(block))
-            else:
-                items = []
-                for sto in block.stos:
-                    items += self.emit_sto(sto, self.stos[sto].ops)
-                blocks.append(ir_block(name="+".join(block.stos), body=_flatten(items)))
-        return ir_program(blocks=blocks, offsets=self.db, strides=self.strides,
-                          addr_setup=self.addr_setup, registers=dict(self.used))
+    def build_block(self, block: block_description) -> ir_block:
+        if block.is_loop:
+            return self.build_loop(block)
+        items = []
+        for sto in block.stos:
+            items += self.emit_sto(sto, self.stos[sto].ops)
+        return ir_block(name="+".join(block.stos), body=_flatten(items))
 
+    def build(self) -> ir_program:
+        blocks = [self.build_block(b) for b in self.comp.get_blocks()
+                  if isinstance(b, block_description)]
+
+        # Every case starts from the registers the blocks before the branch
+        # leave, and numbers its address phases afresh: C's loads take the same
+        # address register in every case, and so do its stores.
+        cases = []
+        branch = self.comp.get_branch()
+        if branch is not None:
+            holder, phases = dict(self.holder), {c: list(p) for c, p in self.phases.items()}
+            for case in branch.cases:
+                self.holder = dict(holder)
+                self.phases = {c: list(p) for c, p in phases.items()}
+                cases.append(ir_case(label=case.label, when=dict(case.when),
+                                     blocks=[self.build_block(b) for b in case.blocks]))
+
+        return ir_program(blocks=blocks, offsets=self.db, strides=self.strides,
+                          addr_setup=self.addr_setup, registers=dict(self.used),
+                          cases=cases)
 
 @dataclass
 class _step:

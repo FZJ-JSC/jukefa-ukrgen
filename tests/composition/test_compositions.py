@@ -34,6 +34,8 @@ class test_compositions(unittest.TestCase):
                 comp.validate()
 
     def test_gemm_dataflow(self):
+        # the default case: beta and alpha both general
+        default = gemm_composition.paths()[-1][1]
         self.assertEqual({
             ("mm", "AB"): acc(R.ZERO, W.REGISTER),
             ("mm", "A"): acc(R.STREAM, None),
@@ -44,7 +46,25 @@ class test_compositions(unittest.TestCase):
             ("alphascale", "AB"): acc(R.RESIDENT, None),
             ("alphascale", "alpha"): acc(R.LOAD, None),
             ("store", "C"): acc(R.RESIDENT, W.MEMORY),
-        }, gemm_composition.dataflow())
+        }, gemm_composition.dataflow(default))
+
+    def test_gemm_cases(self):
+        paths = gemm_composition.paths()
+        self.assertEqual(["beta==0 and alpha==1", "beta==0", "beta==1 and alpha==1",
+                          "beta==1", "alpha==1", "otherwise"], [c.label for c, _ in paths])
+        flow = gemm_composition.dataflow()
+        # beta 0: C is never read, only written
+        self.assertEqual(acc(None, W.REGISTER), flow[("alphamul", "C")])
+        # beta 1: C comes from memory
+        self.assertEqual(acc(R.LOAD, W.REGISTER), flow[("alphaadd", "C")])
+        # alpha 1: the result accumulates into AB, which is stored into C
+        self.assertEqual(acc(R.RESIDENT, W.REGISTER), flow[("betaadd", "AB")])
+        self.assertEqual(acc(R.LOAD, None), flow[("betaadd", "C")])
+        self.assertEqual(acc(R.RESIDENT, W.MEMORY), flow[("store_ab", "AB")])
+        self.assertEqual("C", gemm_composition.get_sto("store_ab").memory_of("AB"))
+        # STOs in order of first use, each once
+        self.assertEqual(["mm", "store_ab", "alphamul", "store", "add", "alphaadd",
+                          "betaadd", "betascale", "alphascale"], gemm_composition.sto_order())
 
     def test_mm_dataflow(self):
         flow = mm_composition.dataflow()
@@ -132,7 +152,30 @@ class test_validation(unittest.TestCase):
 
     def test_unplaced_sto(self):
         comp = _composition(_xys, [_copy], [])
-        with self.assertRaisesRegex(ValueError, "exactly one block"):
+        with self.assertRaisesRegex(ValueError, "every STO must be in a block"):
+            comp.validate()
+
+    def test_shared_sto_must_flow_alike(self):
+        # scale reads X resident after copy in one case, from memory in the other
+        from ukrgen.flow.stages.ukr.ukr import branch_description as branch, case_description as case
+        scale = sto(name="scale", kind=sto_kind.COMPUTE, generator="scale",
+                    req=node(op.MOVE, ref(name="Y", indices=("m", "n")),
+                             node(op.MUL, ref(name="X", indices=("m", "n")), scalar("s"))))
+        twice = sto(name="twice", kind=sto_kind.COMPUTE, generator="scale",
+                    req=node(op.MOVE, ref(name="X", indices=("m", "n")),
+                             node(op.MUL, ref(name="X", indices=("m", "n")), scalar("s"))))
+        comp = _composition(_xys, [scale, twice], [branch(cases=(
+            case(when={"s": 1}, blocks=(block(stos=("twice", "scale")),)),
+            case(blocks=(block(stos=("scale",)),))))])
+        with self.assertRaisesRegex(ValueError, "give each case its own STO"):
+            comp.validate()
+
+    def test_default_case_last(self):
+        from ukrgen.flow.stages.ukr.ukr import branch_description as branch, case_description as case
+        comp = _composition(_xys, [_copy], [branch(cases=(
+            case(blocks=(block(stos=("copy",)),)),
+            case(when={"s": 0}, blocks=(block(stos=("copy",)),))))])
+        with self.assertRaisesRegex(ValueError, "last case of a branch must be the default"):
             comp.validate()
 
     def test_dt_cycle(self):

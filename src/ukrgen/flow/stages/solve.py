@@ -93,13 +93,17 @@ class to_io:
 
     :param reads: operand -> register type the implementation reads it in
     :param writes: operand -> register type it leaves it in
-    :param stores: operand -> how storing it accesses memory: as an
-                   implementation leaves it, what a store must do; for a store,
-                   what it does
+    :param stores: for a store: operand -> how it accesses memory
+    :param axes: for a computation: operand written -> the index its vectors
+                 run along as the implementation leaves it (None for a scalar)
+    :param memory: for a store: operand -> the memory component it is stored
+                   into
     """
     reads : dict[str, rgt]
     writes : dict[str, rgt]
     stores : dict[str, dml] = field(default_factory=dict)
+    axes : dict[str, str | None] = field(default_factory=dict)
+    memory : dict[str, str] = field(default_factory=dict)
 
 
 def produced_rtype(impl: resolved_operation_chain, component: str) -> rgt | None:
@@ -132,83 +136,98 @@ def consumed_rtype(impl: resolved_operation_chain, component: str) -> rgt | None
     return None
 
 
-def memory_access(gen, impl: resolved_operation_chain, sto: sto_description,
-                  operand: str, layouts: dict[str, str | None]) -> dml:
+def vector_axis(gen, impl: resolved_operation_chain, sto: sto_description,
+                operand: str) -> str | None:
     """
-    How an operand as an implementation holds it maps onto memory: strided if
-    its vector runs along an index the operand isn't contiguous along
+    The index an operand's vectors run along as an implementation leaves it;
+    None for a scalar
     """
-    if operand not in layouts:
-        return dml.MEMORY
     extents = index_extents(gen, impl)
     along = [i for i in sto.live_indices(operand) if i in extents]
-    if 1 == len(along) and along[0] != layouts[operand]:
-        return dml.STRIDED_MEMORY
-    return dml.MEMORY
+    return along[0] if 1 == len(along) else None
+
+
+def access_for(axis: str | None, layouts: dict[str, str | None], memory: str) -> dml:
+    """
+    How storing vectors running along axis accesses a memory component: strided
+    if that is not the index the memory is contiguous along
+    """
+    if memory not in layouts or axis is None or axis == layouts[memory]:
+        return dml.MEMORY
+    return dml.STRIDED_MEMORY
 
 
 def io_of(sto: sto_description, impl: resolved_operation_chain | store_choice,
           gen=None, layouts: dict[str, str | None] | None = None) -> to_io:
     """
-    Register types the implementation of an STO reads and writes its operands in
+    Register types the implementation of an STO reads and writes its operands
+    in, and for the operands it writes, the index their vectors run along
     """
     if sto_kind.STORE == sto.kind:
         return to_io(reads={s.component: s.rtype for s in impl.stores}, writes={},
-                     stores={s.component: s.loc for s in impl.stores})
+                     stores={s.component: s.loc for s in impl.stores},
+                     memory={s.component: sto.memory_of(s.component) for s in impl.stores})
 
-    reads, writes = {}, {}
+    reads, writes, axes = {}, {}, {}
     for op in sto.operands:
         is_read, is_written = sto.io(op)
         if is_read and (rtype := consumed_rtype(impl, op)) is not None:
             reads[op] = rtype
         if is_written and (rtype := produced_rtype(impl, op)) is not None:
             writes[op] = rtype
-    stores = {op: memory_access(gen, impl, sto, op, layouts or {})
-              for op in writes} if gen is not None else {}
-    return to_io(reads=reads, writes=writes, stores=stores)
+            if gen is not None:
+                axes[op] = vector_axis(gen, impl, sto, op)
+    return to_io(reads=reads, writes=writes, axes=axes)
 
 
 def check_part_chain(composition: type[ukr_composition],
-                     ios: dict[str, to_io]) -> list[str]:
+                     ios: dict[str, to_io],
+                     layouts: dict[str, str | None] | None = None) -> list[str]:
     """
-    Find where one part's implementations disagree about register types: an STO
-    reading a component left in registers by an earlier STO must read it in the
-    register type that STO left it in. With fused implementations each part is
-    its own chain - a part whose mm accumulates in ZA needs a scale and a store
-    working from ZA, while another part's work from Z registers.
+    Find where one part's implementations disagree, along every path through
+    the kernel: an STO reading a component that an earlier STO left in
+    registers must read it in the register type that STO left it in, and a
+    store must access memory strided exactly when the vectors it stores run
+    along an index the memory is not contiguous along. With fused
+    implementations each part is its own chain - a part whose mm accumulates
+    in ZA needs scales and stores working from ZA in every case.
 
     Only components already in registers are checked; loaded and zeroed ones
-    have no earlier producer.
+    have no earlier producer. Paths through STOs without an implementation in
+    ios are skipped.
 
-    :param composition: the microkernel
-    :param ios: STO name -> register types its chosen implementation uses
-    :return: one line per disagreement; empty if the chain is consistent
+    :return: one line per disagreement, naming the case; empty if consistent
     """
-    flow = composition.dataflow()
-    held: dict[str, tuple[rgt, str]] = {}
-    held_access: dict[str, dml] = {}
-    problems = []
-    for block in composition.get_blocks():
-        for name in block.stos:
-            io = ios[name]
-            for op in composition.get_sto(name).operands:
-                if read_access.RESIDENT != flow[(name, op)].read:
-                    continue
-                reads, left = io.reads.get(op), held.get(op)
-                if reads is not None and left is not None and reads != left[0]:
-                    problems.append(f"{name} reads {op} from {reads.name}, but "
-                                    f"{left[1]} leaves it in {left[0].name}")
-                stores, needed = io.stores.get(op), held_access.get(op)
-                if stores is not None and needed is not None and stores != needed \
-                        and left is not None:
-                    how = {dml.MEMORY: "contiguous", dml.STRIDED_MEMORY: "strided"}
-                    problems.append(f"{name} stores {op} {how[stores]}, but as {left[1]} "
-                                    f"leaves it the store has to be {how[needed]}")
-            for op, rtype in io.writes.items():
-                held[op] = (rtype, name)
-                if op in io.stores:
-                    held_access[op] = io.stores[op]
-    return problems
+    how = {dml.MEMORY: "contiguous", dml.STRIDED_MEMORY: "strided"}
+    problems: list[str] = []
+    for case, path in composition.paths():
+        if any(name not in ios for block in path for name in block.stos):
+            continue
+        where = f"case {case.label}: " if case is not None else ""
+        flow = composition.dataflow(path)
+        held: dict[str, tuple[rgt, str]] = {}
+        axes: dict[str, str | None] = {}
+        for block in path:
+            for name in block.stos:
+                io = ios[name]
+                for op in composition.get_sto(name).operands:
+                    if read_access.RESIDENT != flow[(name, op)].read:
+                        continue
+                    reads, left = io.reads.get(op), held.get(op)
+                    if reads is not None and left is not None and reads != left[0]:
+                        problems.append(f"{where}{name} reads {op} from {reads.name}, but "
+                                        f"{left[1]} leaves it in {left[0].name}")
+                    if op in io.stores and left is not None and op in axes:
+                        needed = access_for(axes[op], layouts or {}, io.memory.get(op, op))
+                        if io.stores[op] != needed:
+                            problems.append(f"{where}{name} stores {op} {how[io.stores[op]]}, "
+                                            f"but as {left[1]} leaves it the store has to be "
+                                            f"{how[needed]}")
+                for op, rtype in io.writes.items():
+                    held[op] = (rtype, name)
+                    if op in io.axes:
+                        axes[op] = io.axes[op]
+    return list(dict.fromkeys(problems))
 
 
 class solve_stage(stage):
@@ -245,7 +264,7 @@ class solve_stage(stage):
                     required=False,
                     multi=True)
 
-        for block in context.composition.get_blocks():
+        for block in context.composition.all_blocks():
             if not block.is_loop:
                 continue
             for name in block.stos:
@@ -307,17 +326,20 @@ class solve_stage(stage):
         return locs
 
     def store_candidates(self, sto: sto_description, registry: resolution_registry,
-                         producible: dict[str, set[rgt]]) -> dict[str, store_choice]:
+                         producible: dict[str, set]) -> dict[str, store_choice]:
         """
-        Ways to store all components of a store STO: one store per component, for
-        every register type an earlier STO could leave it in
+        Ways to store all components of a store STO: one store per component,
+        for every register type and vector direction an earlier STO could leave
+        it in, into the memory it is stored to
         """
         per_component = []
         for comp in sto.store_components:
-            dt = self.context.component_dts[comp]
+            memory = sto.memory_of(comp)
+            dt = self.context.component_dts[memory]
+            kinds = {(rtype, access_for(axis, self.context.component_layouts, memory))
+                     for rtype, axis in producible.get(comp, set())}
             stores = []
-            for rtype, loc in sorted(producible.get(comp, set()),
-                                     key=lambda p: (p[0].name, p[1].name)):
+            for rtype, loc in sorted(kinds, key=lambda p: (p[0].name, p[1].name)):
                 seen = set()
                 for tfs in (frozenset({tf.NONE}), frozenset()):
                     key = tfr_key(tfs=tfs, rtype=rtype, ddir=dmd.OUT, loc=loc)
@@ -347,62 +369,67 @@ class solve_stage(stage):
 
     def all_candidates(self) -> dict[str, dict]:
         """
-        Candidates of every STO, in block order
+        Candidates of every STO of every case, in the order the kernel first
+        runs them. Stores are offered for whatever any implementation before
+        them in any case could leave
         """
         composition = self.context.composition
         registry = default_registry()
+        order = composition.sto_order()
 
         candidates: dict[str, dict] = {}
-        producible: dict[str, set[rgt]] = {}
-
-        for block in composition.get_blocks():
-            for name in block.stos:
-                sto = composition.get_sto(name)
-                if sto_kind.COMPUTE == sto.kind:
-                    cands = self.compute_candidates(sto, registry)
-                    for impl in cands.values():
-                        for op in sto.operands:
-                            if sto.io(op)[1]:
-                                rtype = produced_rtype(impl, op)
-                                if rtype is not None:
-                                    access = memory_access(
-                                        self.context.gen, impl, sto, op,
-                                        self.context.component_layouts)
-                                    producible.setdefault(op, set()).add((rtype, access))
-                else:
-                    cands = self.store_candidates(sto, registry, producible)
-                candidates[name] = cands
-        return candidates
-
-    # --- listing -----------------------------------------------------------
+        producible: dict[str, set] = {}
+        for name in order:
+            sto = composition.get_sto(name)
+            if sto_kind.COMPUTE != sto.kind:
+                continue
+            cands = self.compute_candidates(sto, registry)
+            for impl in cands.values():
+                for op in sto.operands:
+                    if sto.io(op)[1] and (rtype := produced_rtype(impl, op)) is not None:
+                        producible.setdefault(op, set()).add(
+                            (rtype, vector_axis(self.context.gen, impl, sto, op)))
+            candidates[name] = cands
+        for name in order:
+            sto = composition.get_sto(name)
+            if sto_kind.STORE == sto.kind:
+                candidates[name] = self.store_candidates(sto, registry, producible)
+        return {name: candidates[name] for name in order}
 
     def listing(self, candidates: dict[str, dict]) -> str:
         """
-        Human-readable list of every candidate
+        Human-readable list of every candidate, by case
         """
         composition = self.context.composition
         dts = " ".join(f"{c}={dt.name}" for c, dt in self.context.component_dts.items())
         lines = [f"{self.context.params['ukr'].value} on {self.context.params['isa'].value}: {dts}",
                  "Give each --<sto>-to one candidate per part of the microtile, or one "
                  "for all parts."]
-
-        for block in composition.get_blocks():
-            for name in block.stos:
-                cands = candidates[name]
-                where = f", inside the loop over {block.loop_index}" if block.is_loop else ""
-                lines.append("")
-                lines.append(f"{name}{where}: {len(cands)} candidate(s)")
-                if block.is_loop and sto_kind.COMPUTE == composition.get_sto(name).kind:
-                    lines.append(f"  (--{name}-subtail-to takes one covering a single element "
-                                 f"of {block.loop_index}, for a main one covering more)")
-                if not cands:
-                    lines.append("    none for these data types")
-                width = len(str(max(len(cands) - 1, 0)))
-                for i, enc in enumerate(cands):
-                    lines.append(f"  [{i:>{width}}] --{name}-to \"{enc}\"")
+        shown: set[str] = set()
+        for case, path in composition.paths():
+            if case is not None:
+                lines += ["", f"case {case.label}:"]
+            for block in path:
+                for name in block.stos:
+                    if name in shown:
+                        if case is not None and any(block is b for b in case.blocks):
+                            lines.append(f"  {name}: listed above")
+                        continue
+                    shown.add(name)
+                    cands = candidates[name]
+                    where = f", inside the loop over {block.loop_index}" if block.is_loop else ""
+                    lines.append("")
+                    lines.append(f"{name}{where}: {len(cands)} candidate(s)")
+                    if block.is_loop and sto_kind.COMPUTE == composition.get_sto(name).kind:
+                        lines.append(f"  (--{name}-subtail-to takes one covering a single "
+                                     f"element of {block.loop_index}, for a main one "
+                                     f"covering more)")
+                    if not cands:
+                        lines.append("    none for these data types")
+                    width = len(str(max(len(cands) - 1, 0)))
+                    for i, enc in enumerate(cands):
+                        lines.append(f"  [{i:>{width}}] --{name}-to \"{enc}\"")
         return "\n".join(lines)
-
-    # --- selection ---------------------------------------------------------
 
     def select(self, name: str, values: list[str], cands: dict[str, object]) -> list[str]:
         """
@@ -449,7 +476,7 @@ class solve_stage(stage):
         """
         composition = self.context.composition
         subtails: list[dict] = [dict() for _ in parts]
-        for block in composition.get_blocks():
+        for block in composition.all_blocks():
             if not block.is_loop:
                 continue
             k = block.loop_index
@@ -491,7 +518,7 @@ class solve_stage(stage):
             raise early_exit(self.listing(candidates))
 
         composition = self.context.composition
-        order = [name for block in composition.get_blocks() for name in block.stos]
+        order = composition.sto_order()
 
         given = {name: self.params[f"{name}-to"].value or [] for name in order}
         nparts = max([len(values) for values in given.values()] + [1])
@@ -514,7 +541,8 @@ class solve_stage(stage):
                                self.context.gen, self.context.component_layouts)
                    for name, enc in part.items()}
             where = f"part {i + 1}: " if nparts > 1 else ""
-            problems.extend(where + p for p in check_part_chain(composition, ios))
+            problems.extend(where + p for p in check_part_chain(
+                composition, ios, self.context.component_layouts))
         if problems:
             raise stage_error("the chosen implementations disagree about register types:\n" +
                               "\n".join(f"  {p}" for p in problems))

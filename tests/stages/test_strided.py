@@ -119,13 +119,14 @@ class test_strided(unittest.TestCase):
         ios = {
             "mm": to_io(reads={}, writes={"AB": V}),
             "betascale": to_io(reads={"C": V}, writes={"C": V}),
-            "alphascale": to_io(reads={"AB": V, "C": V}, writes={"C": V},
-                                stores={"C": dml.STRIDED_MEMORY}),
-            "store": to_io(reads={"C": V}, writes={}, stores={"C": dml.MEMORY}),
+            # alphascale leaves C vectorized along n, C is contiguous along m
+            "alphascale": to_io(reads={"AB": V, "C": V}, writes={"C": V}, axes={"C": "n"}),
+            "store": to_io(reads={"C": V}, writes={}, stores={"C": dml.MEMORY},
+                           memory={"C": "C"}),
         }
-        self.assertEqual(["store stores C contiguous, but as alphascale leaves it "
-                          "the store has to be strided"],
-                         check_part_chain(gemm_composition, ios))
+        self.assertEqual(["case otherwise: store stores C contiguous, but as alphascale "
+                          "leaves it the store has to be strided"],
+                         check_part_chain(gemm_composition, ios, {"C": "m"}))
 
 
 class test_layout_stage(unittest.TestCase):

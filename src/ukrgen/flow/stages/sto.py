@@ -14,7 +14,7 @@ from ...support.tiles import index_extents, operand_tiles, lane_axes, register_t
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
-from .ukr.ukr import sto_kind
+from .ukr.ukr import sto_kind, block_description
 
 
 @dataclass
@@ -49,6 +49,14 @@ class sto_tiling:
         generate = args.pop("generate")
         return generate(order=self.order, counts={**self.counts, **(counts or {})},
                         offset=offset, **args)
+
+
+def _shape(tiling: sto_tiling) -> tuple:
+    """
+    What makes two tilings of an STO the same: extents and register tiles
+    """
+    return (tuple((i, fmt_dim(e)) for i, e in tiling.extents.items()),
+            tuple((o, fmt_dim(t.dima), fmt_dim(t.dimb)) for o, t in tiling.registers.items()))
 
 
 def fmt_dim(d: dimp) -> str:
@@ -160,7 +168,7 @@ class sto_stage(stage):
         subtails: dict[str, sto_tiling] = {}
         composition = self.context.composition
 
-        for block in composition.get_blocks():
+        for block in [b for b in composition.get_blocks() if isinstance(b, block_description)]:
             before = dict(left)
             self.tile_block(block, part, dims, left, seen, tilings)
             computes = [n for n in block.stos
@@ -170,6 +178,25 @@ class sto_stage(stage):
                 self.tile_block(block, subtail, {**dims, k: 1}, before,
                                 {i: v for i, v in seen.items() if i != k},
                                 subtails, label=" (subtail)")
+
+        # Each case continues from what the blocks before the branch leave. An
+        # STO shared by several cases has one implementation, and its tiling
+        # must come out the same in each - a store following what different
+        # cases leave in registers, say.
+        branch = composition.get_branch()
+        for case in (branch.cases if branch else ()):
+            case_tilings: dict[str, sto_tiling] = {}
+            case_left, case_seen = dict(left), dict(seen)
+            for block in case.blocks:
+                self.tile_block(block, part, dims, case_left, case_seen, case_tilings,
+                                label=f" (case {case.label})")
+            for name, tiling in case_tilings.items():
+                known = tilings.setdefault(name, tiling)
+                if _shape(known) != _shape(tiling):
+                    raise stage_error(
+                        f"{name} is tiled differently in case {case.label} than in an "
+                        f"earlier case: the implementations before it leave its operands "
+                        f"differently. Give each case its own STO")
         return tilings, subtails
 
     def render(self, parts: list[dict[str, sto_tiling]]) -> str:
@@ -178,19 +205,21 @@ class sto_stage(stage):
         for i, tilings in enumerate(parts):
             if len(parts) > 1:
                 lines.append(f"part {i + 1}")
-            for block in composition.get_blocks():
-                for name in block.stos:
-                    t = tilings[name]
-                    where = f", inside the loop over {block.loop_index}" if block.is_loop else ""
-                    ext = " ".join(f"{i}={fmt_dim(e)}" for i, e in t.extents.items())
-                    tl = "  ".join(f"{o} {fmt_dim(x.dima)}x{fmt_dim(x.dimb)}"
-                                   for o, x in (t.registers or t.tiles).items())
-                    lines.append(f"{name}{where}: {len(t.ops)} operations; "
-                                 f"order {','.join(t.order)}; extents {ext}")
-                    lines.append(f"  tiles: {tl}")
-                    lines.extend("  [" + " ".join(f"{i}={p}" for i, p in op.point.items())
-                                 + f"]  {op}" for op in t.ops)
-                    lines.append("")
+            for name in composition.sto_order():
+                if name not in tilings:
+                    continue
+                t = tilings[name]
+                block = composition.block_of(name)
+                where = f", inside the loop over {block.loop_index}" if block.is_loop else ""
+                ext = " ".join(f"{i}={fmt_dim(e)}" for i, e in t.extents.items())
+                tl = "  ".join(f"{o} {fmt_dim(x.dima)}x{fmt_dim(x.dimb)}"
+                               for o, x in (t.registers or t.tiles).items())
+                lines.append(f"{name}{where}: {len(t.ops)} operations; "
+                             f"order {','.join(t.order)}; extents {ext}")
+                lines.append(f"  tiles: {tl}")
+                lines.extend("  [" + " ".join(f"{i}={p}" for i, p in op.point.items())
+                             + f"]  {op}" for op in t.ops)
+                lines.append("")
         return "\n".join(lines).rstrip()
 
     def progress(self):

@@ -10,6 +10,21 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+# gemm's epilogue cases, vectors along m: C contiguous along m, or general strides
+CASES_CONTIGUOUS = [
+    "--alphamul-to", "fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}",
+    "--add-to", "fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}",
+    "--alphaadd-to", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}",
+    "--betaadd-to", "fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}",
+    "--store_ab-to", "AB.VEC:direct"]
+CASES_STRIDED = [
+    "--alphamul-to", "fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}",
+    "--add-to", "fadd(AB.VEC, C.VEC:gather, C.VEC){i=m, n=1}",
+    "--alphaadd-to", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC:gather){i=m, n=1}",
+    "--betaadd-to", "fma(C.VEC:gather, beta.VEC:bc_load, AB.VEC){i=m, n=1}",
+    "--store_ab-to", "AB.VEC:scatter"]
+
+
 def cli(*args):
     env = dict(os.environ, PYTHONPATH=os.path.join(ROOT, "src"))
     return subprocess.run([sys.executable, "-m", "clitools.ukrgen", *args], cwd=ROOT,
@@ -27,7 +42,7 @@ class test_cli(unittest.TestCase):
             "--mm-to", mm, "--betascale-to", "fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}",
             "--alphascale-to", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}", "--store-to", "C.VEC:direct",
             "--m", "1", "--n", "1", "--k", "1",
-            "--A-data-regs", "1", "--B-data-regs", "1", "--C-data-regs", "1"]
+            "--A-data-regs", "1", "--B-data-regs", "1", "--C-data-regs", "1"] + CASES_CONTIGUOUS
         out = cli(*args)
         self.assertEqual(0, out.returncode, out.stderr)
         chosen = next(l for l in out.stdout.splitlines() if l.startswith("--mm-to"))
@@ -67,7 +82,8 @@ class test_cli_help_and_errors(unittest.TestCase):
                   "--betascale-to", "fmul(C.VEC:gather, beta.VEC:bc_load, C.VEC){i=m, n=1}",
                   "--alphascale-to", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}",
                   "--store-to", "C.VEC:scatter", "--m", "1", "--n", "1", "--k", "1",
-                  "--A-data-regs", "1", "--B-data-regs", "1", "--C-data-regs", "1", "--bogus")
+                  "--A-data-regs", "1", "--B-data-regs", "1", "--C-data-regs", "1",
+                  *CASES_STRIDED, "--bogus")
         self.assertEqual(2, out.returncode, out.stdout)
         self.assertIn("unrecognized arguments: --bogus", out.stderr)
 

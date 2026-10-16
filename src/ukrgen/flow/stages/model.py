@@ -39,7 +39,8 @@ class model_stage(stage):
             if access.read in (read_access.LOAD, read_access.STREAM):
                 loaded.add(comp)
             if access.write in (write_access.MEMORY, write_access.MEMORY_STREAM):
-                stored.add(comp)
+                # a store may write one component into another's memory
+                stored.add(composition.get_sto(sto).memory_of(comp))
 
         self.memory = [c.name for c in composition.get_components()
                        if storage_class.MEMORY == c.storage and (c.name in loaded | stored)]
@@ -59,7 +60,7 @@ class model_stage(stage):
         # Accumulators get one register per tile they accumulate, counted
         # automatically: fewer would mean spilling them, which needs memory
         # to spill to that BLIS kernels don't have.
-        self.accumulators = {a for block in composition.get_blocks() if block.is_loop
+        self.accumulators = {a for block in composition.all_blocks() if block.is_loop
                              for sto in block.stos for a in composition.accumulators(sto)}
         self.data_components = [c for c in composition.get_parameterized_components()
                                 if c not in self.accumulators]

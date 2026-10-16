@@ -12,7 +12,7 @@ def composition_indices(composition) -> list[str]:
     Every index of the composition's STOs, in order of first appearance
     """
     indices = []
-    for block in composition.get_blocks():
+    for block in composition.all_blocks():
         for name in block.stos:
             for idx in composition.get_sto(name).indices:
                 if idx not in indices:
@@ -39,7 +39,7 @@ class dimension_stage(stage):
                     description=f"Microtile size along {idx}, in extents of the "
                                 f"chosen implementations")
 
-        loops = [b.loop_index for b in composition.get_blocks() if b.is_loop]
+        loops = [b.loop_index for b in composition.all_blocks() if b.is_loop]
         default = loops + [i for i in self.indices if i not in loops]
         self.params["order"] = stage_param(
                 value=",".join(default),
