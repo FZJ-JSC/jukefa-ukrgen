@@ -27,7 +27,6 @@ from ...support.data_move import (
     transformation_resolution,
 )
 from ...support.dm_resolutions.direct import direct_provider
-from ...support.dm_resolutions.resident import resident_provider
 from ...support.dm_resolutions.scalar_reduce import scalar_reduce_provider
 from ...support.dm_solver import resolved_operation_chain
 from ...support.encoding import encode_all
@@ -40,7 +39,6 @@ def default_registry() -> resolution_registry:
     registry = resolution_registry()
     direct_provider().register_resolutions(registry)
     scalar_reduce_provider().register_resolutions(registry)
-    resident_provider().register_resolutions(registry)
     return registry
 
 
