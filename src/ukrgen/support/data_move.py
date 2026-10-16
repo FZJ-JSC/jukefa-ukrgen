@@ -124,6 +124,7 @@ class dm_step:
     forbidden_op_mods: set[opmod] = field(default_factory=set)
     opd_mod_reqs: dict[register_reference,set[omod]] = field(default_factory=dict)
     forbidden_opd_mods: dict[register_reference,set[omod]] = field(default_factory=dict)
+    repeat:       dm_repeat|None = None
 
 @dataclass
 class transformation_resolution:
@@ -152,13 +153,36 @@ class dm_location(Enum):
     """
     Where an operand's value is outside the operation using it.
 
-    MEMORY:   it is loaded from or stored to memory
-    REGISTER: it is already in a register before, or stays in one after - an
-              accumulator, a value an earlier STO computed, a temporary
-              between the operations of a chain
+    MEMORY:         loaded from or stored to memory, the lanes of a vector
+                    adjacent - or a scalar, for which adjacency doesn't arise
+    STRIDED_MEMORY: loaded from or stored to memory with the lanes of a vector
+                    apart: the index the vector runs along is not the one the
+                    operand is contiguous along. Which index the vector runs
+                    along is decided by the solution's index binding, so this
+                    differs between solutions for the same operand.
+    REGISTER:       already in a register before, or stays in one after - an
+                    accumulator, a value an earlier STO computed, a temporary
+                    between the operations of a chain
     """
     MEMORY = auto()
+    STRIDED_MEMORY = auto()
     REGISTER = auto()
+
+
+@dataclass(frozen=True)
+class dm_repeat:
+    """
+    A data movement step executed once per lane of the operand's vector, with
+    the lane number in a signature operand - e.g. NEON loading a strided vector
+    one lane at a time. The lane count must fit the operand's value constraint:
+    a lane immediate of 0..1 covers a 2-lane vector but not an 8-lane one.
+
+    Only fixed lane counts are supported: a vector-length agnostic count needs
+    a runtime loop, as do the planned tile-slice repeats for SME.
+
+    :param lane_operand: signature operand taking the lane number
+    """
+    lane_operand : str
 
 
 @dataclass(frozen=True)

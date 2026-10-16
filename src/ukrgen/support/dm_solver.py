@@ -19,6 +19,7 @@ from asmgen.asmblocks.op import (
     register_type as rgt
 )
 from asmgen.registers import (
+    adt_size,
     asm_data_type as adt,
     adt_is_float,
     adt_is_int
@@ -116,6 +117,33 @@ class operation_resolution:
         return f"{self.opname}[{self.compute_sg.describe()}]({opds})"
 
 
+def repeat_fits(gen : asmgen, sig, step : dm_step, dt : adt) -> bool:
+    """
+    Whether a signature can execute a step as often as the step repeats: a step
+    repeated per lane needs a lane operand whose range covers every lane
+
+    :param gen: generator, for the vector width
+    :param sig: signature that would execute the step
+    :param step: the data movement step
+    :param dt: element type
+    :return: True if the step doesn't repeat, or every repetition is encodable
+    """
+    if step.repeat is None:
+        return True
+    if gen.is_vla:
+        # the lane count is only known at run time: needs a loop
+        return False
+    lanes = gen.simd_size // adt_size(dt)
+    shape = sig.operands.get(step.repeat.lane_operand)
+    if shape is None:
+        return False
+    for cons in shape.value_constraints:
+        maxval = getattr(cons, "maxval", None)
+        if maxval is not None and maxval < lanes - 1:
+            return False
+    return True
+
+
 # Tried splitting it up. made it less readable
 # pylint: disable-next=too-many-locals
 def generate_operand_resolution_candidates(
@@ -174,6 +202,7 @@ def generate_operand_resolution_candidates(
                 break
             sigs = filter_by_step_requirements(
                     dmop.get_signatures(), step, target_dt)
+            sigs = [s for s in sigs if repeat_fits(gen, s, step, target_dt)]
             if not sigs:
                 step_impossible = True
                 break
@@ -384,13 +413,42 @@ def get_dir_reqs(ast : ast_node, opds : list[str]) -> dict[str,set[dmd]]:
     return dir_reqs
 
 
+def strided_access(ref, tfs, index_mapping : dict[str,str],
+                   layouts : dict[str, str|None], req_name : str) -> bool:
+    """
+    Whether a hardware vector operand accesses its memory operand strided: its
+    lanes run along a requirement index the operand isn't contiguous along
+
+    :param ref: the hardware operand as it appears in the hardware AST
+    :param tfs: its transformations; a scalar-reduced operand is one element,
+                strided only if its memory operand has no contiguous index
+    :param index_mapping: hardware index -> requirement index
+    :param layouts: contiguous index of each memory operand
+    :param req_name: requirement operand the hardware operand stands for
+    """
+    if ref is None or req_name not in layouts:
+        return False
+    if tf.SCALAR_REDUCE in tfs:
+        # One element at a time: any layout serves, so the resolutions moving
+        # one element are registered for both. Strided only rules out loading
+        # a whole vector to take lanes from it, which needs a contiguous index.
+        return layouts[req_name] is None
+    live = [i for i in ref.indices if i is not None]
+    if len(live) != 1:
+        # scalars have no lanes; tiles are loaded by slice (not yet resolved)
+        return False
+    along = index_mapping.get(live[0])
+    return along is not None and along != layouts[req_name]
+
+
 def resolve_ast_solution(
         gen: asmgen,
         solution_step: rsstep,
         dts: dict[str,adt],
         target_op: str,
         registry: resolution_registry,
-        locs: dict[str, tuple[dml, dml]] | None = None
+        locs: dict[str, tuple[dml, dml]] | None = None,
+        layouts: dict[str, str|None] | None = None
         ) -> list[operation_resolution]:
     """
     Given one step of a solution to a requirement AST, determine hw requirements and find
@@ -403,6 +461,10 @@ def resolve_ast_solution(
     :param registry: Resolution registry for transformed operands
     :param locs: (input, output) location of each operand of the solution, by
                  name; operands not listed are in memory
+    :param layouts: index each memory operand is contiguous along, by name; None
+                    if it is contiguous along none. A vector bound to another
+                    index is accessed strided. Operands not listed are
+                    contiguous along whatever their vector is bound to.
     :return: list of valid resolutions for this operation and solution step
     """
 
@@ -425,9 +487,14 @@ def resolve_ast_solution(
     dir_reqs : dict[str, set[dmd]] = get_dir_reqs(hw_ast, opd_tfs.keys())
 
 
+    refs = {r.name: r for r in for_each_operand(hw_ast, lambda x: x)}
     hw_locs : dict[tuple[str,dmd], dml] = {}
     for hw_name, req_name in name_mapping.items():
         loc_in, loc_out = (locs or {}).get(req_name, (dml.MEMORY, dml.MEMORY))
+        if strided_access(refs.get(hw_name), opd_tfs.get(hw_name, set()),
+                          solution_step.index_mapping, (layouts or {}), req_name):
+            loc_in = dml.STRIDED_MEMORY if dml.MEMORY == loc_in else loc_in
+            loc_out = dml.STRIDED_MEMORY if dml.MEMORY == loc_out else loc_out
         hw_locs[(hw_name, dmd.IN)] = loc_in
         hw_locs[(hw_name, dmd.OUT)] = loc_out
 

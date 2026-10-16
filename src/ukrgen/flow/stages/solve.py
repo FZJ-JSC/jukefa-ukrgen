@@ -7,7 +7,7 @@ from __future__ import annotations
 import difflib
 import itertools
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from asmgen.asmblocks.op import register_type as rgt
 from asmgen.registers import asm_data_type as adt
@@ -27,8 +27,10 @@ from ...support.data_move import (
     transformation_resolution,
 )
 from ...support.dm_resolutions.direct import direct_provider
+from ...support.dm_resolutions.strided import strided_provider
+from ...support.tiles import index_extents
 from ...support.dm_resolutions.scalar_reduce import scalar_reduce_provider
-from ...support.dm_solver import resolved_operation_chain
+from ...support.dm_solver import resolved_operation_chain, repeat_fits
 from ...support.encoding import encode_all
 
 
@@ -39,6 +41,7 @@ def default_registry() -> resolution_registry:
     registry = resolution_registry()
     direct_provider().register_resolutions(registry)
     scalar_reduce_provider().register_resolutions(registry)
+    strided_provider().register_resolutions(registry)
     return registry
 
 
@@ -54,6 +57,7 @@ class store_candidate:
     component : str
     rtype : rgt
     rsln : transformation_resolution
+    loc : dml = dml.MEMORY
 
     def encode(self) -> str:
         return f"{self.component}.{self.rtype.name}:{self.rsln.unique_tag}"
@@ -89,9 +93,13 @@ class to_io:
 
     :param reads: operand -> register type the implementation reads it in
     :param writes: operand -> register type it leaves it in
+    :param stores: operand -> how storing it accesses memory: as an
+                   implementation leaves it, what a store must do; for a store,
+                   what it does
     """
     reads : dict[str, rgt]
     writes : dict[str, rgt]
+    stores : dict[str, dml] = field(default_factory=dict)
 
 
 def produced_rtype(impl: resolved_operation_chain, component: str) -> rgt | None:
@@ -124,12 +132,29 @@ def consumed_rtype(impl: resolved_operation_chain, component: str) -> rgt | None
     return None
 
 
-def io_of(sto: sto_description, impl: resolved_operation_chain | store_choice) -> to_io:
+def memory_access(gen, impl: resolved_operation_chain, sto: sto_description,
+                  operand: str, layouts: dict[str, str | None]) -> dml:
+    """
+    How an operand as an implementation holds it maps onto memory: strided if
+    its vector runs along an index the operand isn't contiguous along
+    """
+    if operand not in layouts:
+        return dml.MEMORY
+    extents = index_extents(gen, impl)
+    along = [i for i in sto.live_indices(operand) if i in extents]
+    if 1 == len(along) and along[0] != layouts[operand]:
+        return dml.STRIDED_MEMORY
+    return dml.MEMORY
+
+
+def io_of(sto: sto_description, impl: resolved_operation_chain | store_choice,
+          gen=None, layouts: dict[str, str | None] | None = None) -> to_io:
     """
     Register types the implementation of an STO reads and writes its operands in
     """
     if sto_kind.STORE == sto.kind:
-        return to_io(reads={s.component: s.rtype for s in impl.stores}, writes={})
+        return to_io(reads={s.component: s.rtype for s in impl.stores}, writes={},
+                     stores={s.component: s.loc for s in impl.stores})
 
     reads, writes = {}, {}
     for op in sto.operands:
@@ -138,7 +163,9 @@ def io_of(sto: sto_description, impl: resolved_operation_chain | store_choice) -
             reads[op] = rtype
         if is_written and (rtype := produced_rtype(impl, op)) is not None:
             writes[op] = rtype
-    return to_io(reads=reads, writes=writes)
+    stores = {op: memory_access(gen, impl, sto, op, layouts or {})
+              for op in writes} if gen is not None else {}
+    return to_io(reads=reads, writes=writes, stores=stores)
 
 
 def check_part_chain(composition: type[ukr_composition],
@@ -159,6 +186,7 @@ def check_part_chain(composition: type[ukr_composition],
     """
     flow = composition.dataflow()
     held: dict[str, tuple[rgt, str]] = {}
+    held_access: dict[str, dml] = {}
     problems = []
     for block in composition.get_blocks():
         for name in block.stos:
@@ -170,8 +198,16 @@ def check_part_chain(composition: type[ukr_composition],
                 if reads is not None and left is not None and reads != left[0]:
                     problems.append(f"{name} reads {op} from {reads.name}, but "
                                     f"{left[1]} leaves it in {left[0].name}")
+                stores, needed = io.stores.get(op), held_access.get(op)
+                if stores is not None and needed is not None and stores != needed \
+                        and left is not None:
+                    how = {dml.MEMORY: "contiguous", dml.STRIDED_MEMORY: "strided"}
+                    problems.append(f"{name} stores {op} {how[stores]}, but as {left[1]} "
+                                    f"leaves it the store has to be {how[needed]}")
             for op, rtype in io.writes.items():
                 held[op] = (rtype, name)
+                if op in io.stores:
+                    held_access[op] = io.stores[op]
     return problems
 
 
@@ -222,9 +258,11 @@ class solve_stage(stage):
         Implementations of a compute STO, keyed by their encoding
         """
         io_dts = {op: self.context.component_dts[op] for op in sto.operands}
+        layouts = {op: self.context.component_layouts[op] for op in sto.operands
+                   if op in self.context.component_layouts}
         impls = self.context.osb.find_hw_implementations(
                 req=sto.req, registry=registry, io_dts=io_dts,
-                io_locs=self.operand_locations(sto))
+                io_locs=self.operand_locations(sto), io_layouts=layouts)
         encodings = encode_all(impls, sto.req)
         return dict(sorted(zip(encodings, impls)))
 
@@ -256,15 +294,17 @@ class solve_stage(stage):
         for comp in sto.store_components:
             dt = self.context.component_dts[comp]
             stores = []
-            for rtype in sorted(producible.get(comp, set()), key=lambda r: r.name):
+            for rtype, loc in sorted(producible.get(comp, set()),
+                                     key=lambda p: (p[0].name, p[1].name)):
                 seen = set()
                 for tfs in (frozenset({tf.NONE}), frozenset()):
-                    key = tfr_key(tfs=tfs, rtype=rtype, ddir=dmd.OUT)
+                    key = tfr_key(tfs=tfs, rtype=rtype, ddir=dmd.OUT, loc=loc)
                     for rsln in registry.tfr_map.get(key, []):
                         if rsln.unique_tag in seen or not self.steps_supported(rsln, dt):
                             continue
                         seen.add(rsln.unique_tag)
-                        stores.append(store_candidate(component=comp, rtype=rtype, rsln=rsln))
+                        stores.append(store_candidate(component=comp, rtype=rtype,
+                                                      rsln=rsln, loc=loc))
             per_component.append(stores)
 
         choices = [store_choice(stores=combo) for combo in itertools.product(*per_component)]
@@ -276,7 +316,10 @@ class solve_stage(stage):
         """
         for step in rsln.steps:
             op = getattr(self.context.gen, step.op, None)
-            if op is None or not filter_by_step_requirements(op.get_signatures(), step, dt):
+            if op is None:
+                return False
+            sigs = filter_by_step_requirements(op.get_signatures(), step, dt)
+            if not [s for s in sigs if repeat_fits(self.context.gen, s, step, dt)]:
                 return False
         return True
 
@@ -300,7 +343,10 @@ class solve_stage(stage):
                             if sto.io(op)[1]:
                                 rtype = produced_rtype(impl, op)
                                 if rtype is not None:
-                                    producible.setdefault(op, set()).add(rtype)
+                                    access = memory_access(
+                                        self.context.gen, impl, sto, op,
+                                        self.context.component_layouts)
+                                    producible.setdefault(op, set()).add((rtype, access))
                 else:
                     cands = self.store_candidates(sto, registry, producible)
                 candidates[name] = cands
@@ -392,7 +438,8 @@ class solve_stage(stage):
 
         problems = []
         for i, part in enumerate(parts):
-            ios = {name: io_of(composition.get_sto(name), candidates[name][enc])
+            ios = {name: io_of(composition.get_sto(name), candidates[name][enc],
+                               self.context.gen, self.context.component_layouts)
                    for name, enc in part.items()}
             where = f"part {i + 1}: " if nparts > 1 else ""
             problems.extend(where + p for p in check_part_chain(composition, ios))

@@ -5,6 +5,7 @@ Resolutions for direct loads/stores
 from asmgen.asmblocks.op import (
     register_type as rgt,
     operand_modifier as omod,
+    opmem_modifier as memmod,
 )
 
 from ...matching.math import transformation as tf
@@ -19,6 +20,11 @@ from ..data_move import (
     temp_ref,
     resolution_provider
 )
+
+
+# Gathers, scatters and strided accesses are separate resolutions
+# (strided_provider): a direct access is contiguous.
+STRIDED_FORMS = {memmod.VINDEX, memmod.GSTRIDE}
 
 
 class direct_provider(resolution_provider):
@@ -38,7 +44,8 @@ class direct_provider(resolution_provider):
                     unique_tag='direct',
                     steps=[
                         dm_step(op="load", dest=orig_ref(), dest_rtype=rtype,
-                                forbidden_opd_mods={orig_ref(): {omod.BCAST,omod.GLANE,omod.ILANE}})
+                                forbidden_opd_mods={orig_ref(): {omod.BCAST,omod.GLANE,omod.ILANE}},
+                                forbidden_op_mods=STRIDED_FORMS)
                         ]))
 
             # Direct store
@@ -49,7 +56,8 @@ class direct_provider(resolution_provider):
                     unique_tag='direct',
                     steps=[
                         dm_step(op="store", src=[orig_ref()], src_rtypes=[rtype],
-                                forbidden_opd_mods={orig_ref(): {omod.GLANE,omod.ILANE}})
+                                forbidden_opd_mods={orig_ref(): {omod.GLANE,omod.ILANE}},
+                                forbidden_op_mods=STRIDED_FORMS)
                         ]))
             
             # Exactly the same, but with tf.NONE instead of an empty set
@@ -62,7 +70,8 @@ class direct_provider(resolution_provider):
                     unique_tag='direct',
                     steps=[
                         dm_step(op="load", dest=orig_ref(), dest_rtype=rtype,
-                                forbidden_opd_mods={orig_ref(): {omod.BCAST,omod.GLANE,omod.ILANE}})
+                                forbidden_opd_mods={orig_ref(): {omod.BCAST,omod.GLANE,omod.ILANE}},
+                                forbidden_op_mods=STRIDED_FORMS)
                         ]))
 
             # Direct store
@@ -73,5 +82,6 @@ class direct_provider(resolution_provider):
                     unique_tag='direct',
                     steps=[
                         dm_step(op="store", src=[orig_ref()], src_rtypes=[rtype],
-                                forbidden_opd_mods={orig_ref(): {omod.GLANE,omod.ILANE}})
+                                forbidden_opd_mods={orig_ref(): {omod.GLANE,omod.ILANE}},
+                                forbidden_op_mods=STRIDED_FORMS)
                         ]))

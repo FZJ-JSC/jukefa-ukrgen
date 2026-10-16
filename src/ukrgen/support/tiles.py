@@ -20,7 +20,7 @@ from ..components.tile import (
     dimension_properties as dimp,
     dimension_type as dimt,
 )
-from ..matching.math import ast_node, for_each_operand
+from ..matching.math import ast_node, for_each_operand, transformation as tf
 from .dm_solver import resolved_operation_chain
 from .op import infer_hw_tile
 
@@ -45,6 +45,12 @@ def index_extents(gen: asmgen,
 
         for ref in for_each_operand(step.hw_ast, lambda x: x):
             shape = sig.operands[ref.name]
+            # a scalar-reduced operand is one element wherever its index sits
+            # (RVV's vfmacc.vf takes it in an FP register): it says nothing
+            # about how far the operation reaches
+            if tf.SCALAR_REDUCE in step.transformations.get(ref.name, set()) or \
+                    shape.rtype not in (rgt.VEC, rgt.TILE):
+                continue
             physical = infer_hw_tile(gen, shape, shape.dt)
             live = [(axis, idx) for axis, idx in enumerate(ref.indices) if idx is not None]
 

@@ -39,6 +39,10 @@ class ukr_context:
         self.osb             : op_support_builder = None
         # one dict per part of the microtile: STO name -> chosen implementation
         self.to_parts        : list[dict[str,chosen_to]] = list()
+        # memory component -> index it is contiguous along (None: neither)
+        self.component_layouts : dict[str,str|None] = dict()
+        # memory component -> index -> "c" (contiguous) or "s" (strided)
+        self.component_strides : dict[str,dict[str,str]] = dict()
         self.to_candidates   : dict[str,dict] = dict()
         self.rt              : reg_tracker = None
         self.params          : dict[str,stage_param] = dict()

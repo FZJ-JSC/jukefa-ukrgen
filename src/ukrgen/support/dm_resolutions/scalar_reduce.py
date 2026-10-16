@@ -1,3 +1,4 @@
+from dataclasses import replace
 """
 Resolutions for SCALAR_REDUCE transformation
 """
@@ -15,6 +16,7 @@ from ..data_move import (
     tfr_key,
     transformation_resolution as tr,
     dm_direction as dmd,
+    dm_location as dml,
     dm_step,
     orig_ref,
     temp_ref,
@@ -27,6 +29,26 @@ class scalar_reduce_provider(resolution_provider):
     Provides resolutions for a SCALAR_REDUCE vector operand
     """
     def register_resolutions(self, registry : resolution_registry):
+        before = {key: set(registry.tfr_tags.get(key, set())) for key in registry.tfr_map}
+        self._register(registry)
+
+        # Moving one element serves any memory layout, so these resolutions
+        # also apply where the operand's vectors would be strided. The
+        # exceptions load a whole vector to take lanes from it, which needs
+        # consecutive elements along a contiguous index.
+        for key, rslns in list(registry.tfr_map.items()):
+            if tf.SCALAR_REDUCE not in key.tfs or dml.MEMORY != key.loc:
+                continue
+            for rsln in rslns:
+                if rsln.unique_tag in before.get(key, set()):
+                    continue
+                if dmd.IN == key.ddir and rsln.unique_tag in self.WHOLE_VECTOR_IN:
+                    continue
+                registry.add_resolution(key=replace(key, loc=dml.STRIDED_MEMORY), rsln=rsln)
+
+    WHOLE_VECTOR_IN = frozenset({"bc_lane", "use_lane"})
+
+    def _register(self, registry : resolution_registry):
 
         # example RVV:
         #  fld f0, (t0)

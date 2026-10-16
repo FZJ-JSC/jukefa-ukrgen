@@ -12,6 +12,7 @@ from argparse import ArgumentParser
 from ukrgen.flow.stages.stage import stage, stage_error
 from ukrgen.flow.stages.setup import setup_stage
 from ukrgen.flow.stages.datatype import datatype_stage
+from ukrgen.flow.stages.layout import layout_stage
 from ukrgen.flow.stages.solve import solve_stage
 from ukrgen.flow.stages.dimension import dimension_stage
 from ukrgen.flow.stages.sto import sto_stage
@@ -103,6 +104,7 @@ def main():
     stages = [
         setup_stage,
         datatype_stage,
+        layout_stage,
         solve_stage,
         dimension_stage,
         sto_stage,

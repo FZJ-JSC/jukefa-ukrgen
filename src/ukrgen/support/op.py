@@ -290,6 +290,7 @@ class op_support_builder:
             registry: resolution_registry,
             io_dts : dict[str,adt],
             io_locs : dict[str, tuple[dml, dml]] | None = None,
+            io_layouts : dict[str, str|None] | None = None,
             #) -> dict[frozenset[tuple[str,adt]],list[resolved_operation_chain]]:
             ) -> list[resolved_operation_chain]:
         """
@@ -349,7 +350,8 @@ class op_support_builder:
                         self.gen, sstep,
                         dts, self.ast_op_map[sstep.hw_ast],
                         registry,
-                        locs=locs)
+                        locs=locs,
+                        layouts=io_layouts)
                 if not step_candidates:
                     step_invalid = True
                     break
