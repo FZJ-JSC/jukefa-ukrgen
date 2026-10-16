@@ -52,14 +52,21 @@ class argparse_prolog:
                 required=param.required)
 
 
-        # With --help, stop at the first stage still missing a required argument:
-        # the help then shows everything given so far plus what this stage needs.
-        # Parsing first would fail on that missing argument instead of helping.
+        # With --help, stop at the first stage with a question left unanswered:
+        # the help then shows everything given so far plus what this stage
+        # asks. That includes options argparse doesn't require but the stage
+        # does - the solve stage's --<sto>-to, optional only so that
+        # --list-to-candidates works before any choice is made. Parsing first
+        # would fail on a missing argument instead of helping.
         argv = sys.argv[1:]
         if any(a in argv for a in helpargs):
             def given(pname):
                 return any(a == f"--{pname}" or a.startswith(f"--{pname}=") for a in argv)
-            if any(s.get_param(p).required and not given(p) for p in params):
+            def unanswered(pname):
+                param = s.get_param(pname)
+                return not param.flag and not given(pname) and \
+                    (param.required or param.value is None)
+            if any(unanswered(p) for p in params):
                 self.parser.print_help()
                 sys.exit(0)
 
@@ -120,21 +127,38 @@ def main():
                       ctx=ukr_ctx,
                       prolog=prolog)
 
+    def unrecognized() -> list[str]:
+        return [a for a in prolog.rest if a.startswith("-") and a not in helpargs]
+
     try:
         result = se.run()
     except stage_error as err:
+        # asked for help: the parser holds every option up to the stage that
+        # couldn't proceed, which is what is needed next
+        if any(a in sys.argv[1:] for a in helpargs):
+            parser.print_help()
+            sys.exit(0)
         print(f"error: {err}", file=sys.stderr)
+        if unrecognized():
+            print(f"note: not recognized by the stages so far (or mistyped): "
+                  f"{' '.join(unrecognized())}", file=sys.stderr)
         sys.exit(2)
 
-    # prolog won't print help if there are any parameters not consumed
-    # by stages
     if any(a in prolog.rest for a in helpargs):
         parser.print_help()
         sys.exit(0)
 
     if not result.completed:
         print(result.output)
+        if unrecognized():
+            print(f"note: not recognized by the stages so far (or mistyped): "
+                  f"{' '.join(unrecognized())}", file=sys.stderr)
         sys.exit(result.code)
+
+    # every stage has run, so anything left over belongs to none of them
+    if unrecognized():
+        print(f"error: unrecognized arguments: {' '.join(unrecognized())}", file=sys.stderr)
+        sys.exit(2)
 
     if "full_function" in ukr_ctx.asmblocks:
         print(ukr_ctx.asmblocks["full_function"])

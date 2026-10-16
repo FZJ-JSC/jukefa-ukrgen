@@ -33,5 +33,42 @@ class test_cli(unittest.TestCase):
         self.assertEqual(f'--mm-to "{mm}"', chosen)
 
 
+class test_cli_help_and_errors(unittest.TestCase):
+
+    COMMON = ["--isa", "sve", "--ukr", "gemm"] + \
+        [a for c in ("A", "B", "AB", "C") for a in (f"--{c}-data-type", "DOUBLE")] + \
+        ["--A-layout", "m:c", "k:s", "--B-layout", "k:s", "n:c", "--C-layout", "m:s", "n:s"]
+
+    def test_plain_help(self):
+        out = cli("--help")
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertIn("--isa", out.stdout)
+
+    def test_help_at_the_solve_stage(self):
+        # the solve stage's choices aren't required by argparse, but the stage
+        # needs them: help stops there and shows them
+        out = cli(*self.COMMON, "--help")
+        self.assertEqual(0, out.returncode, out.stderr)
+        for option in ("--mm-to", "--store-to", "--list-to-candidates"):
+            self.assertIn(option, out.stdout)
+
+    def test_unknown_option_reported(self):
+        out = cli(*self.COMMON, "--print-tos")
+        self.assertEqual(2, out.returncode)
+        self.assertIn("not recognized by the stages so far (or mistyped): --print-tos", out.stderr)
+        # the missing choice is reported briefly, pointing at the listing
+        self.assertIn("--list-to-candidates lists them all", out.stderr)
+        self.assertLess(len(out.stderr.splitlines()), 20)
+
+    def test_unknown_option_after_a_complete_run(self):
+        out = cli(*self.COMMON,
+                  "--mm-to", "fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}",
+                  "--betascale-to", "fmul(C.VEC:gather, beta.VEC:bc_load, C.VEC){i=m, n=1}",
+                  "--alphascale-to", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}",
+                  "--store-to", "C.VEC:scatter", "--m", "1", "--n", "1", "--k", "1", "--bogus")
+        self.assertEqual(2, out.returncode, out.stdout)
+        self.assertIn("unrecognized arguments: --bogus", out.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

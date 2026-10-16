@@ -212,6 +212,8 @@ def check_part_chain(composition: type[ukr_composition],
 
 
 class solve_stage(stage):
+    SHOWN_CANDIDATES = 10
+
     """
     For every STO, finds the hardware implementations available for the chosen
     ISA and data types and asks which to use (--<sto>-to).
@@ -390,9 +392,13 @@ class solve_stage(stage):
                 f"{name}: no implementation for data types "
                 f"{ {op: self.context.component_dts[op].name for op in self.sto_operands(name)} }")
         if not values:
+            shown = list(enumerate(cands))[:self.SHOWN_CANDIDATES]
+            more = len(cands) - len(shown)
             raise stage_error(
-                f"--{name}-to is required. Candidates:\n" +
-                "\n".join(f"  [{i}] {enc}" for i, enc in enumerate(cands)))
+                f"--{name}-to is required ({len(cands)} candidates):\n" +
+                "\n".join(f"  [{i}] {enc}" for i, enc in shown) +
+                (f"\n  ... and {more} more: --list-to-candidates lists them all"
+                 if more > 0 else ""))
 
         encodings = list(cands)
         chosen = []
