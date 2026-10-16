@@ -17,6 +17,8 @@ from ukrgen.flow.stages.solve import solve_stage
 from ukrgen.flow.stages.dimension import dimension_stage
 from ukrgen.flow.stages.sto import sto_stage
 from ukrgen.flow.stages.model import model_stage
+from ukrgen.flow.stages.isa_specialize import isa_specialize_stage
+from ukrgen.flow.stages.emit import emit_stage
 
 from ukrgen.flow.ukr_context import ukr_context
 from ukrgen.flow.stage_engine import stage_engine
@@ -120,6 +122,9 @@ def main():
         dimension_stage,
         sto_stage,
         model_stage,
+        isa_specialize_stage,
+        # irmods, MRU and scheduling go here, on the specialized IR
+        emit_stage,
     ]
 
     prolog = argparse_prolog(parser=parser)

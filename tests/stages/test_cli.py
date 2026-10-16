@@ -37,7 +37,9 @@ class test_cli(unittest.TestCase):
         # --m is a dimension, not an abbreviation of --mm-to
         mm = "fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"
         dts = [f"--{c}-data-type" for c in ("A", "B", "AB", "C")]
-        args = ["--isa", "sve"] + [a for d in dts for a in (d, "FP64")] + [
+        # NEON: a complete run goes through the specializer, which doesn't
+        # handle SVE's predicates yet
+        args = ["--isa", "neon"] + [a for d in dts for a in (d, "FP64")] + [
             "--A-layout", "m:c", "k:s", "--B-layout", "k:s", "n:c", "--C-layout", "m:c", "n:s",
             "--mm-to", mm, "--betascale-to", "fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}",
             "--alphascale-to", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}", "--store-to", "C.VEC:direct",
@@ -77,14 +79,16 @@ class test_cli_help_and_errors(unittest.TestCase):
         self.assertLess(len(out.stderr.splitlines()), 20)
 
     def test_unknown_option_after_a_complete_run(self):
-        out = cli(*self.COMMON,
+        dts = [a for c in ("A", "B", "AB", "C") for a in (f"--{c}-data-type", "DOUBLE")]
+        out = cli("--isa", "neon", "--ukr", "gemm", *dts,
+                  "--A-layout", "m:c", "k:s", "--B-layout", "k:s", "n:c", "--C-layout", "m:c", "n:s",
                   "--mm-to", "fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}",
-                  "--betascale-to", "fmul(C.VEC:gather, beta.VEC:bc_load, C.VEC){i=m, n=1}",
+                  "--betascale-to", "fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}",
                   "--alphascale-to", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}",
-                  "--store-to", "C.VEC:scatter", "--m", "1", "--n", "1", "--k", "1",
+                  "--store-to", "C.VEC:direct", "--m", "1", "--n", "1", "--k", "1",
                   "--A-data-regs", "1", "--B-data-regs", "1", "--C-data-regs", "1",
-                  *CASES_STRIDED, "--bogus")
-        self.assertEqual(2, out.returncode, out.stdout)
+                  *CASES_CONTIGUOUS, "--bogus")
+        self.assertEqual(2, out.returncode, out.stdout + out.stderr)
         self.assertIn("unrecognized arguments: --bogus", out.stderr)
 
 

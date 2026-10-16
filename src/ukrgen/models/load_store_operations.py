@@ -282,6 +282,26 @@ class lsc_addr_add(lsc_operation):
         ar_str = f"ADDR:{self.addr_idx}"
         return f"{ar_str} <- {ar_str} + {self.off}"
 
+class lsc_addr_compute(lsc_operation):
+    """
+    An address register set from another plus an offset in elements of the
+    component: dest = src + delta. delta may contain run-time strides
+    (stride(C,n)) and is resolved to bytes when emitted. Inserted when
+    specializing for the ISA: column pointers for strided accesses, and scratch
+    addresses for accesses at offsets no signature takes.
+    """
+    def __init__(self, component : str, src_idx : int, dest_idx : int, delta, t : tile):
+        self.delta = delta
+        super().__init__(tiles=[scalar_tile, scalar_tile],
+                         indices=[lsc_reg_index(component, [src_idx]),
+                                  lsc_reg_index(component, [dest_idx])],
+                         reads=[0], writes=[1],
+                         reg_types=[lsc_reg_type.address, lsc_reg_type.address])
+
+    def __str__(self):
+        return f"{self.indices[1]} <- {self.indices[0]} + {self.delta}"
+
+
 class lsc_add_val_off(lsc_operation):
     def __init__(self, valname : str, off : lsc_offset):
         if not isinstance(off, lsc_offset):

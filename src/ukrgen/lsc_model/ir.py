@@ -49,7 +49,7 @@ def render_op(op, db: offset_db) -> str:
     database and register files from the operation's rtypes
     """
     from ..models.load_store_operations import (
-        lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation)
+        lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute)
 
     def reg(pos: int) -> str:
         idx = op.indices[pos]
@@ -67,6 +67,10 @@ def render_op(op, db: offset_db) -> str:
         return f"{reg(1)} <- {op.rsln}:move {reg(0)}"
     if isinstance(op, lsc_zero):
         return f"{reg(0)} <- 0"
+    if isinstance(op, lsc_addr_compute):
+        comp = op.indices[0].component
+        return (f"{comp}@a{op.indices[1].indices[0]} <- {comp}@a{op.indices[0].indices[0]} "
+                f"+ {op.delta}")
     if isinstance(op, lsc_transformation):
         dests = ",".join(reg(i) for i in op.writes)
         srcs = ",".join(reg(i) for i in op.reads)
