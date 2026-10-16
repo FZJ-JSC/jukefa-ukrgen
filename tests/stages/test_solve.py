@@ -56,16 +56,41 @@ class test_solve(unittest.TestCase):
         for line in lines:
             self.assertRegex(line, r"beta\.VEC:bc_")
 
+    def candidates(self, sto):
+        return [l for l in self.listing.output.splitlines() if f"--{sto}-to" in l]
+
+    def test_accumulator_resident(self):
+        # AB is zeroed and accumulated in registers: never loaded or stored
+        for line in self.candidates("mm"):
+            self.assertNotIn("AB.VEC:", line)
+            self.assertIn("AB.VEC", line)
+
+    def test_temporaries_resident(self):
+        # T0 between fmul and fadd only exists in registers
+        chains = [l for sto in ("mm", "alphascale") for l in self.candidates(sto) if "T0" in l]
+        self.assertTrue(chains)
+        for line in chains:
+            self.assertNotIn("T0.VEC:", line)
+
+    def test_loaded_then_resident(self):
+        # betascale loads C from memory and leaves the result in registers for
+        # alphascale, which reads both C and AB where they were left
+        for line in self.candidates("betascale"):
+            self.assertRegex(line, r"C\.VEC:\w")
+        for line in self.candidates("alphascale"):
+            self.assertNotIn("AB.VEC:", line)
+            self.assertNotRegex(line, r"C\.VEC:")
+
     def test_select_by_index_and_string(self):
         ctx, res = run(gemm("sve", **{
             "mm-to": ["0"],
-            "betascale-to": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC:>direct){i=m, n=1}"],
+            "betascale-to": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"],
             "alphascale-to": ["0"],
             "store-to": ["0"]}))
         self.assertTrue(res.completed)
         self.assertEqual(1, len(ctx.to_parts))
         part = ctx.to_parts[0]
-        self.assertEqual("fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC:>direct){i=m, n=1}",
+        self.assertEqual("fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}",
                          part["betascale"].encoding)
         self.assertEqual("C.VEC:direct", part["store"].encoding)
 
@@ -157,9 +182,9 @@ class test_solve_pack(unittest.TestCase):
         self.assertIn("inside the loop over n", out)
         pack = [l for l in out.splitlines() if "--pack-to" in l]
         self.assertTrue(pack)
-        # Y is only written: no load of the destination
+        # Y is only written, and stays in registers for the store STO
         for line in pack:
-            self.assertIn("Y.VEC:>", line)
+            self.assertNotIn("Y.VEC:", line)
         self.assertIn('--store-to "Y.VEC:direct"', out)
 
 

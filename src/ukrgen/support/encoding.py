@@ -163,8 +163,10 @@ def encode_operation(res: operation_resolution,
     """
     by_name : dict[str, dict[dmd, str]] = {}
     for (opd_name, ddir), strat in res.operand_strategies.items():
+        # a resolution without steps (resident) moves nothing and is left out
         by_name.setdefault(opd_name, {})[ddir] = \
-            f"{strat.rsln.unique_tag}{steps_tag(strat, discriminating)}"
+            f"{strat.rsln.unique_tag}{steps_tag(strat, discriminating)}" \
+            if strat.rsln.steps else ""
 
     sig = res.compute_sg.representative
 
@@ -176,15 +178,15 @@ def encode_operation(res: operation_resolution,
         rtype = sig.operands[hw_name].rtype
         rtype_str = rtype.name if rtype is not None else "?"
 
+        # in>out, leaving out resident parts. Whether an operand is resident
+        # is fixed by where its value lives, not chosen per candidate, so
+        # leaving it out keeps the encoding unique.
         dirs = by_name[hw_name]
-        if dmd.IN in dirs and dmd.OUT in dirs:
-            rsln_str = f"{dirs[dmd.IN]}>{dirs[dmd.OUT]}"
-        elif dmd.OUT in dirs:
-            rsln_str = f">{dirs[dmd.OUT]}"
-        else:
-            rsln_str = dirs[dmd.IN]
+        rsln_in, rsln_out = dirs.get(dmd.IN, ""), dirs.get(dmd.OUT, "")
+        rsln_str = f"{rsln_in}>{rsln_out}" if rsln_out else rsln_in
 
-        opd_strs.append(f"{math_name}.{rtype_str}:{rsln_str}")
+        opd_strs.append(f"{math_name}.{rtype_str}:{rsln_str}" if rsln_str
+                        else f"{math_name}.{rtype_str}")
 
     idx_parts = []
     mapped = {r: h for h, r in step.index_mapping.items()}

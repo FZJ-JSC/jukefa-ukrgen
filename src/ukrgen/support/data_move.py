@@ -148,6 +148,19 @@ class transformation_resolution:
     forbidden_opd_mods: set[omod] = field(default_factory=set)
 
 
+class dm_location(Enum):
+    """
+    Where an operand's value is outside the operation using it.
+
+    MEMORY:   it is loaded from or stored to memory
+    REGISTER: it is already in a register before, or stays in one after - an
+              accumulator, a value an earlier STO computed, a temporary
+              between the operations of a chain
+    """
+    MEMORY = auto()
+    REGISTER = auto()
+
+
 @dataclass(frozen=True)
 class tfr_key:
     """
@@ -157,10 +170,12 @@ class tfr_key:
     :param tfs: Transformations of the operand as returned by the solver
     :param rtype: Operand register type
     :param ddir: Whether the operand is an input or an output of the arithmetic operation
+    :param loc: Where the operand's value comes from (input) or goes to (output)
     """
     tfs: frozenset[tf]
     rtype: rgt
     ddir: dm_direction
+    loc : dm_location = dm_location.MEMORY
 
 class resolution_registry:
     """

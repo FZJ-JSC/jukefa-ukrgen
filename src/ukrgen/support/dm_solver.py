@@ -29,6 +29,7 @@ from .data_move import (
     resolution_registry,
     transformation_resolution as tr,
     tfr_key,
+    dm_location as dml,
     filter_by_op_mods,
     filter_by_operand_mods,
     filter_by_step_requirements,
@@ -122,7 +123,8 @@ def generate_operand_resolution_candidates(
         rslns : list[tr],
         target_opd_name: str,
         target_dt: adt,
-        compute_sg: sig_group
+        compute_sg: sig_group,
+        target_rtype : rgt | None = None
         ) -> list[resolved_operand_strategy]:
     """
     Select valid transformation resolution candidates for a single operand of a compute
@@ -147,7 +149,9 @@ def generate_operand_resolution_candidates(
         if not compute_sigs:
             continue
 
-        rtype_req = get_op_rtype_req(rsln.steps)
+        # a resolution without steps (resident) leaves the operand in the
+        # register type the operation uses
+        rtype_req = get_op_rtype_req(rsln.steps) if rsln.steps else target_rtype
         if rtype_req is None:
             continue
 
@@ -241,7 +245,8 @@ def get_opd_candidates(*,
         hw_dts : dict[str,adt],
         hw_rtypes : dict[str,rgt],
         compute_sg : sig_group,
-        registry : resolution_registry
+        registry : resolution_registry,
+        hw_locs : dict[tuple[str,dmd], dml] | None = None
         ) -> dict[tuple[str,dmd], list[resolved_operand_strategy]]:
     """
     For each operand and direction, get a list of valid strategies against one
@@ -262,7 +267,9 @@ def get_opd_candidates(*,
     for opd_name, opd_tfs in tfs.items():
 
         for ddir in dir_reqs.get(opd_name,set()):
-            key = tfr_key(tfs=frozenset(opd_tfs), rtype=hw_rtypes[opd_name], ddir=ddir)
+            loc = (hw_locs or {}).get((opd_name, ddir), dml.MEMORY)
+            key = tfr_key(tfs=frozenset(opd_tfs), rtype=hw_rtypes[opd_name],
+                          ddir=ddir, loc=loc)
 
             rslns = registry.tfr_map.get(key, [])
 
@@ -271,7 +278,8 @@ def get_opd_candidates(*,
                     rslns=rslns,
                     target_opd_name=opd_name,
                     target_dt=hw_dts[opd_name],
-                    compute_sg=compute_sg)
+                    compute_sg=compute_sg,
+                    target_rtype=hw_rtypes[opd_name])
 
             if not candidates:
                 return {}
@@ -290,7 +298,8 @@ def enumerate_resolutions(*,
         hw_rtypes : dict[str,rgt],
         opname : str,
         registry : resolution_registry,
-        allowed_semantics : frozenset[opmod] = frozenset()
+        allowed_semantics : frozenset[opmod] = frozenset(),
+        hw_locs : dict[tuple[str,dmd], dml] | None = None
         ) -> list[operation_resolution]:
     """
     Given an operation, operand names, transformations, directions, data and register
@@ -324,7 +333,7 @@ def enumerate_resolutions(*,
         opd_candidates = get_opd_candidates(
                 gen=gen, tfs=tfs, dir_reqs=dir_reqs, hw_dts=hw_dts,
                 hw_rtypes=hw_rtypes, compute_sg=compute_sg,
-                registry=registry
+                registry=registry, hw_locs=hw_locs
             )
         
         combo_keys = list(opd_candidates.keys())
@@ -380,7 +389,8 @@ def resolve_ast_solution(
         solution_step: rsstep,
         dts: dict[str,adt],
         target_op: str,
-        registry: resolution_registry
+        registry: resolution_registry,
+        locs: dict[str, tuple[dml, dml]] | None = None
         ) -> list[operation_resolution]:
     """
     Given one step of a solution to a requirement AST, determine hw requirements and find
@@ -391,6 +401,8 @@ def resolve_ast_solution(
     :param dts: Data types of the operands as used in the solution AST
     :param target_op: Compute operation to query support for
     :param registry: Resolution registry for transformed operands
+    :param locs: (input, output) location of each operand of the solution, by
+                 name; operands not listed are in memory
     :return: list of valid resolutions for this operation and solution step
     """
 
@@ -413,6 +425,12 @@ def resolve_ast_solution(
     dir_reqs : dict[str, set[dmd]] = get_dir_reqs(hw_ast, opd_tfs.keys())
 
 
+    hw_locs : dict[tuple[str,dmd], dml] = {}
+    for hw_name, req_name in name_mapping.items():
+        loc_in, loc_out = (locs or {}).get(req_name, (dml.MEMORY, dml.MEMORY))
+        hw_locs[(hw_name, dmd.IN)] = loc_in
+        hw_locs[(hw_name, dmd.OUT)] = loc_out
+
     return enumerate_resolutions(
             gen=gen,
             tfs=opd_tfs,
@@ -420,7 +438,8 @@ def resolve_ast_solution(
             hw_dts=hw_dts,
             hw_rtypes=hw_rtypes,
             opname=target_op,
-            registry=registry)
+            registry=registry,
+            hw_locs=hw_locs)
 
 
 

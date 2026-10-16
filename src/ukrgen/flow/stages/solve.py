@@ -15,16 +15,19 @@ from asmgen.registers import asm_data_type as adt
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
-from .ukr.ukr import ukr_composition, sto_description, sto_kind, read_access
+from .ukr.ukr import (
+    ukr_composition, sto_description, sto_kind, read_access, write_access)
 from ...matching.math import transformation as tf, get_operand_io
 from ...support.data_move import (
     resolution_registry,
     tfr_key,
     dm_direction as dmd,
+    dm_location as dml,
     filter_by_step_requirements,
     transformation_resolution,
 )
 from ...support.dm_resolutions.direct import direct_provider
+from ...support.dm_resolutions.resident import resident_provider
 from ...support.dm_resolutions.scalar_reduce import scalar_reduce_provider
 from ...support.dm_solver import resolved_operation_chain
 from ...support.encoding import encode_all
@@ -37,6 +40,7 @@ def default_registry() -> resolution_registry:
     registry = resolution_registry()
     direct_provider().register_resolutions(registry)
     scalar_reduce_provider().register_resolutions(registry)
+    resident_provider().register_resolutions(registry)
     return registry
 
 
@@ -221,9 +225,28 @@ class solve_stage(stage):
         """
         io_dts = {op: self.context.component_dts[op] for op in sto.operands}
         impls = self.context.osb.find_hw_implementations(
-                req=sto.req, registry=registry, io_dts=io_dts)
+                req=sto.req, registry=registry, io_dts=io_dts,
+                io_locs=self.operand_locations(sto))
         encodings = encode_all(impls, sto.req)
         return dict(sorted(zip(encodings, impls)))
+
+    def operand_locations(self, sto: sto_description) -> dict[str, tuple[dml, dml]]:
+        """
+        Where each operand of a compute STO comes from and goes to, as the
+        composition's data flow says: loaded or streamed operands come from
+        memory, while zeroed and resident ones are already in registers. Compute
+        STOs leave their results in registers; store STOs write memory.
+        """
+        flow = self.context.composition.dataflow()
+        locs = {}
+        for op in sto.operands:
+            access = flow[(sto.name, op)]
+            loc_in = dml.REGISTER if access.read in (read_access.RESIDENT,
+                                                     read_access.ZERO) else dml.MEMORY
+            loc_out = dml.REGISTER if access.write in (None, write_access.REGISTER) \
+                else dml.MEMORY
+            locs[op] = (loc_in, loc_out)
+        return locs
 
     def store_candidates(self, sto: sto_description, registry: resolution_registry,
                          producible: dict[str, set[rgt]]) -> dict[str, store_choice]:

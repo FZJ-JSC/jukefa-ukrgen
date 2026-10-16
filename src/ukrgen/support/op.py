@@ -41,7 +41,7 @@ from ..matching.math import (
     HW_MMA_AST
 )
 
-from .data_move import resolution_registry
+from .data_move import resolution_registry, dm_location as dml
 
 from .dm_solver import resolved_operation_chain,resolve_ast_solution
 
@@ -289,6 +289,7 @@ class op_support_builder:
             req : ast_node,
             registry: resolution_registry,
             io_dts : dict[str,adt],
+            io_locs : dict[str, tuple[dml, dml]] | None = None,
             #) -> dict[frozenset[tuple[str,adt]],list[resolved_operation_chain]]:
             ) -> list[resolved_operation_chain]:
         """
@@ -305,6 +306,7 @@ class op_support_builder:
         
 
         solutions = self.create_base_solutions(req)
+        io_names = set(get_operands(req))
 
         #dt_options = self.get_all_ldst_opd_dts()
         #io_operands = list(get_operands(req))
@@ -327,15 +329,27 @@ class op_support_builder:
                 dts = self.match_temporary_dts(sstep, dts)
 
 
+            # Operands of the requirement are wherever the caller says, in
+            # memory by default. Temporaries the solver introduced between the
+            # operations of a chain only ever exist in registers.
+            locs = {}
+            for sstep in solution:
+                for name in sstep.name_mapping.values():
+                    if name in io_names:
+                        locs[name] = (io_locs or {}).get(name, (dml.MEMORY, dml.MEMORY))
+                    else:
+                        locs[name] = (dml.REGISTER, dml.REGISTER)
+
             step_invalid = False
             for sstep in solution:
 
                 #hw_dts = [dts[sstep.name_mapping[opd]] for opd in get_operands(sstep.hw_ast)]
                 
                 step_candidates = resolve_ast_solution(
-                        self.gen, sstep, 
+                        self.gen, sstep,
                         dts, self.ast_op_map[sstep.hw_ast],
-                        registry)
+                        registry,
+                        locs=locs)
                 if not step_candidates:
                     step_invalid = True
                     break
