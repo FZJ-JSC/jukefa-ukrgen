@@ -150,13 +150,46 @@ class test_layout_stage(unittest.TestCase):
         self.assertEqual({"A": "m", "B": "n", "C": None}, ctx.component_layouts)
         self.assertEqual({"m": "s", "n": "s"}, ctx.component_strides["C"])
 
+    def test_packed(self):
+        # a BLIS-packed A panel: contiguous along m, the k-columns one after
+        # another
+        ctx, layout = self.stage()
+        layout.set_param("A-layout", ["m:c", "k:p"])
+        layout.set_param("B-layout", ["n:c", "k:p"])
+        layout.set_param("C-layout", ["m:c", "n:s"])
+        layout.progress()
+        self.assertEqual({"m": "c", "k": "p"}, ctx.component_strides["A"])
+        self.assertEqual(["m", "k"], ctx.component_packing["A"])
+        self.assertEqual(["n", "k"], ctx.component_packing["B"])
+        self.assertEqual(["m"], ctx.component_packing["C"])
+        # to the solver, a packed index is not contiguous
+        self.assertEqual({"A": "m", "B": "n", "C": "m"}, ctx.component_layouts)
+
+    def test_packed_solves_like_strided(self):
+        # vectors along m read a packed A directly; vectors along k would be
+        # MR elements apart, exactly as with a run-time stride
+        def a_tags(spec):
+            params = {"isa": "sve", "A-data-type": "FP64", "B-data-type": "FP64",
+                      "AB-data-type": "FP64", "C-data-type": "FP64",
+                      "A-layout": spec, "B-layout": ["k:p", "n:c"],
+                      "C-layout": ["m:c", "n:s"], "list-to-candidates": True}
+            def prolog(s):
+                for p in s.get_parameter_names():
+                    if p in params:
+                        s.set_param(p, params[p])
+            out = stage_engine(STAGES, ukr_context(), prolog=prolog).run().output
+            return {along: tags(out, "A", "mm", along=along) for along in ("m", "n")}
+        self.assertEqual(a_tags(["m:c", "k:s"]), a_tags(["m:c", "k:p"]))
+
     def test_invalid(self):
         _, layout = self.stage()
         for tokens, message in ((["m:c"], "missing k"),
-                                (["m:c", "k:c"], "both m and k"),
+                                (["m:c", "k:c"], "only one is innermost"),
+                                (["m:c", "k:c"], "m:c k:p"),
+                                (["m:s", "k:p"], "packed along k but contiguous along none"),
                                 (["m:c", "m:s", "k:s"], "m twice"),
-                                (["m:x", "k:s"], "not <index>:c"),
-                                (["m:c", "n:s"], "not <index>:c")):
+                                (["m:x", "k:s"], "not <index>:c, <index>:p"),
+                                (["m:c", "n:s"], "not <index>:c, <index>:p")):
             with self.subTest(tokens=tokens):
                 with self.assertRaisesRegex(stage_error, message):
                     layout.parse("A", tokens)

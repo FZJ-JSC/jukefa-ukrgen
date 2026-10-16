@@ -41,8 +41,10 @@ class ukr_context:
         self.to_parts        : list[dict[str,chosen_to]] = list()
         # memory component -> index it is contiguous along (None: neither)
         self.component_layouts : dict[str,str|None] = dict()
-        # memory component -> index -> "c" (contiguous) or "s" (strided)
+        # memory component -> index -> "c" (contiguous), "p" (packed) or "s" (strided)
         self.component_strides : dict[str,dict[str,str]] = dict()
+        # memory component -> its contiguous and packed indices, innermost first
+        self.component_packing : dict[str,list[str]] = dict()
         self.to_candidates   : dict[str,dict] = dict()
         self.rt              : reg_tracker = None
         self.params          : dict[str,stage_param] = dict()
