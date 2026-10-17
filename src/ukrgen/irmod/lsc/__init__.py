@@ -11,8 +11,9 @@ IR modifications on LSC IR programs, one per module:
 from .base import lsc_irmod, irmod_param, irmod_placement
 from .lanefuse import lanefuse
 from .ldinc import ldinc
+from .widen import widen
 
-IRMODS : list[type[lsc_irmod]] = [lanefuse, ldinc]
+IRMODS : list[type[lsc_irmod]] = [widen, lanefuse, ldinc]
 
 
 def irmods_at(placement: irmod_placement) -> list[type[lsc_irmod]]:

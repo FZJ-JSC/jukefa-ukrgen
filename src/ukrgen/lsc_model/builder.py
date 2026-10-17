@@ -89,6 +89,7 @@ class program_builder:
                  data_regs: dict[str, int] | None = None,
                  preload: bool = True,
                  resolve_order: list[str] | None = None):
+        self.vidx: dict[str, str] = {}
         self.ctx = ctx
         self.gen = ctx.gen
         self.comp = ctx.composition
@@ -280,6 +281,7 @@ class program_builder:
         """
         memory = memory or comp
         dt = self.ctx.component_dts[memory]
+        self.vidx.setdefault(memory, self.vector_index(tiling, comp))
         repeats = [getattr(rs.step, "repeat", None) for rs in steps]
         if any(r is not None and (r.per_block or r.block_operand) for r in repeats):
             return self.move_blocks(sto, tiling, comp, coord, reg, steps, direction, tag,
@@ -667,7 +669,7 @@ class program_builder:
 
         return ir_program(blocks=blocks, offsets=self.db, strides=self.strides,
                           addr_setup=self.addr_setup, registers=dict(self.used),
-                          cases=cases)
+                          cases=cases, vector_indices=dict(self.vidx))
 
 @dataclass
 class _step:

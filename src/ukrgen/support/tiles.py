@@ -29,6 +29,19 @@ from .op import infer_hw_tile
 ONE = dimp(dt=dimt.fixed, size=1, sdt=dimt.fixed, sd_size=1)
 
 
+def widening_ways(sig) -> int:
+    """
+    How many registers a widening signature's wide operands take per register
+    of its narrow ones (1 where it doesn't widen): its widening_method says so
+    """
+    method = sig.structural_params.get("widening_method")
+    if method is None or "NONE" == method.name:
+        return 1
+    sizes = [adt_size(o.dt) for o in sig.operands.values()
+             if getattr(o, "dt", None) is not None and o.rtype in (rgt.VEC, rgt.TILE)]
+    return max(sizes) // min(sizes) if sizes else 1
+
+
 def index_extents(gen: asmgen,
                   impl: resolved_operation_chain) -> dict[str, dimp]:
     """
@@ -42,6 +55,14 @@ def index_extents(gen: asmgen,
     """
     extents: dict[str, dimp] = {}
 
+    # where a chain widens, every wide register in it is a group: one
+    # operation of the chain reaches as far as a narrow register
+    sigs = [res.compute_sg.representative for res in impl.resolved_chain]
+    widens = any(widening_ways(sig) > 1 for sig in sigs)
+    narrow = min((adt_size(o.dt) for sig in sigs for o in sig.operands.values()
+                  if o.rtype in (rgt.VEC, rgt.TILE) and getattr(o, "dt", None) is not None),
+                 default=None)
+    ways = 2 if widens else 1
     for res, step in zip(impl.resolved_chain, impl.math_chain):
         sig = res.compute_sg.representative
 
@@ -67,6 +88,16 @@ def index_extents(gen: asmgen,
                 else:
                     extent = physical.dima
 
+                if ways > 1 and rgt.VEC == shape.rtype and adt_size(shape.dt) > narrow \
+                        and dimt.fixed == extent.dt:
+                    # a widening chain: its wide registers are groups, as many
+                    # as a narrow register's elements take. Fixed-width extents
+                    # count elements; vector-length agnostic ones count vectors
+                    # of each operand's own type, where a group of wide vectors
+                    # already is one narrow vector
+                    factor = adt_size(shape.dt) // narrow
+                    extent = dimp(dt=extent.dt, size=extent.size * factor,
+                                  sdt=extent.sdt, sd_size=extent.sd_size * factor)
                 known = extents.setdefault(req_idx, extent)
                 if known != extent:
                     raise ValueError(f"operations disagree about the extent of {req_idx}: "

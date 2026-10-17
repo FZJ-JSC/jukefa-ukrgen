@@ -860,9 +860,12 @@ class signature_emitter:
             if not self._predicate(sig, masks):
                 continue
             dts = {f"{hw[0]}_dt": sig.operands[hw].dt for hw in op.hw_operands}
+            # the part of a wide result a widening instruction computes
+            parts = {"part": op.properties["part"]} \
+                if "part" in sig.operands and "part" in op.properties else {}
             try:
                 return getattr(self.gen, op.op)(
-                    **regs, **dts, **lanes, **masks, **sig.structural_params,
+                    **regs, **dts, **lanes, **masks, **parts, **sig.structural_params,
                     modifiers=set(sig.modifiers),
                     operand_modifiers={n: set(s.modifiers) for n, s in sig.operands.items()
                                        if s.modifiers})

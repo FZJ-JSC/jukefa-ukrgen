@@ -149,6 +149,8 @@ class ir_program:
     addr_setup : dict[tuple[str, int], int]
     registers : dict[str, tuple[rgt, int]]
     cases : list[ir_case] = field(default_factory=list)
+    #: the index each component's vector registers run along
+    vector_indices : dict[str, str] = field(default_factory=dict)
 
     def render(self) -> str:
         db = self.offsets
