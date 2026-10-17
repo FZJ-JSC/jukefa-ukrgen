@@ -118,10 +118,47 @@ class test_signature_specializer(unittest.TestCase):
             ok, err = assembles(ctx.emitted[0].instructions())
             self.assertTrue(ok, err)
 
-    def test_predicates_not_yet(self):
-        from ukrgen.flow.stages.stage import stage_error
-        with self.assertRaisesRegex(stage_error, "specializing for the ISA: .*governing predicate"):
-            mm(isa="sve")
+    def test_sve(self):
+        # masked signatures governed by the all-true predicate the ISA sets up,
+        # offsets in vector lengths, advances by whole vectors
+        ctx, res = mm(isa="sve")
+        self.assertTrue(res.completed, res.output)
+        p = ctx.emitted[0]
+        self.assertEqual("ptrue p0.d", p.setup[0])
+        body = "\n".join(p.blocks[0].sections["body"])
+        self.assertIn("p0/m", body)
+        self.assertRegex(body, r"ld1d \{z\d+\.d\}, p0/z, \[x\d+, #\d+, MUL VL\]")
+        self.assertTrue(any(l.startswith("incb") for l in p.blocks[0].advance))
+        # only the model's address registers advance
+        self.assertEqual(2, len(p.blocks[0].advance))
+        if shutil.which("aarch64-linux-gnu-as"):
+            ok, err = assembles(p.instructions(), arch="armv8-a+sve")
+            self.assertTrue(ok, err)
+
+    BLOCK_FMA = ("fma[bdreg:BLOCKLANE+bdreg_blocksize=2](A.VEC:direct, B.VEC:bc_block, C.VEC)"
+                 "{i=m, n=1, k*=1}")
+
+    def test_sve_indexed_fma(self):
+        # two consecutive B elements replicated into every 128-bit block
+        # (ld1rqd), each feeding an FMA by element
+        ctx, res = mm(isa="sve", n="4", **{"mm-to": [self.BLOCK_FMA]})
+        self.assertTrue(res.completed, res.output)
+        body = ctx.emitted[0].blocks[0].sections["body"]
+        self.assertTrue(any(l.startswith("ld1rqd") for l in body))
+        lanes = [l.split("[")[-1].rstrip("]") for l in body if l.startswith("fmla")]
+        self.assertEqual({"0", "1"}, set(lanes))
+        if shutil.which("aarch64-linux-gnu-as"):
+            ok, err = assembles(ctx.emitted[0].instructions(), arch="armv8-a+sve")
+            self.assertTrue(ok, err)
+
+    def test_register_constraints(self):
+        # the indexed register of fmla .d must be z0..z15: with 16
+        # accumulators those registers are allocated first
+        ctx, res = mm(isa="sve", m="2", n="8", **{"B-data-regs": "4", "mm-to": [self.BLOCK_FMA]})
+        self.assertTrue(res.completed, res.output)
+        body = ctx.emitted[0].blocks[0].sections["body"]
+        indexed = {int(l.split(",")[2].split(".")[0][1:]) for l in body if l.startswith("fmla")}
+        self.assertTrue(indexed and max(indexed) <= 15)
 
     def test_print_asm(self):
         _, res = mm(**{"print-asm": True})

@@ -108,13 +108,12 @@ def lane_axes(gen: asmgen,
 
     The lanes run along the index the operand was loaded along - the one it is
     contiguous along in memory, or its last index if the layout is unknown.
-    Only fixed-width vectors: an element of an SVE indexed FMA is per 128-bit
-    segment and needs replicated loads, which aren't resolved yet.
+    On SVE an FMA by element picks the element per 128-bit block: its
+    operand is loaded one block replicated into every block (bc_block, ld1rq),
+    a lane per element of the block.
 
     :return: operand -> (index the lanes run along, lanes per register)
     """
-    if gen.is_vla:
-        return {}
     layouts = layouts or {}
     leaves = {leaf.name: [i for i in leaf.indices if i is not None]
               for leaf in for_each_operand(req, lambda x: x)}
@@ -124,13 +123,22 @@ def lane_axes(gen: asmgen,
         for hw_name, math_name in step.name_mapping.items():
             shape = sig.operands.get(hw_name)
             strat = res.operand_strategies.get((hw_name, dmd.IN))
-            if shape is None or omod.ILANE not in shape.modifiers or strat is None \
-                    or "use_lane" != strat.rsln.unique_tag or not leaves.get(math_name):
+            if shape is None or strat is None or not leaves.get(math_name):
+                continue
+            tag = strat.rsln.unique_tag
+            if "use_lane" == tag and omod.ILANE in shape.modifiers and not gen.is_vla:
+                count = gen.simd_size // adt_size(shape.dt)
+            elif "bc_block" == tag and omod.BLOCKLANE in shape.modifiers:
+                # one lane per element of a block, every block alike
+                count = sig.structural_params.get(f"{hw_name}_blocksize")
+                if not count:
+                    continue
+            else:
                 continue
             axis = layouts.get(math_name)
             if axis not in leaves[math_name]:
                 axis = leaves[math_name][-1]
-            found[math_name] = (axis, gen.simd_size // adt_size(shape.dt))
+            found[math_name] = (axis, count)
     return found
 
 

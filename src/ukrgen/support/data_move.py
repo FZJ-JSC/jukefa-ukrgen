@@ -423,6 +423,10 @@ def filter_by_operand_count(
 
     return filtered_sigs
 
+BLOCK_MODIFIERS = {m for m in (getattr(omod, "BLOCK", None), getattr(omod, "IBLOCK", None))
+                   if m is not None}
+
+
 def filter_by_step_requirements(
         sigs : list[opsig],
         step : dm_step,
@@ -474,8 +478,13 @@ def filter_by_step_requirements(
         rtype_req = rtype_map[opd]
         sigs = filter_by_operand_mods(sigs, opd_mod_reqs, opd,
                                   target_dt, rtype_req)
+        # block modifiers change what an instruction does to the whole
+        # register (ld1rq replicates a block, not an element): they only match
+        # steps asking for them
+        unasked_blocks = BLOCK_MODIFIERS - set(opd_mod_reqs)
         sigs = filter_by_forbidden_operand_mods(sigs, 
-                                                step.forbidden_opd_mods.get(ref, set()),
+                                                step.forbidden_opd_mods.get(ref, set())
+                                                | unasked_blocks,
                                                 opd)
 
         if not sigs:

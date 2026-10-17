@@ -380,7 +380,7 @@ class program_builder:
                             f"{sto} reads {math}{list(coord)}, which is no longer in "
                             f"{reg}: give {math} more data registers")
                     lanes = [l for l in op.lane(math) if l is not None]
-                    if lanes and omod.ILANE in sig.operands[hw].modifiers:
+                    if lanes and {omod.ILANE, omod.BLOCKLANE} & sig.operands[hw].modifiers:
                         lane = lanes[0]
                     if is_written:
                         written.append((reg, math, coord))

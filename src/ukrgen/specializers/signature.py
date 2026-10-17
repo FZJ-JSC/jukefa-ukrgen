@@ -69,6 +69,8 @@ class emitted_program:
     cases : list[tuple[str, dict, list[emitted_block]]]
     bases : dict[str, str]
     registers : dict[tuple, str]
+    teardown : list[str] = field(default_factory=list)
+    data : list[str] = field(default_factory=list)
 
     def instructions(self) -> list[str]:
         """
@@ -79,7 +81,7 @@ class emitted_program:
             for lines in block.sections.values():
                 out += lines
             out += block.advance + block.tail_advance
-        return out
+        return out + list(self.teardown) + list(self.data)
 
     def render(self) -> str:
         lines = ["// bases: " + ", ".join(f"{c} in {r}" for c, r in self.bases.items())]
@@ -154,6 +156,30 @@ def _accepts(sig, name: str, value) -> bool:
     return True
 
 
+def _all_true(ctx):
+    """
+    The ISA's all-true governing predicate for masked signatures, set up by
+    its isa_setup(); None where there is none
+    """
+    setup = getattr(ctx.gen, "isa_setup", None)
+    return setup().all_true_predicate(rt=None, dt=None) if setup else None
+
+
+def _usable(ctx, sig) -> bool:
+    """
+    Unmasked signatures always; masked ones where the ISA sets up an all-true
+    predicate to govern them
+    """
+    return not _masked(sig) or _all_true(ctx) is not None
+
+
+def _vl_form(sig) -> bool:
+    """
+    A load or store signature taking an offset in vector lengths: [x, #n, MUL VL]
+    """
+    return {m.name for m in sig.modifiers} - {"MASK"} == {"VOFFSET"} and "voffset" in sig.operands
+
+
 def _takes(sig, immediate: int) -> bool:
     """
     Whether a load or store signature takes an access at this immediate offset
@@ -204,11 +230,13 @@ class signature_specializer:
         comp, reg = op.indices[0].component, op.indices[0].indices[0]
         db, strides = self.program.offsets, self.program.strides.get(comp, {})
         sigs = _sigs(op.sigs)
-        if sigs and all(_masked(s) for s in sigs):
+        usable = [s for s in sigs if _usable(self.ctx, s)]
+        if sigs and not usable:
             raise specialization_error(
                 f"every {op.step.op} signature for {db[op.offset]} needs a governing "
-                f"predicate: masked signatures (SVE, RVV) are not specialized yet")
+                f"predicate the ISA doesn't set up")
         rel = dict((db.elements_offset(op.offset, strides) - self.positions[(comp, reg)]).terms)
+        vl = rel.pop(("VL",), 0)
         inserted = []
 
         strided = {f: c for f, c in rel.items() if f}
@@ -231,7 +259,23 @@ class signature_specializer:
 
         const = rel.get((), 0)
         immediate = const * adt_size(self.ctx.component_dts[comp])
-        usable = [s for s in sigs if not _masked(s)]
+
+        # Offsets in vector lengths: [x, #n, MUL VL] where a signature takes n
+        # and nothing else is added; otherwise the address register moves by
+        # them first, along with any constant
+        if vl:
+            if any(_vl_form(s) and _accepts(s, "voffset", vl) for s in usable) and not const:
+                op.indices[0] = lsc_reg_index(comp, [reg])
+                return inserted + [op]
+            if comp not in self.scratch:
+                self.scratch[comp] = self.new_reg(comp)
+            scratch = self.scratch[comp]
+            delta = sym.const(const) + sym.factor("VL", vl)
+            inserted.append(lsc_addr_compute(comp, reg, scratch, delta, scalar_tile))
+            self.positions[(comp, scratch)] = self.positions[(comp, reg)] + delta
+            op.indices[0] = lsc_reg_index(comp, [scratch])
+            return inserted + [op]
+
         if not any(_takes(s, immediate) for s in usable):
             if not any(_takes(s, 0) for s in usable):
                 raise specialization_error(
@@ -250,16 +294,16 @@ class signature_specializer:
             return self.adapt_access(op)
         if isinstance(op, lsc_transformation):
             sigs = _sigs(op.resolution.compute_sg)
-            if sigs and all(_masked(s) for s in sigs):
+            if sigs and not any(_usable(self.ctx, s) for s in sigs):
                 raise specialization_error(
-                    f"every {op.op} signature needs a governing predicate: masked "
-                    f"signatures (SVE, RVV) are not specialized yet")
+                    f"every {op.op} signature needs a governing predicate the ISA "
+                    f"doesn't set up")
         if isinstance(op, lsc_move):
             sigs = _sigs(op.sigs)
-            if sigs and all(_masked(s) for s in sigs):
+            if sigs and not any(_usable(self.ctx, s) for s in sigs):
                 raise specialization_error(
-                    "every move signature needs a governing predicate: masked "
-                    "signatures (SVE, RVV) are not specialized yet")
+                    "every move signature needs a governing predicate the ISA doesn't "
+                    "set up")
             if not sigs:
                 raise specialization_error(f"the ISA has no move for {op.rsln}")
         return [op]
@@ -300,6 +344,7 @@ class signature_emitter:
         self.phys: dict[tuple, object] = {}
         self.dts: dict[tuple, object] = self._register_types()
         self.numbers: dict[tuple, int] = {}
+        self.bounds = self._register_bounds()
         self.strides_in: dict[str, object] = {}
 
     # --- registers ---------------------------------------------------------
@@ -343,7 +388,17 @@ class signature_emitter:
         if key not in self.phys:
             dt = self.dts.get((idx.component, idx.indices[0]))
             if rgt.VEC == rtype:
-                number = self.rt.reserve_any_reg("vreg")
+                bound = self.bounds.get(key)
+                if bound is None:
+                    number = self.rt.reserve_any_reg("vreg")
+                else:
+                    used = self.rt.get_used_regs("vreg")
+                    free = [i for i in range(bound + 1) if i not in used]
+                    if not free:
+                        raise specialization_error(
+                            f"no vector register up to {bound} left for {key[0]}{key[1]}")
+                    number = free[0]
+                    self.rt.reserve_specific_reg("vreg", number)
                 self.phys[key] = self.gen.vreg(number)
             elif rgt.FP == rtype:
                 used = self.rt.get_used_regs("vreg")
@@ -354,6 +409,34 @@ class signature_emitter:
                 raise specialization_error(f"{rtype.name} registers are not specialized yet")
             self.numbers[key] = number
         return self.phys[key]
+
+    def _register_bounds(self) -> dict[tuple, int]:
+        """
+        The highest vector register each virtual register may use, where an
+        operation's signature limits it - SVE's indexed fmla encodes its
+        indexed register in 4 bits for doubles. Found by asking the
+        signature's constraints, so whatever asmgen declares counts.
+        """
+        bounds: dict[tuple, int] = {}
+        top = self.gen.max_vregs - 1
+        for op in self._all_ops():
+            if not isinstance(op, lsc_transformation):
+                continue
+            sigs = sorted((s for s in _sigs(op.resolution.compute_sg) if _usable(self.ctx, s)),
+                          key=_masked)
+            if not sigs:
+                continue
+            sig = sigs[0]
+            for hw, idx, rtype in zip(op.hw_operands, op.indices, op.rtypes or []):
+                shape = sig.operands.get(hw)
+                if rgt.VEC != rtype or shape is None or not shape.value_constraints:
+                    continue
+                highest = next((i for i in range(top, -1, -1)
+                                if _accepts(sig, hw, self.gen.vreg(i))), -1)
+                if highest < top:
+                    key = (idx.component, idx.indices[0], rtype)
+                    bounds[key] = min(bounds.get(key, highest), highest)
+        return bounds
 
     def release(self, key):
         """
@@ -408,11 +491,19 @@ class signature_emitter:
         immediate, multiples of run-time strides as adds of the stride
         registers, which hold strides in bytes
         """
-        esize = adt_size(self.ctx.component_dts[comp])
+        dt = self.ctx.component_dts[comp]
+        esize = adt_size(dt)
         lines = []
         for factors, coeff in amount.terms:
             if not factors:
                 lines.append(self.gen.add_greg_imm(reg=areg, imm=coeff))
+            elif ("VL",) == factors and coeff > 0 and 0 == coeff % esize:
+                # whole vectors: incb x, ALL, MUL #n, n at most 16 a time
+                vectors = coeff // esize
+                while vectors:
+                    step = min(vectors, 16)
+                    lines.append(self.gen.add_greg_voff(reg=areg, offset=step, dt=dt))
+                    vectors -= step
             elif 1 == len(factors) and factors[0].startswith("stride(") \
                     and coeff > 0 and 0 == coeff % esize:
                 sreg = self.stride_reg(factors[0])
@@ -434,6 +525,14 @@ class signature_emitter:
         areg = self.aregs[(comp, reg)]
         elements = self.program.offsets.elements_offset(op.offset, self.program.strides.get(comp, {}))
         rel = dict((elements - self.positions[(comp, reg)]).terms)
+        vl = rel.pop(("VL",), 0)
+        if vl:
+            line = self._mem(op, self.reg(op.indices[1], op.rtypes[1]), areg, 0, voffset=vl)
+            if line is None:
+                raise specialization_error(
+                    f"no signature of {op.step.op} takes {self.program.offsets[op.offset]} "
+                    f"at {vl} vector lengths: specialize the IR first")
+            return [line]
         if set(rel) - {()}:
             raise specialization_error(
                 f"{op.rsln} access to {self.program.offsets[op.offset]} is not a constant "
@@ -457,6 +556,21 @@ class signature_emitter:
                 f"offset {immediate}: specialize the IR first")
         return [line]
 
+    def _predicate(self, sig, kwargs: dict) -> bool:
+        """
+        Bind a signature's mask operands to the all-true predicate; False if it
+        has some and the ISA sets up none
+        """
+        masks = [n for n, o in sig.operands.items() if orl.MASK == o.orole]
+        if not masks:
+            return True
+        predicate = _all_true(self.ctx)
+        if predicate is None:
+            return False
+        for name in masks:
+            kwargs[name] = predicate
+        return True
+
     def address(self, op: lsc_addr_compute) -> list[str]:
         """
         An address register set from another plus an offset
@@ -472,7 +586,8 @@ class signature_emitter:
         self.positions[dest_key] = self.positions[src_key] + op.delta
         return lines
 
-    def _mem(self, op, data, areg, immediate: int, increment: int | None = None) -> str | None:
+    def _mem(self, op, data, areg, immediate: int, increment: int | None = None,
+             voffset: int | None = None) -> str | None:
         """
         The access through the first signature taking it with this immediate
         offset (0: one without an offset)
@@ -482,7 +597,11 @@ class signature_emitter:
         for sig in sorted(_sigs(op.sigs), key=lambda s: len(s.modifiers)):
             mods = {m.name for m in sig.modifiers} - {"MASK"}
             kwargs = {}
-            if increment is not None:
+            if voffset is not None:
+                if {"VOFFSET"} != mods:
+                    continue
+                kwargs["voffset"] = voffset
+            elif increment is not None:
                 if {"POSTINC"} != mods or immediate:
                     continue
                 kwargs["iinc"] = increment
@@ -490,11 +609,12 @@ class signature_emitter:
                 kwargs["ioffset"] = immediate
             elif mods or immediate:
                 continue
-            if any(orl.MASK == o.orole for o in sig.operands.values()):
+            if not self._predicate(sig, kwargs):
                 continue
             for name, shape in sig.operands.items():
                 if ot.IMMEDIATE == shape.otype and name.endswith("_lane"):
                     kwargs[name] = lane
+            kwargs.update(sig.structural_params)
             try:
                 return getattr(self.gen, op.step.op)(
                     dregs=[data], areg=areg, dt=dt, modifiers=set(sig.modifiers),
@@ -515,13 +635,15 @@ class signature_emitter:
         lanes = {f"{hw}_lane": idx.indices[1]
                  for hw, idx in zip(op.hw_operands, op.indices) if len(idx.indices) > 1}
         failures = []
-        for sig in _sigs(op.resolution.compute_sg):
-            if any(orl.MASK == o.orole for o in sig.operands.values()):
+        for sig in sorted(_sigs(op.resolution.compute_sg), key=_masked):
+            masks = {}
+            if not self._predicate(sig, masks):
                 continue
             dts = {f"{hw[0]}_dt": sig.operands[hw].dt for hw in op.hw_operands}
             try:
                 return getattr(self.gen, op.op)(
-                    **regs, **dts, **lanes, modifiers=set(sig.modifiers),
+                    **regs, **dts, **lanes, **masks, **sig.structural_params,
+                    modifiers=set(sig.modifiers),
                     operand_modifiers={n: set(s.modifiers) for n, s in sig.operands.items()
                                        if s.modifiers})
             except Exception as err:
@@ -558,12 +680,14 @@ class signature_emitter:
         src = self.reg(op.indices[0], op.rtypes[0])
         dst = self.reg(op.indices[1], op.rtypes[1])
         dt = self.dts[(op.indices[1].component, op.indices[1].indices[0])]
-        for sig in _sigs(op.sigs):
-            if _masked(sig):
+        for sig in sorted(_sigs(op.sigs), key=_masked):
+            masks = {}
+            if not self._predicate(sig, masks):
                 continue
             try:
                 return self.gen.move(
                     dregs=[src, dst], dts=[dt, dt], modifiers=set(sig.modifiers),
+                    **masks, **sig.structural_params,
                     operand_modifiers={n: set(s.modifiers) for n, s in sig.operands.items()
                                        if s.modifiers})
             except Exception:       # asmgen refuses: try the next signature
@@ -615,8 +739,10 @@ class signature_emitter:
         db, strides = self.program.offsets, self.program.strides
         for comp, oid in block.advance.items():
             step = self.bytes_of(comp, db.elements_offset(oid, strides.get(comp, {})))
+            # the address registers the model set up: pointers and scratch
+            # addresses are recomputed from them each iteration
             for (c, reg), areg in sorted(self.aregs.items(), key=lambda x: x[0]):
-                if c == comp:
+                if c == comp and (c, reg) in self.program.addr_setup:
                     out.advance += [l.strip() for l in self.add_bytes(areg, step, comp)]
                     if block.tail_step is not None:
                         one = db.add(comp, {block.loop_index: block.tail_step})
@@ -631,7 +757,16 @@ class signature_emitter:
 
     def emit(self) -> emitted_program:
         import copy
-        setup = self.setup_addresses()
+        # what the ISA needs set up: SVE's all-true predicate, SME's smstart,
+        # RVV's vsetvli - for the narrowest element type, so a predicate covers
+        # every lane of every operation
+        dt = min(self.ctx.component_dts.values(), key=adt_size)
+        isa = self.gen.isa_setup()
+        lines = lambda text: [l.strip() for l in text.splitlines() if l.strip()]
+        # registers an operation limits go first, from the bottom
+        for key in sorted(self.bounds, key=self.bounds.get):
+            self.reg(lsc_reg_index(key[0], [key[1]]), key[2])
+        setup = lines(isa.setup(rt=self.rt, dt=dt)) + self.setup_addresses()
         prefix = self.program.blocks
         case_blocks = [b for c in self.program.cases for b in c.blocks]
         blocks = [self.block(b, prefix[i + 1:] + case_blocks) for i, b in enumerate(prefix)]
@@ -648,5 +783,6 @@ class signature_emitter:
         bases.update({f"{f} in bytes": str(r) for f, r in self.strides_in.items()})
         return emitted_program(
             setup=setup, blocks=blocks, cases=cases,
+            teardown=lines(isa.teardown(rt=self.rt, dt=dt)), data=lines(isa.data()),
             bases=bases,
             registers={k: str(v) for k, v in self.phys.items()})

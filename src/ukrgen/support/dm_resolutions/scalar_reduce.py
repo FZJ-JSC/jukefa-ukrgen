@@ -48,7 +48,7 @@ class scalar_reduce_provider(resolution_provider):
 
     # use_lane loads one lane per element, so it works for any layout; a full
     # set of lanes is fused into one load by an irmod where they are contiguous
-    WHOLE_VECTOR_IN = frozenset({"bc_lane"})
+    WHOLE_VECTOR_IN = frozenset({"bc_lane", "bc_block"})
 
     def _register(self, registry : resolution_registry):
 
@@ -113,6 +113,22 @@ class scalar_reduce_provider(resolution_provider):
                                 orig_ref(): {omod.BCAST}
                                 })
                     ]))
+
+        # example SVE, an FMA using one element of each 128-bit block:
+        # ld1rqd {z1.d}, p0/z, [x5]          (b0 b1 | b0 b1 | ...)
+        # fmla z2.d, z3.d, z1.d[0]
+        # fmla z4.d, z3.d, z1.d[1]
+        if hasattr(omod, "BLOCK"):
+            registry.add_resolution(
+                key=tfr_key(tfs=frozenset({tf.SCALAR_REDUCE}),
+                            rtype=rgt.VEC, ddir=dmd.IN),
+                rsln=tr(
+                    unique_tag='bc_block',
+                    opd_mod_reqs={omod.BLOCKLANE},
+                    steps=[
+                        dm_step(op="load", dest=orig_ref(), dest_rtype=rgt.VEC,
+                                opd_mod_reqs={orig_ref() : {omod.BLOCK, omod.BCAST}}),
+                        ]))
 
         # example NEON:
         # ld1 {v1.d}[0], [x5]
