@@ -58,20 +58,24 @@ class test_control(unittest.TestCase):
         self.assertEqual("ret", p.exit[-1])
 
     def test_dispatch(self):
-        # beta's and alpha's bits against the cases' values: 0, and 1.0
+        # beta and alpha loaded at their size and compared as floating point
+        # with the cases' values: 0, and 1.0 from its bits
         ctx, res = gemm("neon")
         p = ctx.emitted[0]
         beta, alpha = p.params["base(beta)"], p.params["base(alpha)"]
-        self.assertTrue(any(l.endswith(f"[{beta},#0]") for l in p.code))
-        self.assertTrue(any(l.endswith(f"[{alpha},#0]") for l in p.code))
+        self.assertTrue(any(l.startswith("ldr d") and l.endswith(f"[{beta},#0]") for l in p.code))
+        self.assertTrue(any(l.startswith("ldr d") and l.endswith(f"[{alpha},#0]") for l in p.code))
         self.assertTrue(any(l.endswith("#4607182418800017408") for l in p.code))
+        self.assertTrue(any(l.startswith("fcmp") for l in p.code))
 
     def test_registers_reused(self):
-        # k's register is free after the loop: the dispatch loads into it
+        # k's register is free after the loop: the dispatch reuses it
         ctx, res = gemm("neon")
         p = ctx.emitted[0]
+        k = p.params["k"]
         after = p.code[next(i for i, l in enumerate(p.code) if l.endswith("_taildone:")):]
-        self.assertTrue(any(l.startswith(f"ldr {p.params['k']},") for l in after))
+        self.assertTrue(any(l.split()[0] in ("mov", "ldr") and l.split()[1].startswith(f"{k},")
+                            for l in after))
 
 
 if __name__ == "__main__":

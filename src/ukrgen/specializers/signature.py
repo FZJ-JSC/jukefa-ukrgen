@@ -109,7 +109,9 @@ class emitted_program:
         The program as an assembly function: the symbol, then every
         instruction
         """
-        return [".text", f".global {name}", f"{name}:"] + self.instructions()
+        # no executable stack: GNU linkers assume one without this note
+        return [".text", f".global {name}", f"{name}:"] + self.instructions() \
+            + ['.section .note.GNU-stack,"",%progbits']
 
     def render(self) -> str:
         lines = ["// bases: " + ", ".join(f"{c} in {r}" for c, r in self.bases.items())]
@@ -917,7 +919,14 @@ class signature_emitter:
     def block(self, block: ir_block, later: list[ir_block] = ()) -> emitted_block:
         out = emitted_block(name=block.name, loop_index=block.loop_index)
         if block.loop_index is not None:
-            for section in ("prologue", "body", "epilogue", "tail", "subtail"):
+            # zeroing the accumulators goes before anything a loop may skip:
+            # with no full iterations only the tail runs
+            prologue = list(block.prologue)
+            out.sections["init"] = [line for op in prologue if isinstance(op, lsc_zero)
+                                    for line in self.emit_op(op)]
+            out.sections["prologue"] = [line for op in prologue if not isinstance(op, lsc_zero)
+                                        for line in self.emit_op(op)]
+            for section in ("body", "epilogue", "tail", "subtail"):
                 out.sections[section] = [line for op in getattr(block, section)
                                          for line in self.emit_op(op)]
         else:
@@ -1131,34 +1140,35 @@ class signature_emitter:
 
     def dispatch(self) -> list[str]:
         """
-        Find the first case whose conditions hold: alpha and beta compared
-        bitwise to the values the conditions name (cb) - a value like -0.0
-        takes a more general case, which computes the same
+        Find the first case whose conditions hold: alpha and beta loaded at
+        their own size and compared as floating point (cb) to the values the
+        conditions name - so -0.0 counts as 0, and NaN as no value named
         """
         import struct
         gen = self.gen
         lines = []
         self.dispatch_tag = next(self.labels)
+
+        def freg(dt):
+            return gen.freg(self.rt.reserve_any_reg("freg"), dt)
+
         for i, c in enumerate(self.program.cases):
             following = f"ukr{self.dispatch_tag}_try{i + 1}"
             for var, value in c.when.items():
                 dt = self.ctx.component_dts[var]
                 size = adt_size(dt)
-                bits = struct.unpack("<Q" if 8 == size else "<I",
-                                     struct.pack("<d" if 8 == size else "<f", float(value)))[0]
-                t = self.greg()
-                lines.append(gen.load_greg(areg=self.params[f"base({var})"], offset=0, dst=t))
-                if 4 == size:
-                    # the value's 32 bits, above the bits loaded beyond it
-                    lines.append(gen.shift_greg_left(reg=t, bit_count=32))
-                    bits <<= 32
-                if 0 == bits:
-                    lines.append(gen.cb(reg1=t, reg2=None, cmp=comparison.NZ, label=following))
+                v, k, t = freg(dt), freg(dt), self.greg()
+                lines.append(gen.load_freg(areg=self.params[f"base({var})"], offset=0, dst=v, dt=dt))
+                if 0 == float(value):
+                    lines.append(gen.zero_freg(freg=k, dt=dt))
                 else:
-                    c_reg = self.greg()
-                    lines.append(gen.mov_greg_imm(reg=c_reg, imm=bits))
-                    lines.append(gen.cb(reg1=t, reg2=c_reg, cmp=comparison.NE, label=following))
-                    self.rt.unuse_reg("greg", c_reg.idx)
+                    bits = struct.unpack("<Q" if 8 == size else "<I",
+                                         struct.pack("<d" if 8 == size else "<f", float(value)))[0]
+                    lines.append(gen.mov_greg_imm(reg=t, imm=bits))
+                    lines.append(gen.mov_greg_to_freg(src=t, dst=k, dt=dt))
+                lines.append(gen.cb(reg1=v, reg2=k, cmp=comparison.NE, label=following, dt=dt, greg=t))
+                for r in (v, k):
+                    self.rt.unuse_reg("freg", r.idx)
                 self.rt.unuse_reg("greg", t.idx)
             lines.append(gen.jump(label=f"ukr{self.dispatch_tag}_case{i}"))
             lines.append(gen.label(label=following))
@@ -1249,6 +1259,7 @@ class signature_emitter:
             n = n or self.params[block.loop_index]
             tag = next(self.labels)
             done = f"ukr{tag}_done"
+            code.extend(sec.get("init", []))
             code.extend(lines(gen.cb(reg1=n, reg2=None, cmp=ez, label=done)))
             code.extend(sec.get("prologue", []))
             code.extend(lines(gen.add_greg_imm(reg=n, imm=-1)))
