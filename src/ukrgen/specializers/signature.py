@@ -412,6 +412,17 @@ class signature_emitter:
                 f"{op.rsln} access to {self.program.offsets[op.offset]} is not a constant "
                 f"offset from its address register: specialize the IR first")
         immediate = rel.get((), 0) * adt_size(self.ctx.component_dts[comp])
+        increment = getattr(op, "increment", None)
+        if increment is not None:
+            # a post-increment: the access at the register, then the register on
+            line = self._mem(op, self.reg(op.indices[1], op.rtypes[1]), areg, immediate,
+                             increment=dict(increment.terms).get((), 0)
+                             * adt_size(self.ctx.component_dts[comp]))
+            if line is None:
+                raise specialization_error(
+                    f"no signature of {op.step.op} post-increments by {increment} elements")
+            self.positions[(comp, reg)] = self.positions[(comp, reg)] + increment
+            return [line]
         line = self._mem(op, self.reg(op.indices[1], op.rtypes[1]), areg, immediate)
         if line is None:
             raise specialization_error(
@@ -434,7 +445,7 @@ class signature_emitter:
         self.positions[dest_key] = self.positions[src_key] + op.delta
         return lines
 
-    def _mem(self, op, data, areg, immediate: int) -> str | None:
+    def _mem(self, op, data, areg, immediate: int, increment: int | None = None) -> str | None:
         """
         The access through the first signature taking it with this immediate
         offset (0: one without an offset)
@@ -444,7 +455,11 @@ class signature_emitter:
         for sig in sorted(_sigs(op.sigs), key=lambda s: len(s.modifiers)):
             mods = {m.name for m in sig.modifiers} - {"MASK"}
             kwargs = {}
-            if {"IOFFSET"} == mods:
+            if increment is not None:
+                if {"POSTINC"} != mods or immediate:
+                    continue
+                kwargs["iinc"] = increment
+            elif {"IOFFSET"} == mods:
                 kwargs["ioffset"] = immediate
             elif mods or immediate:
                 continue
