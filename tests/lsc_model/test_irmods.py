@@ -61,3 +61,45 @@ class test_ldinc(unittest.TestCase):
                 ctx, _ = run(["ldinc"], n=n, k=k, **{"B-data-regs": regs})
                 ok, err = assembles(ctx.emitted[0].instructions())
                 self.assertTrue(ok, err)
+
+
+class test_lanefuse(unittest.TestCase):
+
+    LANE_FMA = "fma[bdreg:ILANE](A.VEC:direct, B.VEC:use_lane, C.VEC){i=m, n=1, k*=1}"
+
+    def run_lanes(self, model_irmods, **extra):
+        from ukrgen.flow.stages.irmods import model_irmod_stage
+        from ukrgen.flow.stages.isa_specialize import isa_specialize_stage
+        import specializers.test_signature as base
+        saved = base.STAGES
+        base.STAGES = saved[:7] + [model_irmod_stage, isa_specialize_stage, irmod_stage, emit_stage]
+        try:
+            return base.mm(**{"mm-to": [self.LANE_FMA], "n": "4", "model-irmods": model_irmods,
+                              **extra})
+        finally:
+            base.STAGES = saved
+
+    def lane_loads(self, ctx):
+        return [op for op in ops(ctx) if isinstance(op, lsc_load) and ldst_modifier.lane in op.mods]
+
+    def test_contiguous_lanes_fuse(self):
+        ctx, res = self.run_lanes(["lanefuse"])
+        self.assertTrue(res.completed, res.output)
+        self.assertEqual([], self.lane_loads(ctx))
+        unfused, _ = self.run_lanes([])
+        self.assertTrue(self.lane_loads(unfused))
+
+    def test_strided_lanes_stay(self):
+        # B strided along n: its lanes are not contiguous
+        ctx, res = self.run_lanes(["lanefuse"], **{"B-layout": ["k:c", "n:s"]})
+        self.assertTrue(res.completed, res.output)
+        self.assertTrue(self.lane_loads(ctx))
+
+    @unittest.skipUnless(shutil.which("aarch64-linux-gnu-as"), "needs an AArch64 assembler")
+    def test_assembles(self):
+        for irmods, layout in ((["lanefuse"], ["n:c", "k:p"]), ([], ["n:c", "k:p"]),
+                               (["lanefuse"], ["k:c", "n:s"])):
+            with self.subTest(irmods=irmods, layout=layout):
+                ctx, _ = self.run_lanes(irmods, **{"B-layout": layout})
+                ok, err = assembles(ctx.emitted[0].instructions())
+                self.assertTrue(ok, err)

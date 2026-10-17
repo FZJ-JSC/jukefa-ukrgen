@@ -106,10 +106,13 @@ class test_strided(unittest.TestCase):
     def test_scalar_reduced_any_layout(self):
         # B is broadcast one element at a time: that works for any layout. Only
         # taking lanes from a whole loaded vector needs a contiguous index.
-        whole_vector = {"use_lane", "bc_lane"}
+        # use_lane loads lane by lane, so it works strided too; bc_lane needs
+        # the whole vector
+        whole_vector = {"bc_lane"}
         contiguous = tags(listing("neon", b="n"), "B", "mm")
         strided = tags(listing("neon", b=None), "B", "mm")
-        self.assertTrue(whole_vector & contiguous)
+        self.assertIn("use_lane", contiguous)
+        self.assertIn("use_lane", strided)
         self.assertFalse(whole_vector & strided)
         self.assertIn("bc_load", strided)
         self.assertEqual(contiguous - whole_vector, strided)

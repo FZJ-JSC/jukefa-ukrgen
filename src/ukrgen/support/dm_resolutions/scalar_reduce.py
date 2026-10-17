@@ -46,7 +46,9 @@ class scalar_reduce_provider(resolution_provider):
                     continue
                 registry.add_resolution(key=replace(key, loc=dml.STRIDED_MEMORY), rsln=rsln)
 
-    WHOLE_VECTOR_IN = frozenset({"bc_lane", "use_lane"})
+    # use_lane loads one lane per element, so it works for any layout; a full
+    # set of lanes is fused into one load by an irmod where they are contiguous
+    WHOLE_VECTOR_IN = frozenset({"bc_lane"})
 
     def _register(self, registry : resolution_registry):
 
@@ -113,21 +115,22 @@ class scalar_reduce_provider(resolution_provider):
                     ]))
 
         # example NEON:
-        # ldr q1, [x5]
+        # ld1 {v1.d}[0], [x5]
+        # ld1 {v1.d}[1], [x6]
         # fmla v2.2d, v3.2d, v1.d[0]
         # fmla v4.2d, v3.2d, v1.d[1]
+        # (the lanefuse irmod makes the two loads one where they are contiguous)
         registry.add_resolution(
             key=tfr_key(tfs=frozenset({tf.SCALAR_REDUCE}),
                         rtype=rgt.VEC, ddir=dmd.IN),
             rsln=tr(
                 unique_tag='use_lane',
                 opd_mod_reqs={omod.ILANE},
-                # the whole vector is loaded once; the operation then uses one
-                # of its lanes per element - which is why this resolution needs
-                # a contiguous index (WHOLE_VECTOR_IN). A load into a single
-                # lane would leave the register's other lanes unloaded.
+                # each element is loaded into the lane the operation uses it
+                # from: any layout works
                 steps=[
-                    dm_step(op="load", dest=orig_ref(), dest_rtype=rgt.VEC),
+                    dm_step(op="load", dest=orig_ref(), dest_rtype=rgt.VEC,
+                            opd_mod_reqs={orig_ref() : {omod.ILANE}}),
                     ]))
 
         # example neon:

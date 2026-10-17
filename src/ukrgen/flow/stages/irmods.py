@@ -7,7 +7,7 @@ import logging
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
-from ...lsc_model.irmods import IRMODS
+from ...lsc_model.irmods import IRMODS, MODEL_IRMODS
 
 
 class irmod_stage(stage):
@@ -41,5 +41,30 @@ class irmod_stage(stage):
             raise early_exit(text)
         for line in text.splitlines():
             self.debug(line)
+        self.context.params.update(self.params)
+        return []
+
+
+class model_irmod_stage(stage):
+    """
+    Runs IR modifications over the model's IR, before specialization for the
+    ISA, in the order given:
+
+        lanefuse  fuse loads into all lanes of a register into one load where
+                  the lanes are contiguous
+    """
+
+    def __init__(self, context : ukr_context):
+        super().__init__(context)
+        self.params["model-irmods"] = stage_param(
+                value=["lanefuse"], default=["lanefuse"], multi=True, required=False,
+                choices=list(MODEL_IRMODS),
+                description="IR modifications before specialization, in order "
+                            "(default: lanefuse)")
+
+    def progress(self):
+        for name in self.params["model-irmods"].value or []:
+            for program in self.context.programs:
+                MODEL_IRMODS[name](self.context, program)
         self.context.params.update(self.params)
         return []

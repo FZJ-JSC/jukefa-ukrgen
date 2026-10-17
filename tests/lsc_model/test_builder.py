@@ -217,12 +217,22 @@ class test_builder_resolutions(unittest.TestCase):
         self.assertEqual({"lanes"}, {op.rsln for op in a})
 
     def test_lane_fma(self):
+        # each element is loaded into the lane the FMA uses it from; lanefuse
+        # makes the two lanes of a register one load, as B is contiguous
+        from ukrgen.lsc_model.irmods import lanefuse
+        from ukrgen.models.load_store_operations import ldst_modifier
         ctx, res = run(isa="neon", n="4", m="1", **{
             "mm-to": ["fma[bdreg:ILANE](A.VEC:direct, B.VEC:use_lane, AB.VEC){i=m, n=1, k*=1}"]})
-        mm = program_builder(ctx, preload=False).build().blocks[0]
-        self.assertEqual(2, len(loads(mm.body, "B")))
+        prog = program_builder(ctx, preload=False).build()
+        mm = prog.blocks[0]
+        self.assertEqual([0, 1, 0, 1], [op.properties.get("lane") for op in loads(mm.body, "B")])
         computes = [op for op in mm.body if isinstance(op, lsc_transformation)]
-        self.assertEqual([0, 1, 0, 1], [op.indices[op.hw_operands.index("bdreg")].indices[1] for op in computes])
+        self.assertEqual([0, 1, 0, 1],
+                         [op.indices[op.hw_operands.index("bdreg")].indices[1] for op in computes])
+        lanefuse(ctx, prog)
+        fused = loads(prog.blocks[0].body, "B")
+        self.assertEqual(2, len(fused))
+        self.assertFalse(any(ldst_modifier.lane in op.mods for op in fused))
 
 
 class test_model_stage(unittest.TestCase):

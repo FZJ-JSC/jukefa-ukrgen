@@ -102,7 +102,8 @@ def lane_axes(gen: asmgen,
     """
     Operands an implementation uses one element at a time out of a register
     holding several: an FMA by element (NEON fmla v0.2d, v1.2d, v2.d[1]) on
-    a vector of B loaded whole (use_lane). Consecutive elements along the
+    elements of B loaded lane by lane (use_lane) - one load where the lanes are
+    contiguous, after the lanefuse irmod. Consecutive elements along the
     operand's index share a register, one per lane.
 
     The lanes run along the index the operand was loaded along - the one it is

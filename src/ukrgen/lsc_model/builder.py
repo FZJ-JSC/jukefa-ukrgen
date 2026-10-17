@@ -134,6 +134,8 @@ class program_builder:
         self.resolve_order = resolve_order or [c.name for c in self.comp.get_components()]
 
         self.holder: dict[vreg, tuple] = {}
+        # for registers loaded lane by lane: (register, lane) -> what it holds
+        self.lane_holder: dict[tuple, tuple] = {}
         self.future: list[dict] = []
         self.pos = 0
         self.clock = 0
@@ -270,7 +272,7 @@ class program_builder:
 
     def move_data(self, sto: str, tiling, comp: str, coord: tuple, reg: vreg,
                   steps, direction: str, tag: str,
-                  memory: str | None = None) -> list[lsc_operation]:
+                  memory: str | None = None, lane: int | None = None) -> list[lsc_operation]:
         """
         The operations of one data movement: its steps in order, a repeated
         step once per lane, each load or store at the tile's address - in
@@ -282,7 +284,7 @@ class program_builder:
         for rs in steps:
             step = rs.step
             sigs = getattr(rs, "sg", None) or self.step_sigs(step, dt)
-            lanes = [None]
+            lanes = [lane]
             if step.repeat is not None:
                 lanes = list(range(self.gen.simd_size // adt_size(dt)))
             for lane in lanes:
@@ -348,7 +350,22 @@ class program_builder:
                     reg = self.reg_of(math, rtype, coord)
                     tile = tiling.registers[math]
                     strat = res.operand_strategies.get((hw, dmd.IN))
-                    if is_read and strat is not None and strat.rsln.steps:
+                    by_lane = [l for l in op.lane(math) if l is not None]
+                    if is_read and strat is not None and strat.rsln.steps and by_lane \
+                            and _lane_steps(strat.rsln.steps):
+                        # loaded lane by lane: each element into the lane the
+                        # operation uses it from
+                        if self.lane_holder.get((reg, by_lane[0])) != (math, coord):
+                            access = read_access.STREAM == self.flow[(sto, math)].read
+                            loads.append(access_group(
+                                math, reg,
+                                self.move_data(sto, tiling, math, coord, reg,
+                                               strat.resolved_steps, "load",
+                                               strat.rsln.unique_tag, lane=by_lane[0]),
+                                access, coord))
+                            self.lane_holder[(reg, by_lane[0])] = (math, coord)
+                        self.holder[reg] = (math, coord)
+                    elif is_read and strat is not None and strat.rsln.steps:
                         if self.holder.get(reg) != (math, coord):
                             access = read_access.STREAM == self.flow[(sto, math)].read
                             loads.append(access_group(
@@ -385,6 +402,8 @@ class program_builder:
                 read_regs))
             for reg, math, coord in written:
                 self.holder[reg] = (math, coord)
+                for key in [k for k in self.lane_holder if k[0] == reg]:
+                    del self.lane_holder[key]
         return items
 
     def emit_store(self, sto: str, tiling, op) -> list:
@@ -432,6 +451,8 @@ class program_builder:
         """
         for reg in [r for r, (c, _) in self.holder.items() if c in components]:
             del self.holder[reg]
+        for key in [k for k, (c, _) in self.lane_holder.items() if c in components]:
+            del self.lane_holder[key]
 
     # --- blocks ----------------------------------------------------------------
 
@@ -586,6 +607,14 @@ class _step:
     """
     step : object
     sg : object = None
+
+
+def _lane_steps(steps) -> bool:
+    """
+    Whether a data movement loads into a single lane of its register
+    """
+    return any(omod.ILANE in mods for step in steps
+               for mods in (getattr(step, "opd_mod_reqs", None) or {}).values())
 
 
 def _index(reg: vreg, lane: int | None = None) -> lsc_reg_index:
