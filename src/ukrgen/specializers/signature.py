@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from asmgen.callconv.fngen import fngen
+from asmgen.asmblocks.noarch import comparison
 from asmgen.asmblocks.op import (
     register_type as rgt,
     operand_role as orl,
@@ -53,6 +55,11 @@ class emitted_block:
     loop_index : str | None
     sections : dict[str, list[str]] = field(default_factory=dict)
     advance : list[str] = field(default_factory=list)
+    #: what the region needs set up at its start: address registers from the
+    #: parameters, loop counts
+    loads : list[str] = field(default_factory=list)
+    #: a loop's counters: iterations, then the tail's
+    counters : tuple | None = None
     tail_advance : list[str] = field(default_factory=list)
 
 
@@ -71,17 +78,38 @@ class emitted_program:
     registers : dict[tuple, str]
     teardown : list[str] = field(default_factory=list)
     data : list[str] = field(default_factory=list)
+    #: the program with its control flow - loops, the dispatch on cases -
+    #: between setup and teardown
+    code : list[str] = field(default_factory=list)
+    #: the function's parameters in order, each in the register named - k per
+    #: loop, base(X) per component's start address, stride(X,i) in bytes - as
+    #: the calling convention passes them (asmgen's callconv)
+    params : dict[str, str] = field(default_factory=dict)
+    #: the function's boilerplate: saving the callee-saved registers the code
+    #: clobbers and loading parameters passed on the stack; restoring, return
+    entry : list[str] = field(default_factory=list)
+    exit : list[str] = field(default_factory=list)
 
     def instructions(self) -> list[str]:
         """
         Every instruction, in program order, ignoring loop structure
         """
         out = list(self.setup)
+        if self.code:
+            return list(self.entry) + out + list(self.code) + list(self.teardown) \
+                + list(self.exit) + list(self.data)
         for block in self.blocks + [b for _, _, bs in self.cases for b in bs]:
             for lines in block.sections.values():
                 out += lines
             out += block.advance + block.tail_advance
         return out + list(self.teardown) + list(self.data)
+
+    def function(self, name: str) -> list[str]:
+        """
+        The program as an assembly function: the symbol, then every
+        instruction
+        """
+        return [".text", f".global {name}", f"{name}:"] + self.instructions()
 
     def render(self) -> str:
         lines = ["// bases: " + ", ".join(f"{c} in {r}" for c, r in self.bases.items())]
@@ -413,6 +441,8 @@ class signature_emitter:
         self.vlb: dict[int, object] = {}
         self.masks: dict = {}
         self.indexes: dict = {}
+        self.region_loads: list[str] = []
+        self.labels = iter(range(10**6))
         isa = self.gen.isa_setup()
         self.vector_length_kept = isa.predication().name == "IMPLICIT" \
             if hasattr(isa, "predication") else False
@@ -539,36 +569,11 @@ class signature_emitter:
     def bytes_of(self, component: str, elements: sym) -> sym:
         return elements * adt_size(self.ctx.component_dts[component])
 
-    def setup_addresses(self) -> list[str]:
+    def stride_reg(self, factor: str, setup: bool = False):
         """
-        A base register per memory component, to be bound to the kernel's
-        arguments, and each address register started at its first access
+        The register holding a run-time stride in bytes: its parameter's
         """
-        lines = []
-        self.bases: dict[str, object] = {}
-        self.aregs: dict[tuple[str, int], object] = {}
-        self.positions: dict[tuple[str, int], sym] = {}
-        db, strides = self.program.offsets, self.program.strides
-        for (comp, reg), oid in sorted(self.program.addr_setup.items()):
-            lines = [l.strip() for l in lines]
-            if comp not in self.bases:
-                self.bases[comp] = self.greg()
-            areg = self.greg()
-            self.aregs[(comp, reg)] = areg
-            start = db.elements_offset(oid, strides.get(comp, {}))
-            self.positions[(comp, reg)] = start
-            lines.append(self.gen.mov_greg(src=self.bases[comp], dst=areg))
-            lines += self.add_bytes(areg, self.bytes_of(comp, start), comp)
-        return [l.strip() for l in lines]
-
-    def stride_reg(self, factor: str):
-        """
-        The register holding a run-time stride, in bytes: bound to a kernel
-        argument like the base addresses
-        """
-        if factor not in self.strides_in:
-            self.strides_in[factor] = self.greg()
-        return self.strides_in[factor]
+        return self.params[factor]
 
     def add_bytes(self, areg, amount: sym, comp: str) -> list[str]:
         """
@@ -592,7 +597,7 @@ class signature_emitter:
                     reg = self.greg()
                     self.strides_in[key] = reg
                     self.late_setup.append(self.gen.mul_greg_greg(
-                        dst=reg, reg1=vlreg, reg2=self.stride_reg(factors[1])))
+                        dst=reg, reg1=vlreg, reg2=self.stride_reg(factors[1], setup=True)))
                 lines += [self.gen.add_greg_greg(dst=areg, reg1=areg,
                                                  reg2=self.strides_in[key])] * (coeff // esize)
             elif ("VL",) == factors and coeff > 0 and 0 == coeff % esize \
@@ -704,7 +709,7 @@ class signature_emitter:
         comp = op.indices[0].component
         key = (comp, op.properties.get("stride_index"))
         if key not in self.indexes:
-            stride = self.stride_of(op)
+            stride = self.stride_of(op, setup=True)
             if stride is None:
                 return None
             vreg = self.gen.vreg(self.rt.reserve_any_reg("vreg"))
@@ -717,7 +722,7 @@ class signature_emitter:
             self.indexes[key] = vreg
         return self.indexes[key]
 
-    def stride_of(self, op):
+    def stride_of(self, op, setup: bool = False):
         """
         The register holding a strided access's stride in bytes: the run-time
         stride register, or a constant stride loaded once
@@ -730,7 +735,7 @@ class signature_emitter:
         terms = dict(stride.terms)
         if 1 == len(terms) and 1 == list(terms.values())[0] and list(terms)[0] \
                 and list(terms)[0][0].startswith("stride("):
-            return self.stride_reg(list(terms)[0][0])
+            return self.stride_reg(list(terms)[0][0], setup=setup)
         if set(terms) <= {()}:
             nbytes = terms.get((), 0) * adt_size(self.ctx.component_dts[comp])
             key = f"constant stride {nbytes}"
@@ -978,26 +983,68 @@ class signature_emitter:
         dt = min(self.ctx.component_dts.values(), key=adt_size)
         isa = self.gen.isa_setup()
         lines = lambda text: [l.strip() for l in text.splitlines() if l.strip()]
+        # the function's parameters where the calling convention puts them
+        self.parameters()
         # registers an operation limits go first, from the bottom
         for key in sorted(self.bounds, key=self.bounds.get):
             self.reg(lsc_reg_index(key[0], [key[1]]), key[2])
         setup = lines(isa.setup(rt=self.rt, dt=dt))
         self.isa_setup_lines = len(setup)
-        setup += self.setup_addresses()
+        # regions - each block, the dispatch, each case - set up what they
+        # need at their start and release, at their end, what no later region
+        # needs: parameters live only as long as they are used
+        self.bases, self.aregs, self.positions = {}, {}, {}
         prefix = self.program.blocks
         case_blocks = [b for c in self.program.cases for b in c.blocks]
-        blocks = [self.block(b, prefix[i + 1:] + case_blocks) for i, b in enumerate(prefix)]
-        # every case starts with the address and data registers where the blocks
-        # before the branch leave them
-        start = (dict(self.positions), dict(self.phys), dict(self.numbers), copy.deepcopy(self.rt))
+        regions = [self.memory_comps([b]) for b in prefix]
+        case_comps = [self.memory_comps(c.blocks) for c in self.program.cases]
+        conditions = {v for c in self.program.cases for v in c.when}
+        loops = [b.loop_index for b in prefix + case_blocks]
+        blocks = []
+        for i, b in enumerate(prefix):
+            later = set().union(*regions[i + 1:], *case_comps, conditions)
+            new_before = set(self.aregs)
+            self.region_loads = self.start_addresses(regions[i], later)
+            counters = None
+            if b.loop_index is not None:
+                counters, count_lines = self.loop_counts(b, b.loop_index in loops[i + 1:])
+                self.region_loads += count_lines
+            out = self.block(b, prefix[i + 1:] + case_blocks)
+            out.loads, out.counters = self.region_loads, counters
+            blocks.append(out)
+            # pointers the block computed, and what no later region uses
+            new = set(self.aregs) - new_before
+            self.release_aregs({k for k in self.aregs
+                                if k[0] not in later or (k in new and k not in self.program.addr_setup)})
+            for reg in counters or ():
+                if reg is not None:
+                    self.rt.unuse_reg("greg", reg.idx)
+            self.release_params(later, set(loops[i + 1:]))
+        self.dispatch_code = self.dispatch() if self.program.cases else []
+        # every case starts with the registers where the dispatch leaves them;
+        # the cases exclude each other, so they share the registers left, and
+        # a parameter's register can become an address register in each
+        start = (dict(self.positions), dict(self.phys), dict(self.numbers),
+                 copy.deepcopy(self.rt), dict(self.aregs), set(self.live_params))
+        main_rt = self.rt
         cases = []
-        for c in self.program.cases:
+        for j, c in enumerate(self.program.cases):
             self.positions, self.phys, self.numbers = dict(start[0]), dict(start[1]), dict(start[2])
-            self.rt = copy.deepcopy(start[3])
-            cases.append((c.label, c.when,
-                          [self.block(b, list(c.blocks[i + 1:])) for i, b in enumerate(c.blocks)]))
-        bases = {c: str(r) for c, r in self.bases.items()}
-        bases.update({f"{f} in bytes": str(r) for f, r in self.strides_in.items()})
+            self.rt, self.aregs, self.live_params = copy.deepcopy(start[3]), dict(start[4]), set(start[5])
+            self.region_loads = self.start_addresses(case_comps[j], set())
+            out = [self.block(b, list(c.blocks[i + 1:])) for i, b in enumerate(c.blocks)]
+            if out:
+                out[0].loads = self.region_loads + out[0].loads
+            cases.append((c.label, c.when, out))
+            for tag, regs in self.rt.clobbered_regs.items():
+                main_rt.clobbered_regs.setdefault(tag, set()).update(regs)
+        if self.program.cases:
+            self.rt = main_rt
+        bases = {n[5:-1]: str(r) for n, r in self.params.items() if n.startswith("base(")}
+        # what the code clobbers is known now: the function's boilerplate,
+        # loading stack parameters at entry into the registers they had then
+        self.fn.rt.aliased_regs.setdefault("greg", {}).update(self.param_aliases)
+        save, load, restore = self.fn.get_boilerplate(cc=self.cc)
         # what emission found it needs: right after the ISA's setup
         late = [l.strip() for chunk in self.late_setup for l in chunk.splitlines() if l.strip()]
         setup = setup[:self.isa_setup_lines] + late + setup[self.isa_setup_lines:]
@@ -1005,4 +1052,229 @@ class signature_emitter:
             setup=setup, blocks=blocks, cases=cases,
             teardown=lines(isa.teardown(rt=self.rt, dt=dt)), data=lines(isa.data()),
             bases=bases,
-            registers={k: str(v) for k, v in self.phys.items()})
+            registers={k: str(v) for k, v in self.phys.items()},
+            code=self.control(blocks, cases),
+            params={n: str(r) for n, r in self.params.items()},
+            entry=lines(save) + lines(load), exit=lines(restore) + lines(self.gen.ret()))
+
+    # --- control flow ---------------------------------------------------------
+
+    def parameters(self):
+        """
+        The function's parameters, declared to the calling convention and
+        aliased in the register tracker where it passes them (fngen): k per
+        loop, each component's start address, each run-time stride in bytes
+        """
+        names = []
+        for b in self.program.blocks + [b for c in self.program.cases for b in c.blocks]:
+            if b.loop_index is not None and b.loop_index not in names:
+                names.append(b.loop_index)
+        for comp in dict.fromkeys(c for c, _ in sorted(self.program.addr_setup)):
+            names.append(f"base({comp})")
+        factors = set()
+        for idxs in self.program.strides.values():
+            for stride in idxs.values():
+                for term in dict(stride.terms):
+                    factors.update(f for f in term if f.startswith("stride("))
+        names += sorted(factors)
+        self.cc = self.gen.create_callconv()
+        for name in names:
+            self.cc.add_param("greg", name)
+        self.fn = fngen(gen=self.gen, rt=self.rt)
+        self.fn.init_cc(cc=self.cc)
+        self.params = {n: self.gen.greg(self.rt.aliased_regs["greg"][n]) for n in names}
+        self.live_params = set(names)
+        # the boilerplate finds where parameters passed on the stack are
+        # loaded through these aliases, which releasing a register drops
+        self.param_aliases = {n: self.rt.aliased_regs["greg"][n] for n in names}
+
+    def param_comp(self, name: str):
+        return name[name.index("(") + 1:].split(",")[0].rstrip(")") if "(" in name else None
+
+    def release_params(self, later: set, later_loops: set):
+        """
+        Parameters no later region uses: their registers are free
+        """
+        for name in sorted(self.live_params):
+            comp = self.param_comp(name)
+            needed = comp in later if comp is not None else name in later_loops
+            if not needed:
+                self.live_params.discard(name)
+                reg = self.params[name]
+                if reg.idx in self.rt.get_used_regs("greg"):
+                    self.rt.unuse_reg("greg", reg.idx)
+
+    def loop_counts(self, block, shared: bool):
+        """
+        A loop's counters from its k parameter (kiterkleft): the iterations,
+        each taking the elements of one, and what is left for the tail
+        """
+        k = self.params[block.loop_index]
+        terms = dict(block.step.terms)
+        if set(terms) != {()}:
+            raise specialization_error(f"{block.name}: a step of {block.step} elements is not "
+                                       "counted yet")
+        if 1 == int(terms[()]):
+            # one element an iteration: k counts them, nothing is left over
+            return (None, None), []
+        lines = []
+        if shared:
+            # a later loop counts the same k: count a copy
+            copy_reg = self.greg()
+            lines.append(self.gen.mov_greg(src=k, dst=copy_reg))
+            k = copy_reg
+        left, tmp = self.greg(), self.greg()
+        lines.append(self.gen.kiterkleft(kreg=k, kleftreg=left, tmpreg=tmp, unroll=int(terms[()])))
+        self.rt.unuse_reg("greg", tmp.idx)
+        return (k if shared else None, left), [l.strip() for chunk in lines for l in chunk.splitlines()
+                                               if l.strip()]
+
+    def dispatch(self) -> list[str]:
+        """
+        Find the first case whose conditions hold: alpha and beta compared
+        bitwise to the values the conditions name (cb) - a value like -0.0
+        takes a more general case, which computes the same
+        """
+        import struct
+        gen = self.gen
+        lines = []
+        self.dispatch_tag = next(self.labels)
+        for i, c in enumerate(self.program.cases):
+            following = f"ukr{self.dispatch_tag}_try{i + 1}"
+            for var, value in c.when.items():
+                dt = self.ctx.component_dts[var]
+                size = adt_size(dt)
+                bits = struct.unpack("<Q" if 8 == size else "<I",
+                                     struct.pack("<d" if 8 == size else "<f", float(value)))[0]
+                t = self.greg()
+                lines.append(gen.load_greg(areg=self.params[f"base({var})"], offset=0, dst=t))
+                if 4 == size:
+                    # the value's 32 bits, above the bits loaded beyond it
+                    lines.append(gen.shift_greg_left(reg=t, bit_count=32))
+                    bits <<= 32
+                if 0 == bits:
+                    lines.append(gen.cb(reg1=t, reg2=None, cmp=comparison.NZ, label=following))
+                else:
+                    c_reg = self.greg()
+                    lines.append(gen.mov_greg_imm(reg=c_reg, imm=bits))
+                    lines.append(gen.cb(reg1=t, reg2=c_reg, cmp=comparison.NE, label=following))
+                    self.rt.unuse_reg("greg", c_reg.idx)
+                self.rt.unuse_reg("greg", t.idx)
+            lines.append(gen.jump(label=f"ukr{self.dispatch_tag}_case{i}"))
+            lines.append(gen.label(label=following))
+        return [l.strip() for chunk in lines for l in chunk.splitlines() if l.strip()]
+
+    def memory_comps(self, blocks) -> set:
+        """
+        The components a region's loads, stores and address computations access
+        """
+        comps = set()
+        for b in blocks:
+            for section in ("prologue", "body", "epilogue", "tail", "subtail"):
+                for op in getattr(b, section, None) or []:
+                    if isinstance(op, (lsc_load, lsc_store, lsc_addr_compute)):
+                        comps.add(op.indices[0].component)
+        return comps
+
+    def start_addresses(self, comps, later) -> list[str]:
+        """
+        Each address register of these components, not yet held: a copy of
+        the component's start address parameter moved to its first access.
+        Where no later region needs the start address, the parameter's own
+        register becomes the last of them, the others copied before it moves
+        """
+        lines = []
+        db, strides = self.program.offsets, self.program.strides
+        for comp in sorted(comps):
+            name = f"base({comp})"
+            keys = [k for k in sorted(self.program.addr_setup) if k[0] == comp and k not in self.aregs]
+            if not keys or name not in self.params:
+                continue
+            param = self.params[name]
+            reuse = comp not in later and name in self.live_params
+            for n, key in enumerate(keys):
+                if reuse and n == len(keys) - 1:
+                    areg = param
+                    self.live_params.discard(name)
+                else:
+                    areg = self.greg()
+                    lines += [l.strip() for l in self.gen.mov_greg(src=param, dst=areg).splitlines()
+                              if l.strip()]
+                self.aregs[key] = areg
+                start = db.elements_offset(self.program.addr_setup[key], strides.get(comp, {}))
+                self.positions[key] = start
+                lines += [l.strip() for l in self.add_bytes(areg, self.bytes_of(comp, start), comp)]
+        return lines
+
+    def release_aregs(self, keys):
+        for key in keys:
+            reg = self.aregs.pop(key)
+            self.rt.unuse_reg("greg", reg.idx)
+
+    def control(self, blocks, cases) -> list[str]:
+        """
+        The program's control flow around the blocks' sections, branching with
+        cb. A loop with N iterations, software-pipelined:
+
+            cb N == 0 -> done; prologue; N -= 1; cb N == 0 -> last
+          loop: body, advance; N -= 1; cb N != 0 -> loop
+          last: epilogue, advance
+          done: the tail likewise, R times
+
+        then the dispatch to the first case whose conditions hold, each case
+        ending at the end of the cases
+        """
+        lines = lambda text: [l.strip() for l in text.splitlines() if l.strip()]
+        gen = self.gen
+        code: list[str] = []
+        ez, nz = comparison.EZ, comparison.NZ
+
+        def counted(reg, label, part, done):
+            code.extend(lines(gen.cb(reg1=reg, reg2=None, cmp=ez, label=done)))
+            code.extend(lines(gen.label(label=label)))
+            code.extend(part)
+            code.extend(lines(gen.add_greg_imm(reg=reg, imm=-1)))
+            code.extend(lines(gen.cb(reg1=reg, reg2=None, cmp=nz, label=label)))
+            code.extend(lines(gen.label(label=done)))
+
+        def block_code(block):
+            code.extend(block.loads)
+            sec = block.sections
+            if block.loop_index is None:
+                for part in sec.values():
+                    code.extend(part)
+                code.extend(block.advance + block.tail_advance)
+                return
+            n, left = block.counters
+            n = n or self.params[block.loop_index]
+            tag = next(self.labels)
+            done = f"ukr{tag}_done"
+            code.extend(lines(gen.cb(reg1=n, reg2=None, cmp=ez, label=done)))
+            code.extend(sec.get("prologue", []))
+            code.extend(lines(gen.add_greg_imm(reg=n, imm=-1)))
+            counted(n, f"ukr{tag}_loop", sec.get("body", []) + block.advance, f"ukr{tag}_last")
+            code.extend(sec.get("epilogue", []) + block.advance)
+            code.extend(lines(gen.label(label=done)))
+            if sec.get("tail") and left is not None:
+                counted(left, f"ukr{tag}_tail", sec["tail"] + block.tail_advance,
+                        f"ukr{tag}_taildone")
+            if sec.get("subtail"):
+                raise specialization_error(
+                    f"{block.name}: a tail below one operation's extent is not emitted yet")
+
+        for block in blocks:
+            block_code(block)
+        if cases:
+            tag = self.dispatch_tag
+            end = f"ukr{tag}_cases_end"
+            code.extend(self.dispatch_code)
+            code.extend(lines(gen.jump(label=end)))
+            for i, (_, _, case_blocks) in enumerate(cases):
+                code.extend(lines(gen.label(label=f"ukr{tag}_case{i}")))
+                for block in case_blocks:
+                    block_code(block)
+                if i + 1 < len(cases):
+                    code.extend(lines(gen.jump(label=end)))
+            code.extend(lines(gen.label(label=end)))
+        return code
+

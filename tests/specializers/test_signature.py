@@ -88,13 +88,20 @@ class test_signature_specializer(unittest.TestCase):
         # C is strided along n: column 1 goes through a pointer computed once
         # from C's address register and the stride register, then reused
         store = self.spec.blocks[1].sections["body"]
-        stride = self.spec.bases["stride(C,n) in bytes"]
+        # the stride is a parameter, in the register the calling convention
+        # passes it in
+        stride = self.spec.params["stride(C,n)"]
         adds = [l for l in store if l.startswith("add") and l.endswith(stride)]
         self.assertEqual(1, len(adds))
         self.assertEqual(4, sum(l.startswith(("st1", "str")) for l in store))
 
     def test_bases(self):
-        self.assertEqual({"A", "B", "C", "stride(C,n) in bytes"}, set(self.spec.bases))
+        # the function's parameters, as the calling convention passes them:
+        # k, the start addresses, the run-time stride
+        self.assertEqual({"A", "B", "C"}, set(self.spec.bases))
+        self.assertEqual(["k", "base(A)", "base(B)", "base(C)", "stride(C,n)"],
+                         list(self.spec.params))
+        self.assertEqual(["x0", "x1", "x2", "x3", "x4"], list(self.spec.params.values()))
 
     def test_specialized_ir(self):
         # still LSC IR: the adaptations are explicit address computations
@@ -172,13 +179,14 @@ class test_signature_specializer(unittest.TestCase):
         self.assertTrue(indexed and max(indexed) <= 15)
 
     def test_reserved_registers_untouched(self):
+        # the kernel's own code: the function's boilerplate saves on the stack
         # the generator's tracker keeps sp, lr, fp and x18 out of reach
         reserved = {"sp", "x30", "x29", "x18"}
         for isa in ("neon", "sve"):
             with self.subTest(isa=isa):
                 ctx, res = mm(isa=isa, m="2", n="4", k="3", **{"B-data-regs": "4"})
                 self.assertTrue(res.completed, res.output)
-                used = {r for line in ctx.emitted[0].instructions()
+                used = {r for line in (ctx.emitted[0].setup + ctx.emitted[0].code)
                         for r in re.findall(r"\b(x\d+|sp)\b", line)}
                 self.assertFalse(used & reserved, used & reserved)
 
