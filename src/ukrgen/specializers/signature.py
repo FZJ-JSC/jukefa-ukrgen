@@ -281,7 +281,7 @@ class signature_emitter:
         self.rt = reg_tracker([("greg", self.gen.max_gregs), ("vreg", self.gen.max_vregs)])
         self.phys: dict[tuple, object] = {}
         self.dts: dict[tuple, object] = self._register_types()
-        self.fp_next = self.gen.max_vregs - 1
+        self.numbers: dict[tuple, int] = {}
         self.strides_in: dict[str, object] = {}
 
     # --- registers ---------------------------------------------------------
@@ -325,16 +325,25 @@ class signature_emitter:
         if key not in self.phys:
             dt = self.dts.get((idx.component, idx.indices[0]))
             if rgt.VEC == rtype:
-                self.phys[key] = self.gen.vreg(self.rt.reserve_any_reg("vreg"))
+                number = self.rt.reserve_any_reg("vreg")
+                self.phys[key] = self.gen.vreg(number)
             elif rgt.FP == rtype:
-                while self.fp_next in self.rt.get_used_regs("vreg"):
-                    self.fp_next -= 1
-                self.rt.reserve_specific_reg("vreg", self.fp_next)
-                self.phys[key] = self.gen.freg(self.fp_next, dt)
-                self.fp_next -= 1
+                used = self.rt.get_used_regs("vreg")
+                number = max(i for i in range(self.gen.max_vregs) if i not in used)
+                self.rt.reserve_specific_reg("vreg", number)
+                self.phys[key] = self.gen.freg(number, dt)
             else:
                 raise specialization_error(f"{rtype.name} registers are not specialized yet")
+            self.numbers[key] = number
         return self.phys[key]
+
+    def release(self, key):
+        """
+        A virtual register's value is dead: its physical register is free again
+        """
+        if key in self.phys:
+            self.rt.unuse_reg("vreg", self.numbers.pop(key))
+            del self.phys[key]
 
     def greg(self):
         return self.gen.greg(self.rt.reserve_any_reg("greg"))
@@ -524,11 +533,48 @@ class signature_emitter:
             raise specialization_error("moves between registers are not specialized yet")
         raise specialization_error(f"cannot emit {type(op).__name__}")
 
-    def block(self, block: ir_block) -> emitted_block:
+    def block(self, block: ir_block, later: list[ir_block] = ()) -> emitted_block:
         out = emitted_block(name=block.name, loop_index=block.loop_index)
-        for section in ("prologue", "body", "epilogue", "tail", "subtail"):
-            out.sections[section] = [line for op in getattr(block, section)
-                                     for line in self.emit_op(op)]
+        if block.loop_index is not None:
+            for section in ("prologue", "body", "epilogue", "tail", "subtail"):
+                out.sections[section] = [line for op in getattr(block, section)
+                                         for line in self.emit_op(op)]
+        else:
+            out.sections["body"] = self.straight(block.body, later)
+        return self._advances(block, out)
+
+    def straight(self, ops: list, later: list[ir_block]) -> list[str]:
+        """
+        A straight-line block, its registers renamed: a register is free again
+        after its value's last use, so values reuse the registers of values that
+        died - C those of AB in gemm's epilogue. Registers no later block reads
+        are released when the block starts.
+        """
+        def keys(op):
+            return [(i.component, i.indices[0], r) for i, r in
+                    zip(op.indices, getattr(op, "rtypes", None) or [])
+                    if r in (rgt.VEC, rgt.FP)]
+
+        needed_later = {k for b in later
+                        for section in ("prologue", "body", "epilogue", "tail", "subtail")
+                        for op in getattr(b, section) for k in keys(op)}
+        used_here = {k for op in ops for k in keys(op)}
+        for key in list(self.phys):
+            if key not in used_here and key not in needed_later:
+                self.release(key)
+        last = {}
+        for pos, op in enumerate(ops):
+            for k in keys(op):
+                last[k] = pos
+        lines = []
+        for pos, op in enumerate(ops):
+            lines += self.emit_op(op)
+            for k in keys(op):
+                if last[k] == pos and k not in needed_later:
+                    self.release(k)
+        return lines
+
+    def _advances(self, block: ir_block, out: emitted_block) -> emitted_block:
         db, strides = self.program.offsets, self.program.strides
         for comp, oid in block.advance.items():
             step = self.bytes_of(comp, db.elements_offset(oid, strides.get(comp, {})))
@@ -547,15 +593,20 @@ class signature_emitter:
         return [l.strip() for l in lines]
 
     def emit(self) -> emitted_program:
+        import copy
         setup = self.setup_addresses()
-        blocks = [self.block(b) for b in self.program.blocks]
-        # every case starts with the address registers where the blocks before
-        # the branch leave them
-        start = dict(self.positions)
+        prefix = self.program.blocks
+        case_blocks = [b for c in self.program.cases for b in c.blocks]
+        blocks = [self.block(b, prefix[i + 1:] + case_blocks) for i, b in enumerate(prefix)]
+        # every case starts with the address and data registers where the blocks
+        # before the branch leave them
+        start = (dict(self.positions), dict(self.phys), dict(self.numbers), copy.deepcopy(self.rt))
         cases = []
         for c in self.program.cases:
-            self.positions = dict(start)
-            cases.append((c.label, c.when, [self.block(b) for b in c.blocks]))
+            self.positions, self.phys, self.numbers = dict(start[0]), dict(start[1]), dict(start[2])
+            self.rt = copy.deepcopy(start[3])
+            cases.append((c.label, c.when,
+                          [self.block(b, list(c.blocks[i + 1:])) for i, b in enumerate(c.blocks)]))
         bases = {c: str(r) for c, r in self.bases.items()}
         bases.update({f"{f} in bytes": str(r) for f, r in self.strides_in.items()})
         return emitted_program(

@@ -19,6 +19,7 @@ from ukrgen.flow.stages.sto import sto_stage
 from ukrgen.flow.stages.model import model_stage
 from ukrgen.flow.stages.isa_specialize import isa_specialize_stage
 from ukrgen.flow.stages.irmods import irmod_stage
+from ukrgen.flow.stages.scheduling import schedule_stage
 from ukrgen.flow.stages.emit import emit_stage
 
 from ukrgen.flow.ukr_context import ukr_context
@@ -125,7 +126,7 @@ def main():
         model_stage,
         isa_specialize_stage,
         irmod_stage,
-        # MRU and scheduling go here, on the specialized IR
+        schedule_stage,
         emit_stage,
     ]
 

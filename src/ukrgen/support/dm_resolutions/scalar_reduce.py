@@ -113,17 +113,21 @@ class scalar_reduce_provider(resolution_provider):
                     ]))
 
         # example NEON:
-        # ld1 v0.d[1], [x5]
-        # fmla v2.2d, v3.2d, v1.d[1]
+        # ldr q1, [x5]
+        # fmla v2.2d, v3.2d, v1.d[0]
+        # fmla v4.2d, v3.2d, v1.d[1]
         registry.add_resolution(
             key=tfr_key(tfs=frozenset({tf.SCALAR_REDUCE}),
                         rtype=rgt.VEC, ddir=dmd.IN),
             rsln=tr(
                 unique_tag='use_lane',
                 opd_mod_reqs={omod.ILANE},
+                # the whole vector is loaded once; the operation then uses one
+                # of its lanes per element - which is why this resolution needs
+                # a contiguous index (WHOLE_VECTOR_IN). A load into a single
+                # lane would leave the register's other lanes unloaded.
                 steps=[
-                    dm_step(op="load", dest=orig_ref(), dest_rtype=rgt.VEC,
-                            opd_mod_reqs={orig_ref() : {omod.ILANE}}),
+                    dm_step(op="load", dest=orig_ref(), dest_rtype=rgt.VEC),
                     ]))
 
         # example neon:
