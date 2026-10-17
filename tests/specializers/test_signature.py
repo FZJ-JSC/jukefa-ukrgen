@@ -205,6 +205,38 @@ class test_signature_specializer(unittest.TestCase):
         self.assertTrue(any(l.startswith("vlse64.v") for l in p.blocks[0].sections["body"]))
         self.assertTrue(any(l.startswith("mul ") for l in p.setup))
 
+    def gather(self, isa):
+        ctx, res = mm(isa=isa, **{"A-layout": ["m:s", "k:c"],
+                                  "mm-to": ["fma(A.VEC:gather, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
+        self.assertTrue(res.completed, res.output)
+        return ctx.emitted[0]
+
+    def test_sve_gather(self):
+        # the index vector is built once from A's stride register, in bytes
+        p = self.gather("sve")
+        self.assertTrue(any(l.startswith("index ") for l in p.setup))
+        self.assertTrue(any(", z" in l and l.startswith("ld1d") for l in p.blocks[0].sections["body"]))
+        if shutil.which("aarch64-linux-gnu-as"):
+            ok, err = assembles(p.instructions(), arch="armv8-a+sve")
+            self.assertTrue(ok, err)
+
+    def test_avx_gathers(self):
+        # the gather clears its mask: it is set all-true before each
+        for isa, reset in (("avx512", "kxnorw"), ("avx256", "vpcmpeqd")):
+            with self.subTest(isa=isa):
+                p = self.gather(isa)
+                body = p.blocks[0].sections["body"]
+                gathers = [i for i, l in enumerate(body) if l.startswith("vgather")]
+                self.assertTrue(gathers)
+                self.assertTrue(all(body[i - 1].startswith(reset) for i in gathers))
+                self.assertTrue(all(",1)" in body[i] for i in gathers))
+
+    def test_rvv_gather_refused(self):
+        from ukrgen.flow.stages.stage import stage_error
+        with self.assertRaisesRegex(stage_error, "gregstride"):
+            mm(isa="rvv", **{"rvv-LMUL": "1", "A-layout": ["m:s", "k:c"],
+                             "mm-to": ["fma(A.VEC:gather, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
+
     def test_print_asm(self):
         _, res = mm(**{"print-asm": True})
         self.assertFalse(res.completed)

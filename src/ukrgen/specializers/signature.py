@@ -131,9 +131,10 @@ def _offset_forms(sig) -> str | None:
     immediate offset, None for other addressing forms
     """
     mods = {m.name for m in sig.modifiers} - {"MASK"}
-    if not mods or ({"GSTRIDE"} == mods and "streg" in sig.operands):
-        # a strided access is addressed plainly; its stride register is bound
-        # when emitted
+    if not mods or ({"GSTRIDE"} == mods and "streg" in sig.operands) \
+            or ({"VINDEX"} == mods and "vidxreg" in sig.operands):
+        # a strided access or a gather is addressed plainly; its stride or
+        # index vector is bound when emitted
         return "plain"
     if {"IOFFSET"} == mods and "ioffset" in sig.operands:
         return "ioffset"
@@ -179,9 +180,15 @@ def _all_true(ctx, rt=None):
 def _usable(ctx, sig) -> bool:
     """
     Unmasked signatures always; masked ones where the ISA sets up an all-true
-    predicate to govern them
+    predicate to govern them, or where the mask is one the instruction clears
+    (its signature's clobber_list) and the generator can set it all-true again
+    before each use - AVX gathers and scatters
     """
-    return not _masked(sig) or _all_true(ctx) is not None
+    if not _masked(sig) or _all_true(ctx) is not None:
+        return True
+    masks = [n for n, o in sig.operands.items() if orl.MASK == o.orole]
+    clobbered = set(getattr(sig, "clobber_list", None) or [])
+    return set(masks) <= clobbered and hasattr(ctx.gen, "mask_all_true")
 
 
 def _vl_form(sig) -> bool:
@@ -367,6 +374,8 @@ class signature_emitter:
         # constant strides
         self.late_setup: list[str] = []
         self.vlb: dict[int, object] = {}
+        self.masks: dict = {}
+        self.indexes: dict = {}
         isa = self.gen.isa_setup()
         self.vector_length_kept = isa.predication().name == "IMPLICIT" \
             if hasattr(isa, "predication") else False
@@ -523,12 +532,12 @@ class signature_emitter:
             if not factors:
                 lines.append(self.gen.add_greg_imm(reg=areg, imm=coeff))
             elif 2 == len(factors) and "VL" == factors[0] and factors[1].startswith("stride(") \
-                    and coeff > 0 and 0 == coeff % esize and self.vector_length_kept:
-                # a vector length of strided elements: vl times the stride in
-                # bytes, multiplied once
+                    and coeff > 0 and 0 == coeff % esize:
+                # a vector length of strided elements: the vector length in
+                # elements times the stride in bytes, multiplied once
                 key = f"VL*{factors[1]}"
                 if key not in self.strides_in:
-                    vlreg = self.gen.isa_setup().vector_length_register(rt=self.rt)
+                    vlreg = self.vl_elements(dt)
                     reg = self.greg()
                     self.strides_in[key] = reg
                     self.late_setup.append(self.gen.mul_greg_greg(
@@ -599,20 +608,63 @@ class signature_emitter:
                 f"offset {immediate}: specialize the IR first")
         return [line]
 
-    def _predicate(self, sig, kwargs: dict) -> bool:
+    def _predicate(self, sig, kwargs: dict, prefix: list | None = None, dt=None) -> bool:
         """
-        Bind a signature's mask operands to the all-true predicate; False if it
-        has some and the ISA sets up none
+        Bind a signature's mask operands: to the all-true predicate under
+        explicit predication; to a mask register set all-true right before
+        the instruction where the instruction clears it (prefix gets the
+        setting). False if neither applies
         """
         masks = [n for n, o in sig.operands.items() if orl.MASK == o.orole]
         if not masks:
             return True
         predicate = _all_true(self.ctx, self.rt)
-        if predicate is None:
+        clobbered = set(getattr(sig, "clobber_list", None) or [])
+        if predicate is None and (prefix is None or not set(masks) <= clobbered
+                                  or not hasattr(self.gen, "mask_all_true")):
             return False
         for name in masks:
-            kwargs[name] = predicate
+            if predicate is not None:
+                kwargs[name] = predicate
+                continue
+            reg = self.clobbered_mask(sig.operands[name].rtype)
+            kwargs[name] = reg
+            prefix.append(self.gen.mask_all_true(reg=reg, dt=dt))
         return True
+
+    def clobbered_mask(self, rtype):
+        """
+        The register for masks instructions clear: a mask register, or a
+        vector register where masks are vectors (AVX2) - allocated once
+        """
+        if rtype not in self.masks:
+            if rgt.VEC == rtype:
+                self.masks[rtype] = self.gen.vreg(self.rt.reserve_any_reg("vreg"))
+            else:
+                self.masks[rtype] = self.gen.mreg(self.rt.reserve_any_reg("mreg"))
+        return self.masks[rtype]
+
+    def index_vector(self, op):
+        """
+        The index vector of a gather or scatter: the stride along its index
+        times 0, 1, 2... in bytes, built once after the ISA's setup
+        (greg_to_voffs)
+        """
+        comp = op.indices[0].component
+        key = (comp, op.properties.get("stride_index"))
+        if key not in self.indexes:
+            stride = self.stride_of(op)
+            if stride is None:
+                return None
+            vreg = self.gen.vreg(self.rt.reserve_any_reg("vreg"))
+            try:
+                text = self.gen.greg_to_voffs(streg=stride, vreg=vreg,
+                                              dt=self.ctx.component_dts[comp])
+            except NotImplementedError as err:
+                raise specialization_error(f"index vector for {comp}: {err}") from err
+            self.late_setup.append(text)
+            self.indexes[key] = vreg
+        return self.indexes[key]
 
     def stride_of(self, op):
         """
@@ -637,6 +689,23 @@ class signature_emitter:
                 self.late_setup.append(self.gen.mov_greg_imm(reg=reg, imm=nbytes))
             return self.strides_in[key]
         return None
+
+    def vl_elements(self, dt):
+        """
+        A register holding the vector length in elements: RVV's vl, or read
+        once after the ISA's setup where the ISA doesn't keep it (SVE: cntd)
+        """
+        if self.vector_length_kept:
+            return self.gen.isa_setup().vector_length_register(rt=self.rt)
+        key = f"VL in {adt_size(dt)}-byte elements"
+        if key not in self.strides_in:
+            reg = self.greg()
+            try:
+                self.late_setup.append(self.gen.vlen_to_greg(reg=reg, dt=dt))
+            except (NotImplementedError, AttributeError) as err:
+                raise specialization_error(f"reading the vector length: {err}") from err
+            self.strides_in[key] = reg
+        return self.strides_in[key]
 
     def vl_bytes(self, dt):
         """
@@ -689,6 +758,11 @@ class signature_emitter:
                 kwargs["iinc"] = increment
             elif {"IOFFSET"} == mods:
                 kwargs["ioffset"] = immediate
+            elif {"VINDEX"} == mods and not immediate:
+                index = self.index_vector(op)
+                if index is None:
+                    continue
+                kwargs["vidxreg"] = index
             elif {"GSTRIDE"} == mods and not immediate:
                 stride = self.stride_of(op)
                 if stride is None:
@@ -696,14 +770,15 @@ class signature_emitter:
                 kwargs["streg"] = stride
             elif mods or immediate:
                 continue
-            if not self._predicate(sig, kwargs):
+            prefix = []
+            if not self._predicate(sig, kwargs, prefix, dt):
                 continue
             for name, shape in sig.operands.items():
                 if ot.IMMEDIATE == shape.otype and name.endswith("_lane"):
                     kwargs[name] = lane
             kwargs.update(sig.structural_params)
             try:
-                return getattr(self.gen, op.step.op)(
+                return "".join(prefix) + getattr(self.gen, op.step.op)(
                     dregs=[data], areg=areg, dt=dt, modifiers=set(sig.modifiers),
                     operand_modifiers={n: set(s.modifiers) for n, s in sig.operands.items()
                                        if s.modifiers},
@@ -743,7 +818,7 @@ class signature_emitter:
         raise specialization_error(f"no signature of {op.op} takes {regs}: {failures[:2]}")
 
     def emit_op(self, op) -> list[str]:
-        return [line.strip() for line in self._emit_op(op)]
+        return [l.strip() for chunk in self._emit_op(op) for l in chunk.splitlines() if l.strip()]
 
     def _emit_op(self, op) -> list[str]:
         if isinstance(op, (lsc_load, lsc_store)):
@@ -871,8 +946,8 @@ class signature_emitter:
         bases = {c: str(r) for c, r in self.bases.items()}
         bases.update({f"{f} in bytes": str(r) for f, r in self.strides_in.items()})
         # what emission found it needs: right after the ISA's setup
-        setup = setup[:self.isa_setup_lines] + [l.strip() for l in self.late_setup] \
-            + setup[self.isa_setup_lines:]
+        late = [l.strip() for chunk in self.late_setup for l in chunk.splitlines() if l.strip()]
+        setup = setup[:self.isa_setup_lines] + late + setup[self.isa_setup_lines:]
         return emitted_program(
             setup=setup, blocks=blocks, cases=cases,
             teardown=lines(isa.teardown(rt=self.rt, dt=dt)), data=lines(isa.data()),
