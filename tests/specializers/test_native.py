@@ -1,6 +1,7 @@
 """
-Kernels run natively against a reference gemm: x86 where the CPU has the ISA
-and a C compiler is there. A harness calls the function with ukrgen's
+Kernels run against a reference gemm: natively on x86 where the CPU has the
+ISA and gcc is there, emulated (qemu user mode) for AArch64 and RISC-V where
+qemu and a cross compiler are there. A harness calls the function with ukrgen's
 parameters - k, the start addresses, the strides in bytes - over every case
 (alpha 1 or not, beta 0, -0.0, 1 or other), k with and without full
 iterations and remainders, C NaN where beta is 0 (never read), guards around C
@@ -41,7 +42,7 @@ def header(params):
 
 class test_native(unittest.TestCase):
 
-    def run_gemm(self, isa):
+    def run_gemm(self, isa, cc=("gcc",), run=()):
         ctx, res = gemm(isa)
         self.assertTrue(res.completed, res.output)
         p = ctx.emitted[0]
@@ -53,11 +54,11 @@ class test_native(unittest.TestCase):
             with open(os.path.join(d, "ukr.h"), "w") as f:
                 f.write(header(p.params))
             exe = os.path.join(d, "run")
-            r = subprocess.run(["gcc", "-O1", f'-DKERNEL_H="{d}/ukr.h"',
+            r = subprocess.run([*cc, "-O1", f'-DKERNEL_H="{d}/ukr.h"',
                                 os.path.join(HERE, "native_harness.c"), os.path.join(d, "ukr.s"),
                                 "-o", exe, "-lm"], capture_output=True, text=True)
             self.assertEqual(0, r.returncode, r.stderr)
-            r = subprocess.run([exe], capture_output=True, text=True, timeout=60)
+            r = subprocess.run([*run, exe], capture_output=True, text=True, timeout=120)
         self.assertEqual(0, r.returncode, r.stdout)
         self.assertIn(", 0 wrong", r.stdout)
         return r.stdout
@@ -71,6 +72,28 @@ class test_native(unittest.TestCase):
                          "needs gcc and an AVX-512 CPU")
     def test_avx512(self):
         self.assertIn("tile 16 x 3", self.run_gemm("avx512"))
+
+
+    def emulated(self, isa, cc, march, qemu, cpu):
+        if not (shutil.which(cc) and shutil.which(qemu)):
+            self.skipTest(f"needs {cc} and {qemu}")
+        return self.run_gemm(isa, cc=(cc, "-static", march), run=(qemu, "-cpu", cpu))
+
+    def test_neon(self):
+        out = self.emulated("neon", "aarch64-linux-gnu-gcc", "-march=armv8-a",
+                            "qemu-aarch64-static", "max")
+        self.assertIn("tile 4 x 3", out)
+
+    def test_sve(self):
+        # 256-bit vectors: the tile follows the vector length
+        out = self.emulated("sve", "aarch64-linux-gnu-gcc", "-march=armv8-a+sve",
+                            "qemu-aarch64-static", "max,sve256=on")
+        self.assertIn("tile 8 x 3", out)
+
+    def test_rvv(self):
+        out = self.emulated("rvv", "riscv64-linux-gnu-gcc", "-march=rv64gcv",
+                            "qemu-riscv64-static", "rv64,v=true,vlen=256,elen=64")
+        self.assertIn("tile 8 x 3", out)
 
 
 if __name__ == "__main__":
