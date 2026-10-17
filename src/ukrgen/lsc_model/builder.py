@@ -308,6 +308,10 @@ class program_builder:
                              offset=addr.offset, rtypes=[None, data.rtype])
                     if lane is not None:
                         op.add_property("lane", lane)
+                    if "GSTRIDE" in {m.name for m in (step.op_mod_reqs or set())}:
+                        # a strided access: its stride is the component's
+                        # along the register's index
+                        op.add_property("stride_index", self.vector_index(tiling, comp))
                     ops.append(op)
                 else:
                     src = self.ref_reg(step.src[0], step.src_rtypes[0], reg)

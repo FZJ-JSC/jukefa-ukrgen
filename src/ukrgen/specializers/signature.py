@@ -131,7 +131,9 @@ def _offset_forms(sig) -> str | None:
     immediate offset, None for other addressing forms
     """
     mods = {m.name for m in sig.modifiers} - {"MASK"}
-    if not mods:
+    if not mods or ({"GSTRIDE"} == mods and "streg" in sig.operands):
+        # a strided access is addressed plainly; its stride register is bound
+        # when emitted
         return "plain"
     if {"IOFFSET"} == mods and "ioffset" in sig.operands:
         return "ioffset"
@@ -251,7 +253,10 @@ class signature_specializer:
         strided = {f: c for f, c in rel.items() if f}
         if strided:
             for factors, count in strided.items():
-                if len(factors) != 1 or not factors[0].startswith("stride(") or count < 0:
+                vl_times_stride = 2 == len(factors) and "VL" == factors[0] \
+                    and factors[1].startswith("stride(")
+                if not (vl_times_stride or (1 == len(factors) and factors[0].startswith("stride("))) \
+                        or count < 0:
                     raise specialization_error(
                         f"{op.rsln} access to {db[op.offset]} is {sym._make(rel)} elements from "
                         f"its address register, which is not specialized yet")
@@ -358,6 +363,13 @@ class signature_emitter:
         self.dts: dict[tuple, object] = self._register_types()
         self.numbers: dict[tuple, int] = {}
         self.bounds = self._register_bounds()
+        # setup instructions found while emitting: vector length in bytes,
+        # constant strides
+        self.late_setup: list[str] = []
+        self.vlb: dict[int, object] = {}
+        isa = self.gen.isa_setup()
+        self.vector_length_kept = isa.predication().name == "IMPLICIT" \
+            if hasattr(isa, "predication") else False
         self.strides_in: dict[str, object] = {}
 
     # --- registers ---------------------------------------------------------
@@ -510,6 +522,24 @@ class signature_emitter:
         for factors, coeff in amount.terms:
             if not factors:
                 lines.append(self.gen.add_greg_imm(reg=areg, imm=coeff))
+            elif 2 == len(factors) and "VL" == factors[0] and factors[1].startswith("stride(") \
+                    and coeff > 0 and 0 == coeff % esize and self.vector_length_kept:
+                # a vector length of strided elements: vl times the stride in
+                # bytes, multiplied once
+                key = f"VL*{factors[1]}"
+                if key not in self.strides_in:
+                    vlreg = self.gen.isa_setup().vector_length_register(rt=self.rt)
+                    reg = self.greg()
+                    self.strides_in[key] = reg
+                    self.late_setup.append(self.gen.mul_greg_greg(
+                        dst=reg, reg1=vlreg, reg2=self.stride_reg(factors[1])))
+                lines += [self.gen.add_greg_greg(dst=areg, reg1=areg,
+                                                 reg2=self.strides_in[key])] * (coeff // esize)
+            elif ("VL",) == factors and coeff > 0 and 0 == coeff % esize \
+                    and self.vector_length_kept:
+                # RVV: the vector length is in a register - add it in bytes
+                vlb = self.vl_bytes(dt)
+                lines += [self.gen.add_greg_greg(dst=areg, reg1=areg, reg2=vlb)] * (coeff // esize)
             elif ("VL",) == factors and coeff > 0 and 0 == coeff % esize:
                 # whole vectors: incb x, ALL, MUL #n, n at most 16 a time
                 vectors = coeff // esize
@@ -584,6 +614,45 @@ class signature_emitter:
             kwargs[name] = predicate
         return True
 
+    def stride_of(self, op):
+        """
+        The register holding a strided access's stride in bytes: the run-time
+        stride register, or a constant stride loaded once
+        """
+        comp = op.indices[0].component
+        index = op.properties.get("stride_index")
+        stride = self.program.strides.get(comp, {}).get(index)
+        if stride is None:
+            return None
+        terms = dict(stride.terms)
+        if 1 == len(terms) and 1 == list(terms.values())[0] and list(terms)[0] \
+                and list(terms)[0][0].startswith("stride("):
+            return self.stride_reg(list(terms)[0][0])
+        if set(terms) <= {()}:
+            nbytes = terms.get((), 0) * adt_size(self.ctx.component_dts[comp])
+            key = f"constant stride {nbytes}"
+            if key not in self.strides_in:
+                reg = self.greg()
+                self.strides_in[key] = reg
+                self.late_setup.append(self.gen.mov_greg_imm(reg=reg, imm=nbytes))
+            return self.strides_in[key]
+        return None
+
+    def vl_bytes(self, dt):
+        """
+        A register holding the vector length in bytes, for ISAs keeping the
+        vector length in a register (RVV): computed once per element size,
+        right after the ISA's setup
+        """
+        esize = adt_size(dt)
+        if esize not in self.vlb:
+            vlreg = self.gen.isa_setup().vector_length_register(rt=self.rt)
+            reg = self.greg()
+            self.vlb[esize] = reg
+            self.late_setup += [self.gen.mov_greg(src=vlreg, dst=reg),
+                                self.gen.shift_greg_left(reg=reg, bit_count=esize.bit_length() - 1)]
+        return self.vlb[esize]
+
     def address(self, op: lsc_addr_compute) -> list[str]:
         """
         An address register set from another plus an offset
@@ -620,6 +689,11 @@ class signature_emitter:
                 kwargs["iinc"] = increment
             elif {"IOFFSET"} == mods:
                 kwargs["ioffset"] = immediate
+            elif {"GSTRIDE"} == mods and not immediate:
+                stride = self.stride_of(op)
+                if stride is None:
+                    continue
+                kwargs["streg"] = stride
             elif mods or immediate:
                 continue
             if not self._predicate(sig, kwargs):
@@ -779,7 +853,9 @@ class signature_emitter:
         # registers an operation limits go first, from the bottom
         for key in sorted(self.bounds, key=self.bounds.get):
             self.reg(lsc_reg_index(key[0], [key[1]]), key[2])
-        setup = lines(isa.setup(rt=self.rt, dt=dt)) + self.setup_addresses()
+        setup = lines(isa.setup(rt=self.rt, dt=dt))
+        self.isa_setup_lines = len(setup)
+        setup += self.setup_addresses()
         prefix = self.program.blocks
         case_blocks = [b for c in self.program.cases for b in c.blocks]
         blocks = [self.block(b, prefix[i + 1:] + case_blocks) for i, b in enumerate(prefix)]
@@ -794,6 +870,9 @@ class signature_emitter:
                           [self.block(b, list(c.blocks[i + 1:])) for i, b in enumerate(c.blocks)]))
         bases = {c: str(r) for c, r in self.bases.items()}
         bases.update({f"{f} in bytes": str(r) for f, r in self.strides_in.items()})
+        # what emission found it needs: right after the ISA's setup
+        setup = setup[:self.isa_setup_lines] + [l.strip() for l in self.late_setup] \
+            + setup[self.isa_setup_lines:]
         return emitted_program(
             setup=setup, blocks=blocks, cases=cases,
             teardown=lines(isa.teardown(rt=self.rt, dt=dt)), data=lines(isa.data()),

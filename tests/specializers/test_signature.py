@@ -172,6 +172,39 @@ class test_signature_specializer(unittest.TestCase):
                         for r in re.findall(r"\b(x\d+|sp)\b", line)}
                 self.assertFalse(used & reserved, used & reserved)
 
+    def rvv(self, **extra):
+        ctx, res = mm(isa="rvv", **{"rvv-LMUL": "1"}, **extra)
+        self.assertTrue(res.completed, res.output)
+        lines = ctx.emitted[0].instructions()
+        if shutil.which("riscv64-linux-gnu-as"):
+            with tempfile.TemporaryDirectory() as d:
+                src = os.path.join(d, "k.s")
+                with open(src, "w") as f:
+                    f.write("\n".join(lines) + "\n")
+                r = subprocess.run(["riscv64-linux-gnu-as", "-march=rv64gcv", src,
+                                    "-o", os.path.join(d, "k.o")], capture_output=True, text=True)
+                self.assertEqual(0, r.returncode, r.stderr)
+        return ctx.emitted[0]
+
+    def test_rvv(self):
+        # the vector length is in a register: offsets and advances in vector
+        # lengths add it in bytes, computed once after vsetvli
+        p = self.rvv()
+        self.assertTrue(p.setup[0].startswith("vsetvli"))
+        self.assertTrue(any(l.startswith("slli") for l in p.setup))
+
+    def test_rvv_vf(self):
+        p = self.rvv(**{"mm-to": ["fma[bdreg:VF](A.VEC:direct, B.FP:use_scalar, C.VEC){i=m, n=1, k*=1}"]})
+        self.assertTrue(any(".vf" in l for l in p.blocks[0].sections["body"]))
+
+    def test_rvv_strided(self):
+        # A strided along m: vlse with A's stride register; its second vector
+        # is a vector length of strides on, vl times the stride multiplied once
+        p = self.rvv(**{"A-layout": ["m:s", "k:c"],
+                        "mm-to": ["fma(A.VEC:strided, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
+        self.assertTrue(any(l.startswith("vlse64.v") for l in p.blocks[0].sections["body"]))
+        self.assertTrue(any(l.startswith("mul ") for l in p.setup))
+
     def test_print_asm(self):
         _, res = mm(**{"print-asm": True})
         self.assertFalse(res.completed)

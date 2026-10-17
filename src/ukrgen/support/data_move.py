@@ -17,6 +17,7 @@ from dataclasses import dataclass,field
 from abc import abstractmethod, ABC
 
 from asmgen.asmblocks.op import (
+    opmem_modifier as memmod,
     operand_modifier as omod,
     operand_shape as osh,
     operation_signature as opsig,
@@ -452,6 +453,14 @@ def filter_by_step_requirements(
     sigs = filter_by_forbidden_op_mods(sigs, step.forbidden_op_mods)
     if not sigs:
         return []
+    # multi-structure forms load or store several registers: a single
+    # register's step takes them only when asking - RVV's one-structure
+    # vlseg form would otherwise be offered beside the plain load it equals
+    struct = getattr(memmod, "STRUCT", None)
+    if struct is not None and struct not in (step.op_mod_reqs or set()):
+        sigs = filter_by_forbidden_op_mods(sigs, {struct})
+        if not sigs:
+            return []
 
     # multiple outputs could possibly be handled here, but it's probably better
     # to handle it with an irmod, fusing multiple loads/stores/moves when
