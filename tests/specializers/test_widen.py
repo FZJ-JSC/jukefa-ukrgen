@@ -112,5 +112,67 @@ class test_widen(unittest.TestCase):
         self.assertEqual(1, sum(l.startswith("vsetvli") for l in p.instructions()))
 
 
+    def gemm_runs(self, isa, cand, narrow, wide, cc, march, qemu, cpu, tol):
+        if not (shutil.which(cc) and shutil.which(qemu)):
+            self.skipTest(f"needs {cc} and {qemu}")
+        from specializers.gemm_helper import gemm
+        stages = list(t.STAGES)
+        i = [s.__name__ for s in stages].index("model_stage") + 1
+        saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
+        types = {f"{c}-data-type": wide for c in ("C", "AB", "alpha", "beta")}
+        types.update({"A-data-type": narrow, "B-data-type": narrow})
+        if "rvv" == isa:
+            types["rvv-LMUL"] = "1"
+        try:
+            ctx, res = gemm(isa, **types, **{"mm-to": [cand]})
+        finally:
+            t.STAGES = saved
+        self.assertTrue(res.completed, res.output)
+        p = ctx.emitted[0]
+        c_types = {"FP16": "_Float16", "FP32": "float", "FP64": "double"}
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "ukr.s"), "w") as f:
+                f.write("\n".join(p.function("ukr")) + "\n")
+            with open(os.path.join(d, "ukr.h"), "w") as f:
+                f.write("void ukr(long k, const h* A, const h* B, w* C, const w* alpha, "
+                        "const w* beta, long sAk, long sBk, long sCn);\n")
+            exe = os.path.join(d, "run")
+            r = subprocess.run([cc, "-static", "-O1", march, f"-DWT={c_types[wide]}",
+                                f"-DNT={c_types[narrow]}", f"-DTOL={tol}", f'-DKERNEL_H="{d}/ukr.h"',
+                                os.path.join(HERE, "native_harness.c"), os.path.join(d, "ukr.s"),
+                                "-o", exe, "-lm"], capture_output=True, text=True)
+            self.assertEqual(0, r.returncode, r.stderr)
+            r = subprocess.run([qemu, "-cpu", cpu, exe], capture_output=True, text=True, timeout=120)
+        self.assertEqual(0, r.returncode, r.stdout + r.stderr)
+        self.assertIn(", 0 wrong", r.stdout)
+        return p
+
+    def test_gemm_neon(self):
+        # every case: alpha and beta on the groups member by member
+        self.gemm_runs("neon", "fma[PART+widening_method=SPLIT_CONTIGUOUS](A.VEC:direct, "
+                       "B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}", "FP16", "FP32",
+                       "aarch64-linux-gnu-gcc", "-march=armv8.2-a+fp16+fp16fml",
+                       "qemu-aarch64-static", "max", "1e-5")
+
+    def test_gemm_sve(self):
+        # C read interleaved (ld2w) where beta needs it; alpha and beta
+        # broadcasts the same in every member
+        p = self.gemm_runs("sve", "fma[PART+widening_method=SPLIT_INTERLEAVED](A.VEC:direct, "
+                           "B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}", "FP16", "FP32",
+                           "aarch64-linux-gnu-gcc", "-march=armv8-a+sve2",
+                           "qemu-aarch64-static", "max,sve256=on", "1e-5")
+        self.assertTrue(any(l.startswith("ld2w") for l in p.instructions()))
+
+    def test_gemm_rvv(self):
+        # arithmetic on the groups in their own type: vtype switched in each
+        # case computing on them - not in the one only storing them
+        p = self.gemm_runs("rvv", "fma[widening_method=VEC_GROUP](A.VEC:direct, B.VEC:bc_load, "
+                           "AB.VEC){i=m, n=1, k*=1}", "FP32", "FP64",
+                           "riscv64-linux-gnu-gcc", "-march=rv64gcv", "qemu-riscv64-static",
+                           "rv64,v=true,vlen=256,elen=64", "1e-12")
+        switches = [l for l in p.instructions() if l.startswith("vsetvli zero,zero,e64,m2")]
+        self.assertEqual(len(p.cases) - 1, len(switches))
+
+
 if __name__ == "__main__":
     unittest.main()

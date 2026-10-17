@@ -7,7 +7,7 @@ import logging
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
-from ...specializers.signature import signature_emitter, specialization_error
+from ...specializers.signature import signature_emitter, emit_program, specialization_error
 
 
 class emit_stage(stage):
@@ -32,7 +32,7 @@ class emit_stage(stage):
 
     def progress(self):
         try:
-            self.context.emitted = [signature_emitter(self.context, p).emit()
+            self.context.emitted = [emit_program(self.context, p)
                                     for p in self.context.programs]
         except specialization_error as err:
             raise stage_error(f"emitting: {err}") from err

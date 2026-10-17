@@ -42,8 +42,29 @@ def widening_ways(sig) -> int:
     return max(sizes) // min(sizes) if sizes else 1
 
 
+def kernel_groups(impls) -> dict[int, int]:
+    """
+    Where a kernel widens, every vector register of the wide type is a group -
+    in every chain, the plain ones on the same registers (gemm's alpha and
+    beta, C) alike: wide element size -> registers per group
+    """
+    groups: dict[int, int] = {}
+    for impl in impls:
+        for res in impl.resolved_chain:
+            sig = res.compute_sg.representative
+            if widening_ways(sig) < 2:
+                continue
+            sizes = [adt_size(o.dt) for o in sig.operands.values()
+                     if rgt.VEC == o.rtype and getattr(o, "dt", None) is not None]
+            for size in sizes:
+                if size > min(sizes):
+                    groups[size] = size // min(sizes)
+    return groups
+
+
 def index_extents(gen: asmgen,
-                  impl: resolved_operation_chain) -> dict[str, dimp]:
+                  impl: resolved_operation_chain,
+                  groups: dict[int, int] | None = None) -> dict[str, dimp]:
     """
     How far one execution of an implementation reaches along each requirement
     index it binds to a hardware index
@@ -55,14 +76,9 @@ def index_extents(gen: asmgen,
     """
     extents: dict[str, dimp] = {}
 
-    # where a chain widens, every wide register in it is a group: one
-    # operation of the chain reaches as far as a narrow register
-    sigs = [res.compute_sg.representative for res in impl.resolved_chain]
-    widens = any(widening_ways(sig) > 1 for sig in sigs)
-    narrow = min((adt_size(o.dt) for sig in sigs for o in sig.operands.values()
-                  if o.rtype in (rgt.VEC, rgt.TILE) and getattr(o, "dt", None) is not None),
-                 default=None)
-    ways = 2 if widens else 1
+    # where the kernel widens, its wide registers are groups (the chain's own
+    # widening, if the caller doesn't know the kernel's)
+    groups = kernel_groups([impl]) if groups is None else groups
     for res, step in zip(impl.resolved_chain, impl.math_chain):
         sig = res.compute_sg.representative
 
@@ -88,14 +104,14 @@ def index_extents(gen: asmgen,
                 else:
                     extent = physical.dima
 
-                if ways > 1 and rgt.VEC == shape.rtype and adt_size(shape.dt) > narrow \
+                if rgt.VEC == shape.rtype and adt_size(shape.dt) in groups \
                         and dimt.fixed == extent.dt:
                     # a widening chain: its wide registers are groups, as many
                     # as a narrow register's elements take. Fixed-width extents
                     # count elements; vector-length agnostic ones count vectors
                     # of each operand's own type, where a group of wide vectors
                     # already is one narrow vector
-                    factor = adt_size(shape.dt) // narrow
+                    factor = groups[adt_size(shape.dt)]
                     extent = dimp(dt=extent.dt, size=extent.size * factor,
                                   sdt=extent.sdt, sd_size=extent.sd_size * factor)
                 known = extents.setdefault(req_idx, extent)
@@ -107,7 +123,8 @@ def index_extents(gen: asmgen,
 
 def operand_tiles(gen: asmgen,
                   impl: resolved_operation_chain,
-                  req: ast_node) -> dict[str, tile]:
+                  req: ast_node,
+                  groups: dict[int, int] | None = None) -> dict[str, tile]:
     """
     Tile of each requirement operand: the block one execution of the
     implementation covers, projected onto the operand's indices
@@ -117,7 +134,7 @@ def operand_tiles(gen: asmgen,
     :param req: the requirement
     :return: operand name -> tile, with the operand's first index along dima
     """
-    extents = index_extents(gen, impl)
+    extents = index_extents(gen, impl, groups)
     tiles: dict[str, tile] = {}
     for leaf in for_each_operand(req, lambda x: x):
         dims = [extents.get(idx, ONE) if idx is not None else ONE for idx in leaf.indices]

@@ -427,7 +427,7 @@ class signature_emitter:
     :param program: the program to specialize
     """
 
-    def __init__(self, ctx, program: ir_program):
+    def __init__(self, ctx, program: ir_program, preallocate=()):
         self.ctx = ctx
         self.gen = ctx.gen
         self.program = program
@@ -446,6 +446,11 @@ class signature_emitter:
         self.vlb: dict[int, object] = {}
         self.masks: dict = {}
         self.indexes: dict = {}
+        # setup-time values a previous emission found it needed: allocated
+        # before any region, in the tracker every region inherits
+        self.preallocate = list(preallocate)
+        self.recipes: list[tuple[str, tuple, bool]] = []
+        self.regions_started = False
         self.region_loads: list[str] = []
         self.labels = iter(range(10**6))
         isa = self.gen.isa_setup()
@@ -617,15 +622,8 @@ class signature_emitter:
                     and coeff > 0 and 0 == coeff % esize:
                 # a vector length of strided elements: the vector length in
                 # elements times the stride in bytes, multiplied once
-                key = f"VL*{factors[1]}"
-                if key not in self.strides_in:
-                    vlreg = self.vl_elements(dt)
-                    reg = self.greg()
-                    self.strides_in[key] = reg
-                    self.late_setup.append(self.gen.mul_greg_greg(
-                        dst=reg, reg1=vlreg, reg2=self.stride_reg(factors[1], setup=True)))
                 lines += [self.gen.add_greg_greg(dst=areg, reg1=areg,
-                                                 reg2=self.strides_in[key])] * (coeff // esize)
+                                                 reg2=self.vl_stride(factors[1], dt))] * (coeff // esize)
             elif ("VL",) == factors and coeff > 0 and 0 == coeff % esize \
                     and self.vector_length_kept:
                 # RVV: the vector length is in a register - add it in bytes
@@ -764,12 +762,7 @@ class signature_emitter:
             return self.stride_reg(list(terms)[0][0], setup=setup)
         if set(terms) <= {()}:
             nbytes = terms.get((), 0) * adt_size(self.ctx.component_dts[comp])
-            key = f"constant stride {nbytes}"
-            if key not in self.strides_in:
-                reg = self.greg()
-                self.strides_in[key] = reg
-                self.late_setup.append(self.gen.mov_greg_imm(reg=reg, imm=nbytes))
-            return self.strides_in[key]
+            return self.constant_stride(nbytes)
         return None
 
     def vl_elements(self, dt):
@@ -781,12 +774,40 @@ class signature_emitter:
             return self.gen.isa_setup().vector_length_register(rt=self.rt)
         key = f"VL in {adt_size(dt)}-byte elements"
         if key not in self.strides_in:
+            self.recipes.append(("vl_elements", (dt,), self.regions_started))
             reg = self.greg()
             try:
                 self.late_setup.append(self.gen.vlen_to_greg(reg=reg, dt=dt))
             except (NotImplementedError, AttributeError) as err:
                 raise specialization_error(f"reading the vector length: {err}") from err
             self.strides_in[key] = reg
+        return self.strides_in[key]
+
+    def vl_stride(self, factor: str, dt):
+        """
+        A register holding the vector length in elements times a stride in
+        bytes: a vector length of strided elements, multiplied once in setup
+        """
+        key = f"VL*{factor}"
+        if key not in self.strides_in:
+            self.recipes.append(("vl_stride", (factor, dt), self.regions_started))
+            vlreg = self.vl_elements(dt)
+            reg = self.greg()
+            self.strides_in[key] = reg
+            self.late_setup.append(self.gen.mul_greg_greg(
+                dst=reg, reg1=vlreg, reg2=self.stride_reg(factor, setup=True)))
+        return self.strides_in[key]
+
+    def constant_stride(self, nbytes: int):
+        """
+        A register holding a constant stride, loaded once in setup
+        """
+        key = f"constant stride {nbytes}"
+        if key not in self.strides_in:
+            self.recipes.append(("constant_stride", (nbytes,), self.regions_started))
+            reg = self.greg()
+            self.strides_in[key] = reg
+            self.late_setup.append(self.gen.mov_greg_imm(reg=reg, imm=nbytes))
         return self.strides_in[key]
 
     def vl_bytes(self, dt):
@@ -797,6 +818,7 @@ class signature_emitter:
         """
         esize = adt_size(dt)
         if esize not in self.vlb:
+            self.recipes.append(("vl_bytes", (dt,), self.regions_started))
             vlreg = self.gen.isa_setup().vector_length_register(rt=self.rt)
             reg = self.greg()
             self.vlb[esize] = reg
@@ -1069,6 +1091,11 @@ class signature_emitter:
         # in a register: the narrowest, with the chosen grouping
         self.lmul = getattr(self.gen, "lmul", 1)
         self.vtype = (adt_size(dt), self.lmul) if hasattr(self.gen, "vsetvli_keep_vl") else None
+        # setup-time values found needed by a previous emission: allocated
+        # here, before any region, so every region knows their registers
+        for name, args in self.preallocate:
+            getattr(self, name)(*args)
+        self.regions_started = True
         # regions - each block, the dispatch, each case - set up what they
         # need at their start and release, at their end, what no later region
         # needs: parameters live only as long as they are used
@@ -1360,3 +1387,23 @@ class signature_emitter:
             code.extend(lines(gen.label(label=end)))
         return code
 
+
+
+def emit_program(ctx, program: ir_program) -> emitted_program:
+    """
+    Emit a program. Values setup computes once (the vector length in bytes,
+    times a stride, constant strides) are allocated where first needed - in a
+    case, only that case's register tracker knew their registers, which other
+    regions could hand out while setup's values must live in them. Where an
+    emission first needed one inside a region, emit again with every such
+    value allocated before the regions
+    """
+    emitter = signature_emitter(ctx, program)
+    out = emitter.emit()
+    for _ in range(3):
+        if not any(late for _, _, late in emitter.recipes):
+            return out
+        emitter = signature_emitter(ctx, program,
+                                    preallocate=[(n, a) for n, a, _ in emitter.recipes])
+        out = emitter.emit()
+    raise specialization_error("setup's registers kept changing between emissions")

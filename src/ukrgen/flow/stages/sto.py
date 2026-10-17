@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from ...components.tile import tile, dimension_properties as dimp, dimension_type as dimt
 from ...components.operation import operation
 from ...generators.tiling import generate_tiling, generators
-from ...support.tiles import index_extents, operand_tiles, lane_axes, register_tiles, ONE
+from ...support.tiles import index_extents, kernel_groups, operand_tiles, lane_axes, register_tiles, ONE
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
@@ -103,9 +103,11 @@ class sto_stage(stage):
 
             if sto_kind.COMPUTE == sto.kind:
                 impl = chosen[name].impl
-                found = index_extents(gen, impl)
+                groups = kernel_groups([c.impl for c in chosen.values()
+                                        if hasattr(getattr(c, "impl", None), "resolved_chain")])
+                found = index_extents(gen, impl, groups)
                 extents = {i: found.get(i, ONE) for i in sto.indices}
-                tiles = operand_tiles(gen, impl, sto.req)
+                tiles = operand_tiles(gen, impl, sto.req, groups)
                 lanes = lane_axes(gen, impl, sto.req, self.context.component_layouts)
                 registers = register_tiles(tiles, lanes, sto.req)
                 operands = sto.operand_indices

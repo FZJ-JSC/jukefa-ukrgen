@@ -48,14 +48,22 @@ def wide_components(ctx, program) -> dict[str, tuple[int, str]]:
     The components a program widens into: how many registers a group of them
     takes, by which method
     """
-    wide = {}
+    sizes = {}
     for op in widening_ops(program):
         sig = _sig(op)
         narrow = _narrow(sig)
-        for hw, idx in zip(op.hw_operands, op.indices):
-            shape = sig.operands[hw]
-            if rgt.VEC == shape.rtype and adt_size(shape.dt) > narrow:
-                wide[idx.component] = (widening_ways(sig), sig.structural_params["widening_method"].name)
+        for o in sig.operands.values():
+            if rgt.VEC == o.rtype and adt_size(o.dt) > narrow:
+                sizes[adt_size(o.dt)] = (widening_ways(sig), sig.structural_params["widening_method"].name)
+    # every component with vector registers of a widened type: the model
+    # counted them as groups, in the plain chains too
+    wide = {}
+    for block, section in blocks_and_sections(program):
+        for op in getattr(block, section) or []:
+            for idx, rtype in zip(op.indices, op.rtypes):
+                dt = ctx.component_dts.get(idx.component)
+                if rgt.VEC == rtype and dt is not None and adt_size(dt) in sizes:
+                    wide[idx.component] = sizes[adt_size(dt)]
     return wide
 
 
@@ -162,8 +170,11 @@ class widen(lsc_irmod):
                     # offsets counted in the component's own vectors: groups
                     op.offset = self.stretched(program, op, ways)
                 widening = isinstance(op, lsc_transformation) and widening_ways(_sig(op)) > 1
+                # a broadcast (alpha, beta) has no vector index: the same value in
+                # every member, not elements to interleave
+                along = memory and program.vector_indices.get(op.indices[0].component) is not None
                 whole = ("VEC_GROUP" == method and not isinstance(op, lsc_zero)) or \
-                    ("SPLIT_INTERLEAVED" == method and memory)
+                    ("SPLIT_INTERLEAVED" == method and along)
                 if whole:
                     # one operation for the group, its first register named
                     for j in at:
@@ -182,7 +193,8 @@ class widen(lsc_irmod):
                         member.indices[j].indices[0] = member.indices[j].indices[0] * ways + part
                     if widening:
                         member.add_property("part", part)
-                    if memory and part:
+                    if memory and part and program.vector_indices.get(member.indices[0].component):
+                        # a broadcast (alpha, beta) is the same in every member
                         member.offset = self.member_offset(program, member, part)
                     out.append(member)
                 changed += 1
@@ -195,7 +207,10 @@ class widen(lsc_irmod):
         whole groups
         """
         comp = op.indices[0].component
-        vidx = program.vector_indices[comp]
+        vidx = program.vector_indices.get(comp)
+        if vidx is None:
+            # a broadcast: no index to stretch along
+            return op.offset
         record = program.offsets[op.offset]
         elements = {}
         for idx, e in record.elements:
