@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from asmgen.callconv.fngen import fngen
+from ..support.tiles import widening_ways
 from asmgen.asmblocks.noarch import comparison
 from asmgen.asmblocks.op import (
     register_type as rgt,
@@ -148,7 +149,8 @@ def _sigs(groups) -> list:
     for attr in ("sigs", "members", "signatures"):
         if hasattr(groups, attr):
             return list(getattr(groups, attr))
-    return [groups.representative]
+    # a signature group's representative, or a signature itself
+    return [getattr(groups, "representative", groups)]
 
 
 def _masked(sig) -> bool:
@@ -160,7 +162,8 @@ def _offset_forms(sig) -> str | None:
     "plain" for a signature without an offset, "ioffset" for one taking an
     immediate offset, None for other addressing forms
     """
-    mods = {m.name for m in sig.modifiers} - {"MASK"}
+    # a structure load or store is addressed like a plain one
+    mods = {m.name for m in sig.modifiers} - {"MASK", "STRUCT"}
     if not mods or ({"GSTRIDE"} == mods and "streg" in sig.operands) \
             or ({"VINDEX"} == mods and "vidxreg" in sig.operands):
         # a strided access or a gather is addressed plainly; its stride or
@@ -488,6 +491,24 @@ class signature_emitter:
         are the low parts of vector registers the two must not meet.
         """
         key = (idx.component, idx.indices[0], rtype)
+        group = self.program.groups.get(idx.component)
+        if key not in self.phys and group is not None and rgt.VEC == rtype:
+            # a group of registers: all of them at once, consecutive and
+            # starting at a multiple of their number (RVV's groups need that,
+            # SVE's structure loads and stores take consecutive ones)
+            ways = group[0]
+            first = idx.indices[0] - idx.indices[0] % ways
+            used = self.rt.get_used_regs("vreg")
+            start = next((s for s in range(0, self.gen.max_vregs() - ways + 1, ways)
+                          if not any(s + p in used for p in range(ways))), None)
+            if start is None:
+                raise specialization_error(f"no {ways} consecutive vector registers left for "
+                                           f"{idx.component}{first}")
+            for p in range(ways):
+                self.rt.reserve_specific_reg("vreg", start + p)
+                member = (idx.component, first + p, rtype)
+                self.phys[member] = self.gen.vreg(start + p)
+                self.numbers[member] = ("vreg", start + p)
         if key not in self.phys:
             dt = self.dts.get((idx.component, idx.indices[0]))
             tag = "vreg"
@@ -557,7 +578,10 @@ class signature_emitter:
     def release(self, key):
         """
         A virtual register's value is dead: its physical register is free again
+        (a group's registers stay: a lone member must not be handed out)
         """
+        if key[0] in self.program.groups:
+            return
         if key in self.phys:
             tag, number = self.numbers.pop(key)
             self.rt.unuse_reg(tag, number)
@@ -795,6 +819,19 @@ class signature_emitter:
         self.positions[dest_key] = self.positions[src_key] + op.delta
         return lines
 
+    def members(self, op, data, sig) -> list:
+        """
+        The registers a load or store moves: for a structure signature on a
+        group, every member - interleaved in memory - else the one
+        """
+        ways = op.properties.get("group")
+        if not ways or "STRUCT" not in {m.name for m in sig.modifiers}:
+            return [data]
+        j = next(j for j, r in enumerate(op.rtypes) if rgt.VEC == r)
+        base = op.indices[j]
+        return [self.reg(lsc_reg_index(base.component, [base.indices[0] + p]), rgt.VEC)
+                for p in range(ways)]
+
     def _mem(self, op, data, areg, immediate: int, increment: int | None = None,
              voffset: int | None = None) -> str | None:
         """
@@ -804,7 +841,7 @@ class signature_emitter:
         dt = self.ctx.component_dts[op.indices[0].component]
         lane = op.properties.get("lane")
         for sig in sorted(_sigs(op.sigs), key=lambda s: len(s.modifiers)):
-            mods = {m.name for m in sig.modifiers} - {"MASK"}
+            mods = {m.name for m in sig.modifiers} - {"MASK", "STRUCT"}
             kwargs = {}
             if voffset is not None:
                 if {"VOFFSET"} != mods:
@@ -837,13 +874,39 @@ class signature_emitter:
             kwargs.update(sig.structural_params)
             try:
                 return "".join(prefix) + getattr(self.gen, op.step.op)(
-                    dregs=[data], areg=areg, dt=dt, modifiers=set(sig.modifiers),
+                    dregs=self.members(op, data, sig), areg=areg, dt=dt,
+                    modifiers=set(sig.modifiers),
                     operand_modifiers={n: set(s.modifiers) for n, s in sig.operands.items()
                                        if s.modifiers},
                     **kwargs)
             except Exception:       # asmgen refuses: try the next signature
                 continue
         return None
+
+    def vtype_for(self, op, sig) -> str:
+        """
+        Where the element type travels in a register (RVV's vtype): switched,
+        keeping the vector length, only before an operation needing another -
+        a widening one the narrow type, arithmetic on a group the group's type
+        and grouping. Empty where nothing changes
+        """
+        if self.vtype is None or not hasattr(self.gen, "vsetvli_keep_vl"):
+            return ""
+        sizes = [adt_size(o.dt) for o in sig.operands.values()
+                 if rgt.VEC == o.rtype and getattr(o, "dt", None) is not None]
+        if not sizes:
+            return ""
+        ways = op.properties.get("group", 1)
+        if widening_ways(sig) > 1:
+            want = (min(sizes), self.lmul)
+        else:
+            want = (max(sizes), self.lmul * ways)
+        if want == self.vtype:
+            return ""
+        self.vtype = want
+        dt = next(o.dt for o in sig.operands.values()
+                  if rgt.VEC == o.rtype and adt_size(o.dt) == want[0])
+        return self.gen.vsetvli_keep_vl(dt=dt, lmul=want[1])
 
     def compute(self, op: lsc_transformation) -> str:
         """
@@ -864,7 +927,7 @@ class signature_emitter:
             parts = {"part": op.properties["part"]} \
                 if "part" in sig.operands and "part" in op.properties else {}
             try:
-                return getattr(self.gen, op.op)(
+                return self.vtype_for(op, sig) + getattr(self.gen, op.op)(
                     **regs, **dts, **lanes, **masks, **parts, **sig.structural_params,
                     modifiers=set(sig.modifiers),
                     operand_modifiers={n: set(s.modifiers) for n, s in sig.operands.items()
@@ -1002,6 +1065,10 @@ class signature_emitter:
             self.reg(lsc_reg_index(key[0], [key[1]]), key[2])
         setup = lines(isa.setup(rt=self.rt, dt=dt))
         self.isa_setup_lines = len(setup)
+        # the element type the ISA's setup leaves in place, where it travels
+        # in a register: the narrowest, with the chosen grouping
+        self.lmul = getattr(self.gen, "lmul", 1)
+        self.vtype = (adt_size(dt), self.lmul) if hasattr(self.gen, "vsetvli_keep_vl") else None
         # regions - each block, the dispatch, each case - set up what they
         # need at their start and release, at their end, what no later region
         # needs: parameters live only as long as they are used
@@ -1037,12 +1104,13 @@ class signature_emitter:
         # the cases exclude each other, so they share the registers left, and
         # a parameter's register can become an address register in each
         start = (dict(self.positions), dict(self.phys), dict(self.numbers),
-                 copy.deepcopy(self.rt), dict(self.aregs), set(self.live_params))
+                 copy.deepcopy(self.rt), dict(self.aregs), set(self.live_params), self.vtype)
         main_rt = self.rt
         cases = []
         for j, c in enumerate(self.program.cases):
             self.positions, self.phys, self.numbers = dict(start[0]), dict(start[1]), dict(start[2])
             self.rt, self.aregs, self.live_params = copy.deepcopy(start[3]), dict(start[4]), set(start[5])
+            self.vtype = start[6]
             self.region_loads = self.start_addresses(case_comps[j], set())
             out = [self.block(b, list(c.blocks[i + 1:])) for i, b in enumerate(c.blocks)]
             if out:

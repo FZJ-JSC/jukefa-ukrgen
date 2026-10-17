@@ -151,6 +151,8 @@ class ir_program:
     cases : list[ir_case] = field(default_factory=list)
     #: the index each component's vector registers run along
     vector_indices : dict[str, str] = field(default_factory=dict)
+    #: components whose registers are groups: how many registers, the method
+    groups : dict[str, tuple[int, str]] = field(default_factory=dict)
 
     def render(self) -> str:
         db = self.offsets
