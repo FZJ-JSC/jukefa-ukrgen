@@ -231,7 +231,7 @@ class lsc_specializer:
         if ways > 1:
             wms = [getattr(self.gen, op, None).widening_method \
                     for op in self.ops_used if getattr(self.gen, op, None) != None]
-            if any([wmtd==wm.SPLIT_INSTRUCTIONS for wmtd in wms]):
+            if any([wmtd in (wm.SPLIT_CONTIGUOUS, wm.SPLIT_INTERLEAVED) for wmtd in wms]):
                 split_instructions = True
             if any([wmtd==wm.VEC_GROUP for wmtd in wms]):
                 vec_groups = True

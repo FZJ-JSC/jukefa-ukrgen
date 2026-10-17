@@ -54,7 +54,7 @@ def calculate_addr_parameters(sup : op_support,
         elif data_t.is_fixed_tile or data_t.is_fixed_vector:
             max_val = gen.max_load_immoff(dt=dt)
 
-        if getattr(gen,primary_op).widening_method == wm.SPLIT_INSTRUCTIONS \
+        if getattr(gen,primary_op).widening_method in (wm.SPLIT_CONTIGUOUS, wm.SPLIT_INTERLEAVED) \
            and c in wide_components:
             max_val //= ways
 
