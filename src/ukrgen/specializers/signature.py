@@ -156,13 +156,22 @@ def _accepts(sig, name: str, value) -> bool:
     return True
 
 
-def _all_true(ctx):
+def _all_true(ctx, rt=None):
     """
     The ISA's all-true governing predicate for masked signatures, set up by
-    its isa_setup(); None where there is none
+    its isa_setup() - and reserved and aliased in the register tracker, when
+    one is given. Only where predication is explicit (SVE, SME): with RVV's
+    implicit vector length a mask is something else, v0. None where there is
+    none.
     """
-    setup = getattr(ctx.gen, "isa_setup", None)
-    return setup().all_true_predicate(rt=None, dt=None) if setup else None
+    factory = getattr(ctx.gen, "isa_setup", None)
+    if factory is None:
+        return None
+    setup = factory()
+    kind = getattr(setup, "predication", None)
+    if kind is not None and "EXPLICIT" != kind().name:
+        return None
+    return setup.all_true_predicate(rt=rt, dt=None)
 
 
 def _usable(ctx, sig) -> bool:
@@ -340,7 +349,11 @@ class signature_emitter:
         self.ctx = ctx
         self.gen = ctx.gen
         self.program = program
-        self.rt = reg_tracker([("greg", self.gen.max_gregs), ("vreg", self.gen.max_vregs)])
+        # the generator's tracker keeps the stack pointer and the like out of
+        # reach; older generators don't provide one
+        make = getattr(self.gen, "get_reg_tracker", None)
+        self.rt = make() if make else \
+            reg_tracker([("greg", self.gen.max_gregs), ("vreg", self.gen.max_vregs)])
         self.phys: dict[tuple, object] = {}
         self.dts: dict[tuple, object] = self._register_types()
         self.numbers: dict[tuple, int] = {}
@@ -564,7 +577,7 @@ class signature_emitter:
         masks = [n for n, o in sig.operands.items() if orl.MASK == o.orole]
         if not masks:
             return True
-        predicate = _all_true(self.ctx)
+        predicate = _all_true(self.ctx, self.rt)
         if predicate is None:
             return False
         for name in masks:

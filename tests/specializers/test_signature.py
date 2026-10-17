@@ -3,6 +3,7 @@ Specializing LSC IR through operation signatures
 """
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -159,6 +160,17 @@ class test_signature_specializer(unittest.TestCase):
         body = ctx.emitted[0].blocks[0].sections["body"]
         indexed = {int(l.split(",")[2].split(".")[0][1:]) for l in body if l.startswith("fmla")}
         self.assertTrue(indexed and max(indexed) <= 15)
+
+    def test_reserved_registers_untouched(self):
+        # the generator's tracker keeps sp, lr, fp and x18 out of reach
+        reserved = {"sp", "x30", "x29", "x18"}
+        for isa in ("neon", "sve"):
+            with self.subTest(isa=isa):
+                ctx, res = mm(isa=isa, m="2", n="4", k="3", **{"B-data-regs": "4"})
+                self.assertTrue(res.completed, res.output)
+                used = {r for line in ctx.emitted[0].instructions()
+                        for r in re.findall(r"\b(x\d+|sp)\b", line)}
+                self.assertFalse(used & reserved, used & reserved)
 
     def test_print_asm(self):
         _, res = mm(**{"print-asm": True})
