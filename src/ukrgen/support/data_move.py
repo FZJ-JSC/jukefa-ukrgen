@@ -187,8 +187,10 @@ class dm_repeat:
     #: lanes within each 128-bit block, repeated per block: lane l of block b
     #: is element b * block + l of the vector, loaded into lane l of a scratch
     per_block : bool = False
-    #: once per 128-bit block, the block number in this signature operand
+    #: once per block, the block number in this signature operand
     block_operand : str | None = None
+    #: size of those blocks: 16 (128 bits) or 32 (256 bits, AVX-512)
+    block_bytes : int = 16
 
 
 @dataclass(frozen=True)

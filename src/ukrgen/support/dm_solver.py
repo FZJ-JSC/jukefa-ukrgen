@@ -139,10 +139,12 @@ def repeat_fits(gen : asmgen, sig, step : dm_step, dt : adt) -> bool:
         # lanes of one 128-bit block
         name, lanes = rep.lane_operand, block_lanes
     elif rep.block_operand is not None:
-        # every 128-bit block, each the size the lanes filled
-        name, lanes = rep.block_operand, gen.simd_size // 16
+        # every block of block_bytes, the move's block size the same
+        if gen.simd_size // rep.block_bytes < 2:
+            return False
+        name, lanes = rep.block_operand, gen.simd_size // rep.block_bytes
         size = sig.structural_params.get(name.replace("_block", "_blocksize"))
-        if size is not None and size != block_lanes:
+        if size is not None and size != rep.block_bytes // adt_size(dt):
             return False
     else:
         name, lanes = rep.lane_operand, gen.simd_size // adt_size(dt)

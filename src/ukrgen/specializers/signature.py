@@ -271,31 +271,21 @@ class signature_specializer:
                     raise specialization_error(
                         f"{op.rsln} access to {db[op.offset]} is {sym._make(rel)} elements from "
                         f"its address register, which is not specialized yet")
-            walk = "lane" in op.properties and 1 == len(strided) \
-                and 1 == len(list(strided)[0])
-            if walk:
-                # lane by lane along a stride: one pointer per base and stride,
-                # stepping forward by the stride, restarting from the base when
-                # an access goes back - a pointer per lane would take a
-                # register each
-                (factor,), count = list(strided.items())[0]
-                wkey = (comp, reg, factor)
-                if wkey not in self.walk_regs:
-                    self.walk_regs[wkey] = self.new_reg(comp)
-                ptr = self.walk_regs[wkey]
-                at = self.walking.get(wkey)
-                if at is None or count < at:
-                    inserted.append(lsc_addr_compute(comp, reg, ptr, sym.factor(factor, count),
-                                                     scalar_tile))
-                    self.positions[(comp, ptr)] = self.positions[(comp, reg)] + sym.factor(factor, count)
-                elif count > at:
-                    inserted.append(lsc_addr_compute(comp, ptr, ptr, sym.factor(factor, count - at),
-                                                     scalar_tile))
-                    self.positions[(comp, ptr)] = self.positions[(comp, ptr)] + \
-                        sym.factor(factor, count - at)
-                self.walking[wkey] = count
-                reg = ptr
-                strided = {}
+            # lane by lane along a stride: the lane's own stride walks one
+            # pointer per base and stride, stepping by the stride and
+            # restarting from its base when the base changes or an access
+            # goes back; the other factors (a column) give that base, as a
+            # column pointer. A pointer per lane would take a register each
+            lane_factor = None
+            if "lane" in op.properties:
+                singles = [k[0] for k in strided if 1 == len(k)]
+                index = op.properties.get("stride_index")
+                named = f"stride({comp},{index})" if index is not None else None
+                if named in singles:
+                    lane_factor = named
+                elif 1 == len(strided) and 1 == len(singles):
+                    lane_factor = singles[0]
+            lane_count = strided.pop((lane_factor,)) if lane_factor is not None else None
             key = (comp, reg, tuple(sorted(strided.items())))
             if strided and key not in self.pointer_regs:
                 self.pointer_regs[key] = self.new_reg(comp)
@@ -305,7 +295,24 @@ class signature_specializer:
                 inserted.append(lsc_addr_compute(comp, reg, ptr, delta, scalar_tile))
                 self.positions[(comp, ptr)] = self.positions[(comp, reg)] + delta
                 self.pointers.add(key)
+            base = reg
             reg = ptr
+            if lane_factor is not None:
+                wkey = (comp, base, lane_factor)
+                if wkey not in self.walk_regs:
+                    self.walk_regs[wkey] = self.new_reg(comp)
+                walker = self.walk_regs[wkey]
+                state = self.walking.get(wkey)
+                if state is None or state[0] != ptr or lane_count < state[1]:
+                    step = sym.factor(lane_factor, lane_count)
+                    inserted.append(lsc_addr_compute(comp, ptr, walker, step, scalar_tile))
+                    self.positions[(comp, walker)] = self.positions[(comp, ptr)] + step
+                elif lane_count > state[1]:
+                    step = sym.factor(lane_factor, lane_count - state[1])
+                    inserted.append(lsc_addr_compute(comp, walker, walker, step, scalar_tile))
+                    self.positions[(comp, walker)] = self.positions[(comp, walker)] + step
+                self.walking[wkey] = (ptr, lane_count)
+                reg = walker
 
         const = rel.get((), 0)
         immediate = const * adt_size(self.ctx.component_dts[comp])

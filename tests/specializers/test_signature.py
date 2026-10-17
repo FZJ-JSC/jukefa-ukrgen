@@ -44,6 +44,16 @@ def mm(isa="neon", **extra):
 
 
 def assembles(lines, arch="armv8-a"):
+    if "x86" == arch:
+        # the host assembler, the inline-assembly escapes undone
+        lines = [l.replace("%%", "%").replace("%=", "0") for l in lines]
+        with tempfile.TemporaryDirectory() as d:
+            src = os.path.join(d, "k.s")
+            with open(src, "w") as f:
+                f.write("\n".join(lines) + "\n")
+            r = subprocess.run(["as", src, "-o", os.path.join(d, "k.o")],
+                               capture_output=True, text=True)
+            return 0 == r.returncode, r.stderr
     with tempfile.TemporaryDirectory() as d:
         src = os.path.join(d, "k.s")
         with open(src, "w") as f:
@@ -255,6 +265,35 @@ class test_signature_specializer(unittest.TestCase):
                 inserts = [i for i, l in enumerate(body) if l.startswith(insert)]
                 self.assertTrue(inserts)
                 self.assertTrue(all(body[i - 1].startswith("vmovhpd") for i in inserts))
+
+    def test_avx512_block_lanes_256(self):
+        # 128-bit blocks into a 256-bit scratch, then 256-bit inserts: two on
+        # the destination per vector, each after its half is complete
+        ctx, res = mm(isa="avx512", **{
+            "A-layout": ["m:s", "k:c"], "no-preload": True,
+            "mm-to": ["fma(A.VEC:block_lanes_256, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
+        self.assertTrue(res.completed, res.output)
+        body = ctx.emitted[0].blocks[0].sections["body"]
+        wide = [i for i, l in enumerate(body) if l.startswith("vinsertf64x4")]
+        self.assertTrue(wide)
+        self.assertTrue(all(body[i - 1].startswith("vinsertf32x4 $1") for i in wide))
+        ok, err = assembles(ctx.emitted[0].instructions(), arch="x86")
+        self.assertTrue(ok, err)
+
+    def test_avx_block_lanes_store(self):
+        # C strided both ways: each block extracted, its lanes stored; the
+        # lanes walk a pointer from the column's
+        for isa, extract in (("avx256", "vextractf128"), ("avx512", "vextractf32x4")):
+            with self.subTest(isa=isa):
+                ctx, res = mm(isa=isa, **{"C-layout": ["m:s", "n:s"],
+                                          "store-to": ["C.VEC:block_lanes"]})
+                self.assertTrue(res.completed, res.output)
+                store = [l for l in ctx.emitted[0].blocks[1].sections["body"]
+                         if l.startswith(("vextract", "vmovsd", "vmovhpd"))]
+                self.assertTrue(store[0].startswith(extract))
+                self.assertEqual(len(store) // 3, sum(l.startswith(extract) for l in store))
+                ok, err = assembles(ctx.emitted[0].instructions(), arch="x86")
+                self.assertTrue(ok, err)
 
     def test_print_asm(self):
         _, res = mm(**{"print-asm": True})

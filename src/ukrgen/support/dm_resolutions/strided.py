@@ -84,3 +84,30 @@ class strided_provider(resolution_provider):
                             src=[scratch], src_rtypes=[rgt.VEC],
                             opd_mod_reqs={orig_ref(): {omod.IBLOCK}},
                             repeat=dm_repeat(block_operand="bdreg_block"))]))
+                # AVX-512: 128-bit blocks into a 256-bit scratch, then 256-bit
+                # inserts - two on the destination instead of four, the halves
+                # built independently
+                half = temp_ref(tag="1")
+                registry.add_resolution(key_in, tr(unique_tag="block_lanes_256", steps=[
+                    dm_step(op="load", dest=scratch, dest_rtype=rgt.VEC,
+                            opd_mod_reqs={scratch: {omod.ILANE, omod.ZEROOTHERS}},
+                            forbidden_op_mods=no_gather,
+                            repeat=dm_repeat(lane_operand="adreg_lane", per_block=True)),
+                    dm_step(op="move", dest=half, dest_rtype=rgt.VEC,
+                            src=[scratch], src_rtypes=[rgt.VEC],
+                            opd_mod_reqs={half: {omod.IBLOCK}},
+                            repeat=dm_repeat(block_operand="bdreg_block", block_bytes=16)),
+                    dm_step(op="move", dest=orig_ref(), dest_rtype=rgt.VEC,
+                            src=[half], src_rtypes=[rgt.VEC],
+                            opd_mod_reqs={orig_ref(): {omod.IBLOCK}},
+                            repeat=dm_repeat(block_operand="bdreg_block", block_bytes=32))]))
+                # stores: each block extracted into a scratch, its lanes stored
+                registry.add_resolution(key_out, tr(unique_tag="block_lanes", steps=[
+                    dm_step(op="move", dest=scratch, dest_rtype=rgt.VEC,
+                            src=[orig_ref()], src_rtypes=[rgt.VEC],
+                            opd_mod_reqs={orig_ref(): {omod.IBLOCK}},
+                            repeat=dm_repeat(block_operand="adreg_block")),
+                    dm_step(op="store", src=[scratch], src_rtypes=[rgt.VEC],
+                            opd_mod_reqs={scratch: {omod.ILANE}},
+                            forbidden_op_mods=no_gather,
+                            repeat=dm_repeat(lane_operand="adreg_lane", per_block=True))]))
