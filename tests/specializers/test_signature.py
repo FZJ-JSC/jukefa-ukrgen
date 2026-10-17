@@ -231,11 +231,13 @@ class test_signature_specializer(unittest.TestCase):
                 self.assertTrue(all(body[i - 1].startswith(reset) for i in gathers))
                 self.assertTrue(all(",1)" in body[i] for i in gathers))
 
-    def test_rvv_gather_refused(self):
-        from ukrgen.flow.stages.stage import stage_error
-        with self.assertRaisesRegex(stage_error, "gregstride"):
-            mm(isa="rvv", **{"rvv-LMUL": "1", "A-layout": ["m:s", "k:c"],
-                             "mm-to": ["fma(A.VEC:gather, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
+    def test_rvv_gather(self):
+        # a gather is a choice of its own on RVV too: vid.v and vmul.vx build
+        # the index vector of byte offsets, vluxei64 loads through it
+        p = self.rvv(**{"A-layout": ["m:s", "k:c"],
+                        "mm-to": ["fma(A.VEC:gather, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
+        self.assertTrue(any(l.startswith("vid.v") for l in p.setup))
+        self.assertTrue(any(l.startswith("vluxei64") for l in p.blocks[0].sections["body"]))
 
     def test_print_asm(self):
         _, res = mm(**{"print-asm": True})

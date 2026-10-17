@@ -421,6 +421,7 @@ class signature_emitter:
         key = (idx.component, idx.indices[0], rtype)
         if key not in self.phys:
             dt = self.dts.get((idx.component, idx.indices[0]))
+            tag = "vreg"
             if rgt.VEC == rtype:
                 bound = self.bounds.get(key)
                 if bound is None:
@@ -434,14 +435,26 @@ class signature_emitter:
                     number = free[0]
                     self.rt.reserve_specific_reg("vreg", number)
                 self.phys[key] = self.gen.vreg(number)
+            elif rgt.FP == rtype and "freg" in getattr(self.rt, "shared", {}):
+                # the tracker knows which vector registers FP registers are
+                number = self.rt.reserve_any_reg("freg")
+                tag = "freg"
+                self.phys[key] = self.gen.freg(number, dt)
+            elif rgt.FP == rtype and "freg" in getattr(self.rt, "registered_types", ()):
+                # a file of its own (RVV)
+                number = self.rt.reserve_any_reg("freg")
+                tag = "freg"
+                self.phys[key] = self.gen.freg(number, dt)
             elif rgt.FP == rtype:
+                # older trackers: from the top of the vector file, clear of vectors
                 used = self.rt.get_used_regs("vreg")
                 number = max(i for i in range(self.gen.max_vregs()) if i not in used)
                 self.rt.reserve_specific_reg("vreg", number)
+                tag = "vreg"
                 self.phys[key] = self.gen.freg(number, dt)
             else:
                 raise specialization_error(f"{rtype.name} registers are not specialized yet")
-            self.numbers[key] = number
+            self.numbers[key] = (tag, number)
         return self.phys[key]
 
     def _register_bounds(self) -> dict[tuple, int]:
@@ -477,7 +490,8 @@ class signature_emitter:
         A virtual register's value is dead: its physical register is free again
         """
         if key in self.phys:
-            self.rt.unuse_reg("vreg", self.numbers.pop(key))
+            tag, number = self.numbers.pop(key)
+            self.rt.unuse_reg(tag, number)
             del self.phys[key]
 
     def greg(self):
