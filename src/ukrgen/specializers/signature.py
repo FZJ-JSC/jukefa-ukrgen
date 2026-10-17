@@ -26,6 +26,7 @@ from asmgen.asmblocks.op import (
     opmem_modifier as memmod,
 )
 from asmgen.registers import reg_tracker, adt_size
+from asmgen.asmblocks.op.constraint import ConstraintDoesNotApplyError
 
 from ..lsc_model.addressing import sym
 from ..lsc_model.ir import ir_program, ir_block
@@ -135,6 +136,24 @@ def _offset_forms(sig) -> str | None:
     return None
 
 
+def _accepts(sig, name: str, value) -> bool:
+    """
+    Whether a signature's operand takes a value: each of its constraints is
+    asked, a ValueError meaning no; constraints that don't apply are skipped
+    """
+    shape = sig.operands.get(name)
+    if shape is None:
+        return False
+    for constraint in shape.value_constraints:
+        try:
+            constraint(name, set(sig.modifiers), value, {})
+        except ConstraintDoesNotApplyError:
+            continue
+        except ValueError:
+            return False
+    return True
+
+
 def _takes(sig, immediate: int) -> bool:
     """
     Whether a load or store signature takes an access at this immediate offset
@@ -143,14 +162,7 @@ def _takes(sig, immediate: int) -> bool:
     if "plain" == form:
         return 0 == immediate
     if "ioffset" == form:
-        for cons in sig.operands["ioffset"].value_constraints:
-            lo, hi = getattr(cons, "minval", None), getattr(cons, "maxval", None)
-            if lo is not None and not lo <= immediate <= hi:
-                return False
-            valset = getattr(cons, "valset", None)
-            if valset is not None and immediate not in valset:
-                return False
-        return True
+        return _accepts(sig, "ioffset", immediate)
     return False
 
 
@@ -243,7 +255,13 @@ class signature_specializer:
                     f"every {op.op} signature needs a governing predicate: masked "
                     f"signatures (SVE, RVV) are not specialized yet")
         if isinstance(op, lsc_move):
-            raise specialization_error("moves between registers are not specialized yet")
+            sigs = _sigs(op.sigs)
+            if sigs and all(_masked(s) for s in sigs):
+                raise specialization_error(
+                    "every move signature needs a governing predicate: masked "
+                    "signatures (SVE, RVV) are not specialized yet")
+            if not sigs:
+                raise specialization_error(f"the ISA has no move for {op.rsln}")
         return [op]
 
     def adapt_block(self, block: ir_block):
@@ -530,8 +548,27 @@ class signature_emitter:
         if isinstance(op, lsc_addr_compute):
             return self.address(op)
         if isinstance(op, lsc_move):
-            raise specialization_error("moves between registers are not specialized yet")
+            return [self.move(op)]
         raise specialization_error(f"cannot emit {type(op).__name__}")
+
+    def move(self, op: lsc_move) -> str:
+        """
+        A move between registers through the first unmasked signature taking it
+        """
+        src = self.reg(op.indices[0], op.rtypes[0])
+        dst = self.reg(op.indices[1], op.rtypes[1])
+        dt = self.dts[(op.indices[1].component, op.indices[1].indices[0])]
+        for sig in _sigs(op.sigs):
+            if _masked(sig):
+                continue
+            try:
+                return self.gen.move(
+                    dregs=[src, dst], dts=[dt, dt], modifiers=set(sig.modifiers),
+                    operand_modifiers={n: set(s.modifiers) for n, s in sig.operands.items()
+                                       if s.modifiers})
+            except Exception:       # asmgen refuses: try the next signature
+                continue
+        raise specialization_error(f"no move signature takes {src} into {dst}")
 
     def block(self, block: ir_block, later: list[ir_block] = ()) -> emitted_block:
         out = emitted_block(name=block.name, loop_index=block.loop_index)

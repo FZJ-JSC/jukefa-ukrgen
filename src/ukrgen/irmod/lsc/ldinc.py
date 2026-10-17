@@ -10,7 +10,7 @@ from ...models.load_store_operations import (
     lsc_load, lsc_store, lsc_addr_compute, ldst_modifier)
 from ...models.lsc.reg import lsc_reg_type
 from ...lsc_model.addressing import sym
-from ...specializers.signature import _sigs, _masked
+from ...specializers.signature import _sigs, _masked, _accepts
 from .base import lsc_irmod, irmod_placement, blocks_and_sections
 
 
@@ -70,15 +70,7 @@ class ldinc(lsc_irmod):
                 if increment == self.transfer_size(op):
                     return True
                 continue
-            fits = True
-            for cons in shape.value_constraints:
-                lo, hi = getattr(cons, "minval", None), getattr(cons, "maxval", None)
-                if lo is not None and not lo <= increment <= hi:
-                    fits = False
-                valset = getattr(cons, "valset", None)
-                if valset is not None and increment not in valset:
-                    fits = False
-            if fits:
+            if _accepts(sig, "iinc", increment):
                 return True
         return False
 

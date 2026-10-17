@@ -107,6 +107,17 @@ class test_signature_specializer(unittest.TestCase):
         self.assertFalse(res.completed)
         self.assertIn("C@a1 <- C@a0 + stride(C,n)", res.output)
 
+    def test_scalar_broadcast(self):
+        # bc_scalar: B's element into a scalar register, then broadcast - a
+        # move between registers, emitted through asmgen's move signatures
+        ctx, res = mm(**{"mm-to": ["fma(A.VEC:direct, B.VEC:bc_scalar, C.VEC){i=m, n=1, k*=1}"]})
+        self.assertTrue(res.completed, res.output)
+        body = ctx.emitted[0].blocks[0].sections["body"]
+        self.assertTrue(any(l.startswith("dup ") and ".d[0]" in l for l in body))
+        if shutil.which("aarch64-linux-gnu-as"):
+            ok, err = assembles(ctx.emitted[0].instructions())
+            self.assertTrue(ok, err)
+
     def test_predicates_not_yet(self):
         from ukrgen.flow.stages.stage import stage_error
         with self.assertRaisesRegex(stage_error, "specializing for the ISA: .*governing predicate"):
