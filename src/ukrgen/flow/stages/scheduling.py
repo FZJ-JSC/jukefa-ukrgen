@@ -95,8 +95,8 @@ class schedule_stage(stage):
                         later = blocks[pos + 1:] + ([] if case is not None else
                                                     [b for c in program.cases for b in c.blocks])
                         budget = register_budget(
-                            registers={"vreg": gen.max_vregs - reserve,
-                                       "freg": gen.max_fregs - reserve},
+                            registers={"vreg": gen.max_vregs() - reserve,
+                                       "freg": gen.max_fregs() - reserve},
                             inflight=None if inflight is None else int(inflight),
                             live_out=_read_before_written(later))
                     for section in SECTIONS:

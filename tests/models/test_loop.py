@@ -84,9 +84,9 @@ class test_lsc_loop(unittest.TestCase):
 
         generator = gen()
         rt = reg_tracker(reg_type_init_list=
-                         [('greg', generator.max_gregs),
-                          ('freg', generator.max_fregs),
-                          ('vreg', generator.max_vregs),
+                         [('greg', generator.max_gregs()),
+                          ('freg', generator.max_fregs()),
+                          ('vreg', generator.max_vregs()),
                           ('treg', generator.max_tregs(dt=adt.FP64))])
         specializer = lsc_specializer(model=None, gen=generator, rt=rt)
 

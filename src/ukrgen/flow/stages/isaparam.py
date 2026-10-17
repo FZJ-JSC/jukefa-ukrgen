@@ -32,9 +32,9 @@ class isaparam_stage(stage):
 
 
         self.context.rt = reg_tracker([
-            ('greg',self.context.gen.max_gregs),
-            ('freg',self.context.gen.max_fregs),
-            ('vreg',self.context.gen.max_vregs),
+            ('greg',self.context.gen.max_gregs()),
+            ('freg',self.context.gen.max_fregs()),
+            ('vreg',self.context.gen.max_vregs()),
             ('treg',self.context.gen.max_tregs(adt.FP64))])
 
         self.context.params.update(self.params)

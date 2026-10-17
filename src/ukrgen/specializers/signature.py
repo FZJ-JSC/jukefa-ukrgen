@@ -353,7 +353,7 @@ class signature_emitter:
         # reach; older generators don't provide one
         make = getattr(self.gen, "get_reg_tracker", None)
         self.rt = make() if make else \
-            reg_tracker([("greg", self.gen.max_gregs), ("vreg", self.gen.max_vregs)])
+            reg_tracker([("greg", self.gen.max_gregs()), ("vreg", self.gen.max_vregs())])
         self.phys: dict[tuple, object] = {}
         self.dts: dict[tuple, object] = self._register_types()
         self.numbers: dict[tuple, int] = {}
@@ -415,7 +415,7 @@ class signature_emitter:
                 self.phys[key] = self.gen.vreg(number)
             elif rgt.FP == rtype:
                 used = self.rt.get_used_regs("vreg")
-                number = max(i for i in range(self.gen.max_vregs) if i not in used)
+                number = max(i for i in range(self.gen.max_vregs()) if i not in used)
                 self.rt.reserve_specific_reg("vreg", number)
                 self.phys[key] = self.gen.freg(number, dt)
             else:
@@ -431,7 +431,7 @@ class signature_emitter:
         signature's constraints, so whatever asmgen declares counts.
         """
         bounds: dict[tuple, int] = {}
-        top = self.gen.max_vregs - 1
+        top = self.gen.max_vregs() - 1
         for op in self._all_ops():
             if not isinstance(op, lsc_transformation):
                 continue

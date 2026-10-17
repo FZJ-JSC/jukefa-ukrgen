@@ -233,3 +233,18 @@ def filter_by_forbidden_semantics(sigs: list[opsig],
 
     return [sig for sig in sigs
             if not forbidden & frozenset(sig.modifiers)]
+
+
+_group_sigs_unordered = group_sigs
+
+
+def group_sigs(sigs):
+    """
+    Group signatures by identity, unmasked groups first: where the same
+    candidate could come from either - SVE's fmul, predicated or not - the
+    unpredicated form is chosen. Predicated forms may constrain their
+    registers (Zdn: the destination is the first source)
+    """
+    groups = _group_sigs_unordered(sigs)
+    masked = lambda g: any("MASK" == o.orole.name for o in g.representative.operands.values())
+    return sorted(groups, key=masked)

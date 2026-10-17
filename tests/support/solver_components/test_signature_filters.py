@@ -60,7 +60,8 @@ class test_signature_filters(unittest.TestCase):
 
         sigs = [sig for sig in sigs if sig.operands['adreg'].dt == adt.FP64]
 
-        self.assertEqual(2, len(sigs))
+        # predicated vectors, unpredicated vectors, unpredicated indexed (BLOCKLANE)
+        self.assertEqual(3, len(sigs))
         self.assertTrue(any(opdmod.BLOCKLANE in sig.operands['bdreg'].modifiers for sig in sigs))
 
         sigs = filter_by_op_mods(sigs, {d3mod.MASK})
