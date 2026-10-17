@@ -183,7 +183,12 @@ class dm_repeat:
 
     :param lane_operand: signature operand taking the lane number
     """
-    lane_operand : str
+    lane_operand : str | None = None
+    #: lanes within each 128-bit block, repeated per block: lane l of block b
+    #: is element b * block + l of the vector, loaded into lane l of a scratch
+    per_block : bool = False
+    #: once per 128-bit block, the block number in this signature operand
+    block_operand : str | None = None
 
 
 @dataclass(frozen=True)

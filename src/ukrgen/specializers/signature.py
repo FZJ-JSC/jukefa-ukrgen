@@ -237,6 +237,10 @@ class signature_specializer:
             self.next_reg[comp] = max(self.next_reg.get(comp, 0), reg + 1)
         self.pointer_regs: dict[tuple, int] = {}
         self.pointers: set[tuple] = set()
+        # walking pointers for lane-by-lane strided accesses: register, and
+        # the stride multiple it is at in this section
+        self.walk_regs: dict[tuple, int] = {}
+        self.walking: dict[tuple, int] = {}
         self.scratch: dict[str, int] = {}
 
     def new_reg(self, comp: str) -> int:
@@ -267,11 +271,36 @@ class signature_specializer:
                     raise specialization_error(
                         f"{op.rsln} access to {db[op.offset]} is {sym._make(rel)} elements from "
                         f"its address register, which is not specialized yet")
+            walk = "lane" in op.properties and 1 == len(strided) \
+                and 1 == len(list(strided)[0])
+            if walk:
+                # lane by lane along a stride: one pointer per base and stride,
+                # stepping forward by the stride, restarting from the base when
+                # an access goes back - a pointer per lane would take a
+                # register each
+                (factor,), count = list(strided.items())[0]
+                wkey = (comp, reg, factor)
+                if wkey not in self.walk_regs:
+                    self.walk_regs[wkey] = self.new_reg(comp)
+                ptr = self.walk_regs[wkey]
+                at = self.walking.get(wkey)
+                if at is None or count < at:
+                    inserted.append(lsc_addr_compute(comp, reg, ptr, sym.factor(factor, count),
+                                                     scalar_tile))
+                    self.positions[(comp, ptr)] = self.positions[(comp, reg)] + sym.factor(factor, count)
+                elif count > at:
+                    inserted.append(lsc_addr_compute(comp, ptr, ptr, sym.factor(factor, count - at),
+                                                     scalar_tile))
+                    self.positions[(comp, ptr)] = self.positions[(comp, ptr)] + \
+                        sym.factor(factor, count - at)
+                self.walking[wkey] = count
+                reg = ptr
+                strided = {}
             key = (comp, reg, tuple(sorted(strided.items())))
-            if key not in self.pointer_regs:
+            if strided and key not in self.pointer_regs:
                 self.pointer_regs[key] = self.new_reg(comp)
-            ptr = self.pointer_regs[key]
-            if key not in self.pointers:
+            ptr = self.pointer_regs[key] if strided else reg
+            if strided and key not in self.pointers:
                 delta = sym._make(strided)
                 inserted.append(lsc_addr_compute(comp, reg, ptr, delta, scalar_tile))
                 self.positions[(comp, ptr)] = self.positions[(comp, reg)] + delta
@@ -337,6 +366,7 @@ class signature_specializer:
             setattr(block, section, ops)
             # column pointers are computed per section, in the same registers
             self.pointers = set()
+            self.walking = {}
 
     def specialize(self) -> ir_program:
         for block in self.program.blocks:
@@ -746,7 +776,7 @@ class signature_emitter:
         if dest_key not in self.aregs:
             self.aregs[dest_key] = self.greg()
         dest = self.aregs[dest_key]
-        lines = [self.gen.mov_greg(src=self.aregs[src_key], dst=dest)]
+        lines = [] if src_key == dest_key else [self.gen.mov_greg(src=self.aregs[src_key], dst=dest)]
         lines += self.add_bytes(dest, self.bytes_of(comp, op.delta), comp)
         self.positions[dest_key] = self.positions[src_key] + op.delta
         return lines
@@ -860,10 +890,12 @@ class signature_emitter:
             masks = {}
             if not self._predicate(sig, masks):
                 continue
+            blocks = {n: op.properties.get("block") for n in sig.operands
+                      if n.endswith("_block") and "block" in op.properties}
             try:
                 return self.gen.move(
                     dregs=[src, dst], dts=[dt, dt], modifiers=set(sig.modifiers),
-                    **masks, **sig.structural_params,
+                    **masks, **sig.structural_params, **blocks,
                     operand_modifiers={n: set(s.modifiers) for n, s in sig.operands.items()
                                        if s.modifiers})
             except Exception:       # asmgen refuses: try the next signature

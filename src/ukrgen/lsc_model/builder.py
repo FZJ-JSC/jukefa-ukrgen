@@ -280,6 +280,10 @@ class program_builder:
         """
         memory = memory or comp
         dt = self.ctx.component_dts[memory]
+        repeats = [getattr(rs.step, "repeat", None) for rs in steps]
+        if any(r is not None and (r.per_block or r.block_operand) for r in repeats):
+            return self.move_blocks(sto, tiling, comp, coord, reg, steps, direction, tag,
+                                    memory, dt)
         ops: list[lsc_operation] = []
         for rs in steps:
             step = rs.step
@@ -320,6 +324,40 @@ class program_builder:
                                         [self.reg_tile(tiling, src), self.reg_tile(tiling, dest)],
                                         rsln=tag, step=step, sigs=sigs,
                                         rtypes=[src.rtype, dest.rtype]))
+        return ops
+
+    def move_blocks(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
+        """
+        A vector filled block by block: for each 128-bit block its lanes into
+        the scratch in increasing order, then the scratch inserted as the block
+        """
+        ops: list[lsc_operation] = []
+        block_lanes = 16 // adt_size(dt)
+        vidx = self.vector_index(tiling, comp)
+        for block in range(self.gen.simd_size // 16):
+            for rs in steps:
+                step = rs.step
+                sigs = getattr(rs, "sg", None) or self.step_sigs(step, dt)
+                if step.repeat is not None and step.repeat.per_block:
+                    for lane in range(block_lanes):
+                        elements = self.elements(tiling, comp, coord)
+                        elements[vidx] = elements.get(vidx, sym()) + block * block_lanes + lane
+                        data = self.ref_reg(step.dest, step.dest_rtype, reg)
+                        addr = self.address(sto, memory, direction, coord, elements)
+                        op = lsc_load(memory, data.index, addr.reg, None, None,
+                                      self.reg_tile(tiling, data), {ldst_modifier.lane},
+                                      data=_index(data, lane), rsln=tag, step=step, sigs=sigs,
+                                      offset=addr.offset, rtypes=[None, data.rtype])
+                        op.add_property("lane", lane)
+                        ops.append(op)
+                else:
+                    src = self.ref_reg(step.src[0], step.src_rtypes[0], reg)
+                    dest = self.ref_reg(step.dest, step.dest_rtype, reg)
+                    op = lsc_move(_index(src), _index(dest),
+                                  [self.reg_tile(tiling, src), self.reg_tile(tiling, dest)],
+                                  rsln=tag, step=step, sigs=sigs, rtypes=[src.rtype, dest.rtype])
+                    op.add_property("block", block)
+                    ops.append(op)
         return ops
 
     # --- STOs ----------------------------------------------------------------

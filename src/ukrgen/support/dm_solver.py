@@ -133,8 +133,20 @@ def repeat_fits(gen : asmgen, sig, step : dm_step, dt : adt) -> bool:
     if gen.is_vla:
         # the lane count is only known at run time: needs a loop
         return False
-    lanes = gen.simd_size // adt_size(dt)
-    shape = sig.operands.get(step.repeat.lane_operand)
+    rep = step.repeat
+    block_lanes = 16 // adt_size(dt)
+    if rep.per_block:
+        # lanes of one 128-bit block
+        name, lanes = rep.lane_operand, block_lanes
+    elif rep.block_operand is not None:
+        # every 128-bit block, each the size the lanes filled
+        name, lanes = rep.block_operand, gen.simd_size // 16
+        size = sig.structural_params.get(name.replace("_block", "_blocksize"))
+        if size is not None and size != block_lanes:
+            return False
+    else:
+        name, lanes = rep.lane_operand, gen.simd_size // adt_size(dt)
+    shape = sig.operands.get(name)
     if shape is None:
         return False
     for cons in shape.value_constraints:

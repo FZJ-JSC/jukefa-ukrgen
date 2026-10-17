@@ -59,7 +59,7 @@ class test_strided(unittest.TestCase):
     def test_row_major_a_is_strided(self):
         # vectors run along m; row-major A is contiguous along k
         expected = {"sve": {"gather"}, "rvv": {"gather", "strided"},
-                    "neon": {"lanes"}, "avx512": {"gather"}}
+                    "neon": {"lanes"}, "avx512": {"gather", "block_lanes"}}
         for isa, resolutions in expected.items():
             with self.subTest(isa=isa):
                 self.assertEqual(resolutions, tags(listing(isa), "A", "mm"))

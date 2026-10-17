@@ -239,6 +239,23 @@ class test_signature_specializer(unittest.TestCase):
         self.assertTrue(any(l.startswith("vid.v") for l in p.setup))
         self.assertTrue(any(l.startswith("vluxei64") for l in p.blocks[0].sections["body"]))
 
+    def test_avx_block_lanes(self):
+        # AVX lane loads reach the low 128-bit block and don't keep the lanes
+        # above (ZEROOTHERS): each block's lanes go into a scratch in
+        # increasing order, then the block is inserted
+        for isa, insert in (("avx256", "vinsertf128"), ("avx512", "vinsertf32x4")):
+            with self.subTest(isa=isa):
+                ctx, res = mm(isa=isa, **{
+                    "A-layout": ["m:s", "k:c"], "no-preload": True,
+                    "mm-to": ["fma(A.VEC:block_lanes, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
+                self.assertTrue(res.completed, res.output)
+                body = ctx.emitted[0].blocks[0].sections["body"]
+                loads = [l.split()[0] for l in body if l.startswith(("vmovsd", "vmovhpd"))]
+                self.assertEqual(["vmovsd", "vmovhpd"] * (len(loads) // 2), loads)
+                inserts = [i for i, l in enumerate(body) if l.startswith(insert)]
+                self.assertTrue(inserts)
+                self.assertTrue(all(body[i - 1].startswith("vmovhpd") for i in inserts))
+
     def test_print_asm(self):
         _, res = mm(**{"print-asm": True})
         self.assertFalse(res.completed)

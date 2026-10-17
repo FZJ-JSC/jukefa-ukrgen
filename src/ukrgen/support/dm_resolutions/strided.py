@@ -16,6 +16,7 @@ from ..data_move import (
     dm_direction as dmd,
     dm_location as dml,
     dm_step,
+    temp_ref,
     dm_repeat,
     orig_ref,
     resolution_provider,
@@ -67,3 +68,19 @@ class strided_provider(resolution_provider):
             registry.add_resolution(key_out, tr(unique_tag="lanes", steps=[
                 store(opd_mod_reqs={orig_ref(): {omod.ILANE}}, forbidden_op_mods=no_gather,
                       repeat=dm_repeat(lane_operand="adreg_lane"))]))
+
+            # Where lane loads reach only the low 128-bit block and don't keep
+            # the lanes above (AVX: ZEROOTHERS), the vector is filled block by
+            # block: a block's lanes into a scratch register in increasing
+            # order, then the scratch inserted as the block
+            if hasattr(omod, "IBLOCK") and hasattr(omod, "ZEROOTHERS"):
+                scratch = temp_ref(tag="0")
+                registry.add_resolution(key_in, tr(unique_tag="block_lanes", steps=[
+                    dm_step(op="load", dest=scratch, dest_rtype=rgt.VEC,
+                            opd_mod_reqs={scratch: {omod.ILANE, omod.ZEROOTHERS}},
+                            forbidden_op_mods=no_gather,
+                            repeat=dm_repeat(lane_operand="adreg_lane", per_block=True)),
+                    dm_step(op="move", dest=orig_ref(), dest_rtype=rgt.VEC,
+                            src=[scratch], src_rtypes=[rgt.VEC],
+                            opd_mod_reqs={orig_ref(): {omod.IBLOCK}},
+                            repeat=dm_repeat(block_operand="bdreg_block"))]))
