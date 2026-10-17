@@ -1,5 +1,5 @@
 """
-IR modifications on the specialized LSC IR
+IR modifications before and after specialization for the ISA
 """
 
 import logging
@@ -7,64 +7,100 @@ import logging
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
-from ...lsc_model.irmods import IRMODS, MODEL_IRMODS
+from ...irmod import lsc as lsc_irmods
+from ...irmod.lsc.base import irmod_placement
 
 
-class irmod_stage(stage):
+class irmod_stage_base(stage):
     """
-    Runs IR modifications over every part's specialized program, in the order
-    given:
+    Runs the IR modifications placed here (see irmod.lsc):
 
-        ldinc  fuse address computations into post-increment accesses, where
-               the accesses' signatures post-increment
+    - required ones whenever they are triggered - an error, naming what is
+      missing, if the ISA doesn't meet their requirements
+    - optional ones the ISA meets the requirements of, as chosen with the
+      stage's option, in the order given; those enabled by default when it
+      isn't given
 
-    --print-modified-ir prints the result and stops.
+    Every tunable parameter of an available modification is an option
+    --<irmod>-<parameter>.
     """
+
+    placement : irmod_placement = None
+    option : str = None
 
     def __init__(self, context : ukr_context):
         super().__init__(context)
-        self.debug = logging.getLogger("IRMOD").debug
-        self.params["irmods"] = stage_param(
-                value=["ldinc"], default=["ldinc"], multi=True, required=False,
-                choices=list(IRMODS),
-                description="IR modifications to run, in order (default: ldinc)")
+        self.log = logging.getLogger("IRMOD")
+        here = lsc_irmods.irmods_at(self.placement)
+        self.available = [m for m in here if not m.unmet_requirements(context)]
+        self.required = [m for m in here if m.required]
+        optional = [m for m in self.available if not m.required]
+        if optional:
+            default = [m.name for m in optional if m.default_enabled]
+            self.params[self.option] = stage_param(
+                    value=default, default=default, multi=True, required=False,
+                    choices=[m.name for m in optional],
+                    description="IR modifications to run, in order: " +
+                                "; ".join(f"{m.name}: {m.description}" for m in optional))
+        for m in self.available:
+            for p in m.params:
+                self.params[f"{m.name}-{p.name}"] = stage_param(
+                        value=p.default, default=p.default, required=False,
+                        choices=list(p.choices) if p.choices else None,
+                        description=f"{m.name}: {p.description}")
+
+    def run(self, cls):
+        values = {}
+        for p in cls.params:
+            value = self.params[f"{cls.name}-{p.name}"].value
+            values[p.name] = p.default if value is None else p.parse(value)
+        mod = cls(self.context, **values)
+        changed = sum(mod.apply(program) for program in self.context.programs)
+        self.log.debug(f"{cls.name}: changed {changed} site(s)")
+
+    def progress(self):
+        for cls in self.required:
+            if not cls.triggered(self.context):
+                continue
+            unmet = cls.unmet_requirements(self.context)
+            if unmet:
+                raise stage_error(f"{cls.name} is required for this kernel, but the ISA "
+                                  f"lacks: {', '.join(unmet)}")
+            self.run(cls)
+        by_name = {m.name: m for m in self.available}
+        chosen = self.params[self.option].value if self.option in self.params else []
+        for name in chosen or []:
+            self.run(by_name[name])
+        self.finish()
+        self.context.params.update(self.params)
+        return []
+
+    def finish(self):
+        pass
+
+
+class pre_specialize_irmod_stage(irmod_stage_base):
+    """
+    IR modifications on the model's IR, before specialization for the ISA
+    """
+    placement = irmod_placement.PRE_SPECIALIZE
+    option = "pre-specialize-irmods"
+
+
+class post_specialize_irmod_stage(irmod_stage_base):
+    """
+    IR modifications on the specialized IR, before scheduling.
+    --print-modified-ir prints the result and stops.
+    """
+    placement = irmod_placement.POST_SPECIALIZE
+    option = "post-specialize-irmods"
+
+    def __init__(self, context : ukr_context):
+        super().__init__(context)
         self.params["print-modified-ir"] = stage_param(
                 value=False, default=False, flag=True, required=False,
                 description="Print the IR after the IR modifications and exit")
 
-    def progress(self):
-        for name in self.params["irmods"].value or []:
-            for program in self.context.programs:
-                IRMODS[name](self.context, program)
-        text = "\n\n".join(p.render() for p in self.context.programs)
+    def finish(self):
         if self.params["print-modified-ir"].value:
-            raise early_exit(text)
-        for line in text.splitlines():
-            self.debug(line)
-        self.context.params.update(self.params)
-        return []
-
-
-class model_irmod_stage(stage):
-    """
-    Runs IR modifications over the model's IR, before specialization for the
-    ISA, in the order given:
-
-        lanefuse  fuse loads into all lanes of a register into one load where
-                  the lanes are contiguous
-    """
-
-    def __init__(self, context : ukr_context):
-        super().__init__(context)
-        self.params["model-irmods"] = stage_param(
-                value=["lanefuse"], default=["lanefuse"], multi=True, required=False,
-                choices=list(MODEL_IRMODS),
-                description="IR modifications before specialization, in order "
-                            "(default: lanefuse)")
-
-    def progress(self):
-        for name in self.params["model-irmods"].value or []:
-            for program in self.context.programs:
-                MODEL_IRMODS[name](self.context, program)
-        self.context.params.update(self.params)
-        return []
+            raise early_exit("\n\n".join(p.render() for p in self.context.programs))

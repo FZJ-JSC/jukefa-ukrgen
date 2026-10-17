@@ -5,7 +5,7 @@ IR modifications on the specialized IR
 import shutil
 import unittest
 
-from ukrgen.flow.stages.irmods import irmod_stage
+from ukrgen.flow.stages.irmods import post_specialize_irmod_stage, pre_specialize_irmod_stage
 from ukrgen.flow.stages.emit import emit_stage
 from ukrgen.models.load_store_operations import lsc_load, lsc_addr_compute, ldst_modifier
 
@@ -18,11 +18,11 @@ def run(irmods, **extra):
     from ukrgen.flow.ukr_context import ukr_context
     from ukrgen.flow.stage_engine import stage_engine
     import specializers.test_signature as base
-    stages = WITHOUT_EMIT + [irmod_stage, emit_stage]
+    stages = WITHOUT_EMIT + [post_specialize_irmod_stage, emit_stage]
     saved = base.STAGES
     base.STAGES = stages
     try:
-        return mm(irmods=irmods, **extra)
+        return mm(**{"post-specialize-irmods": irmods}, **extra)
     finally:
         base.STAGES = saved
 
@@ -68,14 +68,14 @@ class test_lanefuse(unittest.TestCase):
     LANE_FMA = "fma[bdreg:ILANE](A.VEC:direct, B.VEC:use_lane, C.VEC){i=m, n=1, k*=1}"
 
     def run_lanes(self, model_irmods, **extra):
-        from ukrgen.flow.stages.irmods import model_irmod_stage
         from ukrgen.flow.stages.isa_specialize import isa_specialize_stage
         import specializers.test_signature as base
         saved = base.STAGES
-        base.STAGES = saved[:7] + [model_irmod_stage, isa_specialize_stage, irmod_stage, emit_stage]
+        base.STAGES = saved[:7] + [pre_specialize_irmod_stage, isa_specialize_stage,
+                                   post_specialize_irmod_stage, emit_stage]
         try:
-            return base.mm(**{"mm-to": [self.LANE_FMA], "n": "4", "model-irmods": model_irmods,
-                              **extra})
+            return base.mm(**{"mm-to": [self.LANE_FMA], "n": "4",
+                              "pre-specialize-irmods": model_irmods, **extra})
         finally:
             base.STAGES = saved
 
@@ -103,3 +103,52 @@ class test_lanefuse(unittest.TestCase):
                 ctx, _ = self.run_lanes(irmods, **{"B-layout": layout})
                 ok, err = assembles(ctx.emitted[0].instructions())
                 self.assertTrue(ok, err)
+
+
+class test_irmod_metadata(unittest.TestCase):
+
+    def test_requirements(self):
+        from ukrgen.irmod.lsc import lanefuse, ldinc
+        neon, _ = run(["ldinc"])
+        self.assertEqual([], lanefuse.unmet_requirements(neon))
+        self.assertEqual([], ldinc.unmet_requirements(neon))
+
+        class vla_gen:
+            is_vla = True
+        class vla_ctx:
+            gen = vla_gen
+        self.assertEqual(["fixed-width vectors"], lanefuse.unmet_requirements(vla_ctx))
+
+    def test_placement(self):
+        from ukrgen.irmod.lsc import irmods_at, irmod_placement
+        self.assertEqual(["lanefuse"], [m.name for m in irmods_at(irmod_placement.PRE_SPECIALIZE)])
+        self.assertEqual(["ldinc"], [m.name for m in irmods_at(irmod_placement.POST_SPECIALIZE)])
+
+    def test_required_and_tunable(self):
+        # a required modification runs whenever triggered, with its tunables
+        # taken from the command line
+        import ukrgen.irmod.lsc as registry
+        from ukrgen.irmod.lsc.base import lsc_irmod, irmod_param, irmod_placement
+        calls = []
+
+        class marker(lsc_irmod):
+            name = "marker"
+            description = "records that it ran"
+            placement = irmod_placement.POST_SPECIALIZE
+            required = True
+            params = (irmod_param("level", "how much", default=1, parse=int),)
+
+            @classmethod
+            def triggered(cls, ctx):
+                return True
+
+            def apply(self, program):
+                calls.append(self.values["level"])
+                return 0
+
+        registry.IRMODS.append(marker)
+        try:
+            run([], **{"marker-level": "3"})
+        finally:
+            registry.IRMODS.remove(marker)
+        self.assertEqual([3], calls)
