@@ -8,7 +8,7 @@ from asmgen.asmblocks.op import register_type as rgt
 from asmgen.registers import adt_size
 
 from ...lsc_model.addressing import sym
-from ...models.load_store_operations import lsc_load, lsc_store, lsc_transformation, lsc_zero
+from ...models.load_store_operations import lsc_load, lsc_store, lsc_transformation, lsc_zero, lsc_loop
 from ...support.tiles import widening_ways
 from .base import irmod_placement, lsc_irmod, blocks_and_sections
 
@@ -159,6 +159,9 @@ class widen(lsc_irmod):
         for block, section in blocks_and_sections(program):
             out = []
             for op in getattr(block, section) or []:
+                if isinstance(op, lsc_loop):
+                    out.append(op)
+                    continue
                 at = [j for j, idx in enumerate(op.indices)
                       if idx.component in wide and rgt.VEC == op.rtypes[j]]
                 if not at:

@@ -7,8 +7,6 @@ from __future__ import annotations
 from asmgen.registers import adt_size
 
 from ...models.load_store_operations import (
-    lsc_repeat,
-    lsc_repeat_store,
     lsc_load, lsc_store, lsc_addr_compute, ldst_modifier)
 from ...models.lsc.reg import lsc_reg_type
 from ...lsc_model.addressing import sym
@@ -91,7 +89,6 @@ class ldinc(lsc_irmod):
             op = ops[i]
             nxt = ops[i + 1] if i + 1 < len(ops) else None
             if isinstance(op, lsc_addr_compute) and isinstance(nxt, (lsc_load, lsc_store)) \
-                    and not isinstance(nxt, (lsc_repeat, lsc_repeat_store)) \
                     and set(dict(op.delta.terms)) <= {()} \
                     and nxt.indices[0].indices == op.indices[1].indices \
                     and nxt.indices[0].component == op.indices[1].component:

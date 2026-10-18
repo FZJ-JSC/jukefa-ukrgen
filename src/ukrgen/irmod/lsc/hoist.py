@@ -2,7 +2,7 @@
 Loads a loop doesn't change, once before it
 """
 
-from ...models.load_store_operations import lsc_load, lsc_store, lsc_transformation, lsc_move
+from ...models.load_store_operations import lsc_load, lsc_store, lsc_transformation, lsc_move, lsc_loop
 from .base import irmod_placement, lsc_irmod
 
 
@@ -33,6 +33,8 @@ class hoist(lsc_irmod):
             idx = op.indices[1]
         elif isinstance(op, lsc_transformation):
             idx = op.indices[0]
+        elif isinstance(op, lsc_loop):
+            return {(op.indices[p].component, op.indices[p].indices[0]) for p in op.writes}
         else:
             return set()
         return {(idx.component, idx.indices[0])}

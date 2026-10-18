@@ -2,16 +2,14 @@
 Element loops into vector accesses
 """
 
-from ...models.load_store_operations import (
-    lsc_load, lsc_store, lsc_repeat, lsc_repeat_store,
-)
+from ...models.load_store_operations import lsc_loop
 from .base import irmod_placement, lsc_irmod, blocks_and_sections
 
 
 def repeats(program):
     for block, section in blocks_and_sections(program):
         for op in getattr(block, section) or []:
-            if isinstance(op, (lsc_repeat, lsc_repeat_store)):
+            if isinstance(op, lsc_loop) and op.info.get("direction"):
                 yield op
 
 
@@ -21,9 +19,9 @@ def vector_sigs(gen, op, dt):
     contiguous ones where the element stride is one, strided ones (with a
     stride register) otherwise
     """
-    stride = dict(op.fill["stride"].terms) if op.fill.get("stride") is not None else {}
+    stride = dict(op.info["stride"].terms) if op.info.get("stride") is not None else {}
     contiguous = {(): 1} == stride
-    move = gen.load if "load" == op.fill["direction"] else gen.store
+    move = gen.load if "load" == op.info["direction"] else gen.store
     out = []
     for s in move.get_signatures():
         if dt != s.operands["adreg"].dt or s.operands["adreg"].modifiers:
@@ -55,24 +53,32 @@ class vectorize_loops(lsc_irmod):
         unmet = set()
         for program in ctx.programs:
             for op in repeats(program):
-                dt = ctx.component_dts[op.fill["component"]]
+                dt = ctx.component_dts[op.info["component"]]
                 if not vector_sigs(ctx.gen, op, dt):
-                    unmet.add(f"{op.fill['component']}: no vector {op.fill['direction']} of "
-                              f"{dt.name} at stride {op.fill['stride']}")
+                    unmet.add(f"{op.info['component']}: no vector {op.info['direction']} of "
+                              f"{dt.name} at stride {op.info['stride']}")
         return sorted(unmet)
 
     def apply(self, program) -> int:
         changed = 0
-        for op in list(repeats(program)):
-            dt = self.ctx.component_dts[op.fill["component"]]
-            sigs = vector_sigs(self.ctx.gen, op, dt)
-            if not sigs:
-                continue
-            # the repeat already is a load or store of the vector from its
-            # first element: it becomes a plain one, through these signatures
-            op.__class__ = lsc_load if isinstance(op, lsc_repeat) else lsc_store
-            op.sigs = sigs
-            if any("GSTRIDE" in {m.name for m in s.modifiers} for s in sigs):
-                op.add_property("stride_index", op.fill["index"])
-            changed += 1
+        for block, section in blocks_and_sections(program):
+            out = []
+            for op in getattr(block, section) or []:
+                if not (isinstance(op, lsc_loop) and op.info.get("direction")):
+                    out.append(op)
+                    continue
+                dt = self.ctx.component_dts[op.info["component"]]
+                sigs = vector_sigs(self.ctx.gen, op, dt)
+                if not sigs:
+                    out.append(op)
+                    continue
+                # the loop's anchor is an access of the vector from its first
+                # element: it does the loop's work through these signatures
+                access = op.walks[0].anchor
+                access.sigs = sigs
+                if any("GSTRIDE" in {m.name for m in s.modifiers} for s in sigs):
+                    access.add_property("stride_index", op.info["index"])
+                out.append(access)
+                changed += 1
+            setattr(block, section, out)
         return changed

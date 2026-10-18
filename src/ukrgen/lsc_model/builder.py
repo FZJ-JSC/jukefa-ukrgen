@@ -9,6 +9,9 @@ second run with saved and restored state.
 """
 
 from __future__ import annotations
+from ..components.tile import (
+    tile, subtiling, dimension_properties as dimp, dimension_type as dimt,
+)
 
 import copy
 
@@ -29,12 +32,23 @@ from ..support.sig_group import group_sigs
 from .addressing import sym, offset_db, layout_strides, addr_pattern
 from ..components.tile import scalar_tile
 from ..models.load_store_operations import (
-    lsc_repeat,
-    lsc_repeat_store,
+    lsc_loop,
+    loop_walk,
     lsc_operation, lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, ldst_modifier)
 from ..models.lsc.index import lsc_reg_index
 from .ir import vreg, addr_ref, ir_block, ir_case, ir_program
 
+
+
+def _flat_sigs(sigs) -> list:
+    """
+    Signatures out of a group, a list of groups, or a list of signatures
+    """
+    if hasattr(sigs, "sigs"):
+        return list(sigs.sigs)
+    if isinstance(sigs, (list, tuple)):
+        return [s for g in sigs for s in _flat_sigs(g)]
+    return [getattr(sigs, "representative", sigs)]
 
 class model_error(Exception):
     """
@@ -347,11 +361,28 @@ class program_builder:
                     ops.append(op)
         return ops
 
+    def element_loop(self, block, anchor, memory, vidx, order, info) -> lsc_loop:
+        """
+        A loop over a vector's elements, as many as it has at run time: its
+        subtiling one element at a time (1v / 1), its walk from the vector's
+        first element by the element stride
+        """
+        one = dimp(dt=dimt.fixed, size=1, sdt=dimt.fixed, sd_size=1)
+        element = tile(one, one)
+        vector = tile(dimp(dt=dimt.vla, size=1, sdt=dimt.vla, sd_size=1), one)
+        stride = self.strides.get(memory, {}).get(vidx)
+        return lsc_loop(block=block,
+                        subtiling=subtiling(shape=element, count=element.count_in(vector)[0],
+                                            order=order),
+                        walks=[loop_walk(anchor=anchor, step=stride)],
+                        info=dict(info, component=memory, index=vidx, stride=stride))
+
     def move_vla(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
         """
-        A vector filled element by element in a loop whose count is the number
-        of its elements at run time (vla_lanes): one lsc_repeat, its body one
-        element's steps, its address the vector's first element
+        A vector filled element by element (vla_lanes): one lsc_loop, its block
+        one element's steps - a scalar load, the scalar filled into the vector
+        shifted in place - its walk from the vector's first element; backwards
+        where the fill shifts up (SVE insr: into lane 0)
         """
         if "load" != steps[0].step.op:
             return self.drain_vla(sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt)
@@ -362,28 +393,29 @@ class program_builder:
         vector = self.ref_reg(fill.step.dest, fill.step.dest_rtype, reg)
         load_sigs = getattr(load, "sg", None) or self.step_sigs(load.step, dt)
         fill_sigs = getattr(fill, "sg", None) or self.step_sigs(fill.step, dt)
-        body = [lsc_load(memory, scalar.index, addr.reg, None, None,
-                         self.reg_tile(tiling, scalar), set(), data=_index(scalar), rsln=tag,
-                         step=load.step, sigs=load_sigs, offset=addr.offset,
-                         rtypes=[None, scalar.rtype]),
-                lsc_move(_index(scalar), _index(vector),
-                         [self.reg_tile(tiling, scalar), self.reg_tile(tiling, vector)],
-                         rsln=tag, step=fill.step, sigs=fill_sigs,
-                         rtypes=[scalar.rtype, vector.rtype])]
-        vidx = self.vector_index(tiling, comp)
-        return [lsc_repeat(memory, vector.index, addr.reg, self.reg_tile(tiling, vector),
-                           body=body, divisor=16 // adt_size(dt),
-                           fill={"component": memory, "index": vidx,
-                                 "stride": self.strides.get(memory, {}).get(vidx),
-                                 "direction": "load"},
-                           data=_index(vector), rsln=tag, step=load.step, sigs=load_sigs,
-                           offset=addr.offset, rtypes=[None, vector.rtype])]
+        block = [lsc_load(memory, scalar.index, addr.reg, None, None,
+                          self.reg_tile(tiling, scalar), set(), data=_index(scalar), rsln=tag,
+                          step=load.step, sigs=load_sigs, offset=addr.offset,
+                          rtypes=[None, scalar.rtype]),
+                 lsc_move(_index(scalar), _index(vector),
+                          [self.reg_tile(tiling, scalar), self.reg_tile(tiling, vector)],
+                          rsln=tag, step=fill.step, sigs=fill_sigs,
+                          rtypes=[scalar.rtype, vector.rtype])]
+        up = any(c.minval > 0 for s in _flat_sigs(fill_sigs)
+                 for n, o in s.operands.items() if n.endswith("_irot")
+                 for c in o.value_constraints if c.minval == c.maxval)
+        anchor = lsc_load(memory, vector.index, addr.reg, None, None,
+                          self.reg_tile(tiling, vector), set(), data=_index(vector), rsln=tag,
+                          step=load.step, sigs=load_sigs, offset=addr.offset,
+                          rtypes=[None, vector.rtype])
+        return [self.element_loop(block, anchor, memory, self.vector_index(tiling, comp),
+                                  -1 if up else 1, {"direction": "load"})]
 
     def drain_vla(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
         """
-        A vector stored element by element (vla_lanes): one lsc_repeat_store,
-        its body lane 0 extracted, stored, and the vector shifted down in place
-        - the loop's own step, by one lane, whatever the vacated lane holds
+        A vector stored element by element (vla_lanes): one lsc_loop, its block
+        lane 0 extracted, stored, and the vector shifted down in place - the
+        loop's own step, by one lane, whatever the vacated lane holds
         """
         extract, store = steps[0], steps[1]
         elements = self.elements(tiling, comp, coord)
@@ -408,20 +440,18 @@ class program_builder:
                          [self.reg_tile(tiling, vector)] * 2, rsln=tag, step=extract.step,
                          sigs=shift_sigs, rtypes=[vector.rtype, vector.rtype])
         shift.add_property("irot", -1)
-        body = [first,
-                lsc_store(memory, scalar.index, addr.reg, None, None,
-                          self.reg_tile(tiling, scalar), set(), data=_index(scalar), rsln=tag,
-                          step=store.step, sigs=store_sigs, offset=addr.offset,
-                          rtypes=[None, scalar.rtype]),
-                shift]
-        vidx = self.vector_index(tiling, comp)
-        return [lsc_repeat_store(memory, vector.index, addr.reg, self.reg_tile(tiling, vector),
-                                 body=body, divisor=16 // adt_size(dt),
-                                 fill={"component": memory, "index": vidx,
-                                       "stride": self.strides.get(memory, {}).get(vidx),
-                                       "direction": "store"},
-                                 data=_index(vector), rsln=tag, step=store.step, sigs=store_sigs,
-                                 offset=addr.offset, rtypes=[None, vector.rtype])]
+        block = [first,
+                 lsc_store(memory, scalar.index, addr.reg, None, None,
+                           self.reg_tile(tiling, scalar), set(), data=_index(scalar), rsln=tag,
+                           step=store.step, sigs=store_sigs, offset=addr.offset,
+                           rtypes=[None, scalar.rtype]),
+                 shift]
+        anchor = lsc_store(memory, vector.index, addr.reg, None, None,
+                           self.reg_tile(tiling, vector), set(), data=_index(vector), rsln=tag,
+                           step=store.step, sigs=store_sigs, offset=addr.offset,
+                           rtypes=[None, vector.rtype])
+        return [self.element_loop(block, anchor, memory, self.vector_index(tiling, comp), 1,
+                                  {"direction": "store"})]
 
     def move_lane_group(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
         """
@@ -783,6 +813,14 @@ class program_builder:
         new = _clone(op)
         if isinstance(op, (lsc_load, lsc_store)):
             new.offset = self.db.shifted(op.offset, index, amount)
+        elif isinstance(op, lsc_loop):
+            # a loop over elements a later iteration's: its walks' anchors and
+            # its block's accesses moved along with it
+            new.walks = [loop_walk(anchor=self.shifted(w.anchor, index, amount), step=w.step)
+                         for w in op.walks]
+            new.block = [self.shifted(o, index, amount) for o in op.block]
+            new.info = dict(op.info)
+            new.refresh()
         return new
 
     def build_block(self, block: block_description) -> ir_block:

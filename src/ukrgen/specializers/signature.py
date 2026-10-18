@@ -35,7 +35,7 @@ from ..lsc_model.addressing import sym
 from ..lsc_model.ir import ir_program, ir_block
 from ..components.tile import scalar_tile
 from ..models.load_store_operations import (
-    lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_repeat, lsc_repeat_store)
+    lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop)
 from ..models.lsc.index import lsc_reg_index
 
 
@@ -380,6 +380,16 @@ class signature_specializer:
         return inserted + [op]
 
     def adapt(self, op) -> list:
+        if isinstance(op, lsc_loop):
+            # each walk's anchor addressed like any access, its address
+            # computations before the loop
+            inserted = []
+            for walk in op.walks:
+                done = self.adapt_access(walk.anchor)
+                walk.anchor = done[-1]
+                inserted += done[:-1]
+            op.refresh()
+            return inserted + [op]
         if isinstance(op, (lsc_load, lsc_store)):
             return self.adapt_access(op)
         if isinstance(op, lsc_transformation):
@@ -648,18 +658,22 @@ class signature_emitter:
 
     # --- operations ----------------------------------------------------------
 
-    def repeat(self, op) -> list[str]:
+    def loop(self, op) -> list[str]:
         """
         A loop over a vector's elements, as many as it has of its type at run
         time: a walking pointer from the first element, one element's steps,
         the pointer moved by the element stride
         """
-        comp, reg = op.indices[0].component, op.indices[0].indices[0]
+        anchor = op.walks[0].anchor
+        comp, reg = anchor.indices[0].component, anchor.indices[0].indices[0]
         dt = self.ctx.component_dts[comp]
-        elements = self.program.offsets.elements_offset(op.offset, self.program.strides.get(comp, {}))
+        if not op.subtiling.count.runtime or 1 != op.subtiling.count.size:
+            raise specialization_error(f"{op.info.get('component')}: a loop of "
+                                       f"{op.subtiling.count} iterations is not emitted yet")
+        elements = self.program.offsets.elements_offset(anchor.offset, self.program.strides.get(comp, {}))
         start = elements - self.positions[(comp, reg)]
         # the scratch scalars in the body hold the component's elements
-        for s in op.body:
+        for s in op.block:
             for idx in s.indices:
                 self.dts.setdefault((idx.component, idx.indices[0]), dt)
         walker, counter, delta = self.greg(), self.greg(), self.greg()
@@ -668,9 +682,9 @@ class signature_emitter:
         lines.append(self.gen.mov_greg(src=self.vl_elements(dt), dst=counter))
         # the walk's step, the element stride in bytes - negative where a fill
         # shifts up (SVE insr, into lane 0): from the last element backwards
-        stride = op.fill["stride"]
+        stride = op.walks[0].step
         terms = dict(stride.terms)
-        up = any(isinstance(s, lsc_move) and self.shift_of(s) > 0 for s in op.body)
+        up = op.subtiling.order < 0
         if set(terms) == {()}:
             nbytes = terms[()] * adt_size(dt)
             lines.append(self.gen.mov_greg_imm(reg=delta, imm=-nbytes if up else nbytes))
@@ -690,9 +704,9 @@ class signature_emitter:
         # the body as often as an iteration takes elements, the pointer moved
         # after each; its scalar rotating through as many registers as asked,
         # so the elements' scalar loads and stores need not wait for each other
-        unroll = getattr(op, "unroll", 1)
-        count = max(1, min(getattr(op, "registers", 1), unroll))
-        first = op.body[0]
+        unroll = op.subtiling.unroll
+        count = max(1, min(op.subtiling.registers, unroll))
+        first = op.block[0]
         scalars, extra = [self.reg(first.indices[1], first.rtypes[1])], []
         for _ in range(count - 1):
             tag = "freg" if rgt.FP == first.rtypes[1] else "greg"
@@ -707,10 +721,10 @@ class signature_emitter:
                                            "element takes a plain address")
             return line
 
-        if "load" == op.fill["direction"]:
+        if "load" == op.info["direction"]:
             # a batch of loads into different registers, then their fills in
             # order: the loads don't wait for the fills
-            load, fill = op.body
+            load, fill = op.block
             for start in range(0, unroll, count):
                 batch = range(start, min(unroll, start + count))
                 for e in batch:
@@ -721,14 +735,14 @@ class signature_emitter:
         else:
             # the extract and shift a chain on the vector; each extract into the
             # next register, so it needn't wait for the store before
-            extract, store, shift = op.body
+            extract, store, shift = op.block
             for e in range(unroll):
                 scalar = scalars[e % count]
                 lines.append(self.move(extract, dst=scalar))
                 lines.append(self.move(shift))
                 lines.append(access(store, scalar))
                 lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
-        lines.append(self.gen.add_greg_imm(reg=counter, imm=-getattr(op, "unroll", 1)))
+        lines.append(self.gen.add_greg_imm(reg=counter, imm=-unroll))
         lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
         for r in (walker, counter, delta):
             self.rt.unuse_reg("greg", r.idx)
@@ -1071,8 +1085,8 @@ class signature_emitter:
         return [l.strip() for chunk in self._emit_op(op) for l in chunk.splitlines() if l.strip()]
 
     def _emit_op(self, op) -> list[str]:
-        if isinstance(op, (lsc_repeat, lsc_repeat_store)):
-            return self.repeat(op)
+        if isinstance(op, lsc_loop):
+            return self.loop(op)
         if isinstance(op, (lsc_load, lsc_store)):
             return self.memory(op)
         if isinstance(op, lsc_transformation):
@@ -1412,6 +1426,8 @@ class signature_emitter:
                 for op in getattr(b, section, None) or []:
                     if isinstance(op, (lsc_load, lsc_store, lsc_addr_compute)):
                         comps.add(op.indices[0].component)
+                    elif isinstance(op, lsc_loop):
+                        comps |= {w.anchor.indices[0].component for w in op.walks}
         return comps
 
     def gathers(self, blocks) -> list:

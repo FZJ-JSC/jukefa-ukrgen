@@ -12,7 +12,7 @@ import unittest
 
 import specializers.test_signature as t
 from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage
-from ukrgen.models.load_store_operations import lsc_repeat
+from ukrgen.models.load_store_operations import lsc_loop
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PARAMS = {"rvv-LMUL": "1", "A-layout": ["m:s", "k:c"],
@@ -58,16 +58,19 @@ class test_vla_repeat(unittest.TestCase):
         self.assertFalse(any("vla_lanes" in l for l in res.output.splitlines()))
 
     def test_ir(self):
-        # one lsc_repeat per vector: its body, divisor and fill information
+        # one lsc_loop per vector: its block, its subtiling - one element at a
+        # time, as many as the vector has at run time - and its information
         ctx, res = run()
-        repeats = [op for b in ctx.programs[0].blocks for s in ("prologue", "body", "epilogue", "tail")
-                   for op in getattr(b, s) if isinstance(op, lsc_repeat)]
-        self.assertTrue(repeats)
-        r = repeats[0]
-        self.assertEqual(2, len(r.body))
-        self.assertEqual(2, r.divisor)                     # 16 bytes of doubles
+        loops = [op for b in ctx.programs[0].blocks for s in ("prologue", "body", "epilogue", "tail")
+                 for op in getattr(b, s) if isinstance(op, lsc_loop)]
+        self.assertTrue(loops)
+        r = loops[0]
+        self.assertEqual(2, len(r.block))
+        self.assertTrue(r.subtiling.loop)
+        self.assertEqual([1, 2], r.subtiling.count.count_unrolls(2))   # 16 bytes of doubles
+        self.assertEqual(1, r.subtiling.order)
         self.assertEqual({"component": "A", "index": "m", "direction": "load"},
-                         {k: v for k, v in r.fill.items() if k != "stride"})
+                         {k: v for k, v in r.info.items() if k != "stride"})
 
     def test_loop(self):
         ctx, res = run()

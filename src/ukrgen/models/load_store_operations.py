@@ -4,6 +4,7 @@
 # Copyright (C) 2021 Stepan Nassyr <s.nassyr@xcpp.org>
 # ------------------------------------------------------------------------------
 
+from dataclasses import dataclass
 import string
 from typing import Callable
 from enum import Enum,auto
@@ -417,50 +418,55 @@ class lsc_transformation(lsc_operation):
         return out
 
 
-class lsc_repeat(lsc_load):
+
+@dataclass
+class loop_walk:
     """
-    A loop over a vector's elements, as many as it has of its type at run
-    time (vector-length agnostic ISAs): one element's steps each time - a
-    scalar load and a fill move, filling the vector in place - walking memory
-    by the element stride. To the stages before emission it is a load of the
-    vector from its first element: its signatures are the scalar load's.
-
-    body: the steps for one element, in order
-    divisor: the element count is a multiple of it - the loop unrolls by any
-        of its divisors (16 bytes in elements: SVE's vector length is a
-        multiple of 128 bits, RVV's V extension has VLEN >= 128)
-    fill: what the loop does as data - component, index, element stride along
-        it, direction - for irmods turning it into a strided or contiguous
-        vector access where the ISA has one
+    A pointer a loop walks: from the address of anchor - an access of the
+    first element, which the stages before emission address like any - by
+    step elements along the walk's index each iteration (the subtiling's
+    order: forwards, or from the last element backwards)
     """
-
-    def __init__(self, component, res_idx, addr_idx, t, *, body, divisor, fill, **kwargs):
-        super().__init__(component, res_idx, addr_idx, None, None, t, set(), **kwargs)
-        self.body = body
-        self.divisor = divisor
-        self.fill = fill
-        #: elements an iteration takes: a divisor of divisor
-        self.unroll = 1
-        #: registers an unrolled iteration's scalars rotate through
-        self.registers = 1
+    anchor : lsc_operation
+    step : object
 
 
-class lsc_repeat_store(lsc_store):
+class lsc_loop(lsc_operation):
     """
-    A loop draining a vector element by element, as many as it has of its
-    type at run time: lane 0 extracted into a scalar, stored, the vector
-    shifted down in place - walking memory by the element stride. To the
-    stages before emission it is a store of the vector from its first
-    element; body, divisor and fill as for lsc_repeat (fill's direction
-    "store")
+    A loop as an instruction: its block - operations, loops among them - run
+    for each subtile its subtiling counts (a vla count: as many times as a
+    vector has elements at run time; a fixed one: unrolled), the walks'
+    pointers moved after each. To the scheduler it reads and writes what its
+    block does, and its walks' address registers.
+
+    info: what the loop does as data - component, index, element stride,
+        direction - for irmods turning it into a vector access where the ISA
+        has one
     """
 
-    def __init__(self, component, res_idx, addr_idx, t, *, body, divisor, fill, **kwargs):
-        super().__init__(component, res_idx, addr_idx, None, None, t, set(), **kwargs)
-        self.body = body
-        self.divisor = divisor
-        self.fill = fill
-        #: elements an iteration takes: a divisor of divisor
-        self.unroll = 1
-        #: registers an unrolled iteration's scalars rotate through
-        self.registers = 1
+    def __init__(self, *, block, subtiling, walks, info=None):
+        super().__init__(tiles=[], indices=[], reads=[], writes=[], reg_types=[])
+        self.block = block
+        self.subtiling = subtiling
+        self.walks = walks
+        self.info = info or {}
+        self.refresh()
+
+    def refresh(self):
+        """
+        The registers the loop reads and writes, from its walks and block
+        """
+        self.indices, self.rtypes, self.reads, self.writes = [], [], [], []
+        for w in self.walks:
+            self.indices.append(w.anchor.indices[0])
+            self.rtypes.append(None)
+            self.reads.append(len(self.indices) - 1)
+        for op in self.block:
+            types = getattr(op, "rtypes", None) or [None] * len(op.indices)
+            for p, idx in enumerate(op.indices):
+                self.indices.append(idx)
+                self.rtypes.append(types[p] if p < len(types) else None)
+                if p in op.reads:
+                    self.reads.append(len(self.indices) - 1)
+                if p in op.writes:
+                    self.writes.append(len(self.indices) - 1)

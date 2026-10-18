@@ -2,6 +2,10 @@
 Unrolling loops over a vector's elements
 """
 
+from dataclasses import replace
+
+from asmgen.registers import adt_size
+
 from .base import irmod_param, irmod_placement, lsc_irmod
 from .vectorize import repeats
 
@@ -31,9 +35,13 @@ class unroll_loops(lsc_irmod):
         want = max(1, int(self.values["factor"]))
         changed = 0
         for op in repeats(program):
-            factor = max(f for f in range(1, want + 1) if 0 == op.divisor % f)
+            # a vector holds a multiple of 16 bytes: the factors keeping the
+            # count whole
+            dt = self.ctx.component_dts[op.info["component"]]
+            factors = [f for f in op.subtiling.count.count_unrolls(16 // adt_size(dt)) if f <= want]
+            factor = max(factors, default=1)
             if factor > 1:
-                op.unroll = factor
-                op.registers = max(1, min(int(self.values["registers"]), factor))
+                op.subtiling = replace(op.subtiling, unroll=factor,
+                                       registers=max(1, min(int(self.values["registers"]), factor)))
                 changed += 1
         return changed
