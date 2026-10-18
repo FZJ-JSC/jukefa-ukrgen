@@ -994,6 +994,8 @@ class signature_emitter:
                 continue
             blocks = {n: op.properties.get("block") for n in sig.operands
                       if n.endswith("_block") and "block" in op.properties}
+            blocks.update({n: op.properties["lane"] for n in sig.operands
+                           if n.endswith("_lane") and "lane" in op.properties})
             try:
                 return self.gen.move(
                     dregs=[src, dst], dts=[dt, dt], modifiers=set(sig.modifiers),

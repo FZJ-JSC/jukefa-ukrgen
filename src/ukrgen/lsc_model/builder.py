@@ -312,6 +312,11 @@ class program_builder:
                              self.reg_tile(tiling, data), mods,
                              data=_index(data, lane), rsln=tag, step=step, sigs=sigs,
                              offset=addr.offset, rtypes=[None, data.rtype])
+                    if lane is None and any("ILANE" == m.name
+                                            for mods in (step.opd_mod_reqs or {}).values()
+                                            for m in mods):
+                        # one element into one lane (bc_lane): lane 0
+                        lane = 0
                     if lane is not None:
                         op.add_property("lane", lane)
                         op.add_property("stride_index", self.vector_index(tiling, comp))
@@ -323,10 +328,15 @@ class program_builder:
                 else:
                     src = self.ref_reg(step.src[0], step.src_rtypes[0], reg)
                     dest = self.ref_reg(step.dest, step.dest_rtype, reg)
-                    ops.append(lsc_move(_index(src), _index(dest),
-                                        [self.reg_tile(tiling, src), self.reg_tile(tiling, dest)],
-                                        rsln=tag, step=step, sigs=sigs,
-                                        rtypes=[src.rtype, dest.rtype]))
+                    op = lsc_move(_index(src), _index(dest),
+                                  [self.reg_tile(tiling, src), self.reg_tile(tiling, dest)],
+                                  rsln=tag, step=step, sigs=sigs,
+                                  rtypes=[src.rtype, dest.rtype])
+                    if any("ILANE" == m.name for mods in (step.opd_mod_reqs or {}).values()
+                           for m in mods):
+                        # a move from or into one lane: the lane the element is in
+                        op.add_property("lane", 0 if lane is None else lane)
+                    ops.append(op)
         return ops
 
     def move_blocks(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):

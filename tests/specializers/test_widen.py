@@ -96,6 +96,16 @@ class test_widen(unittest.TestCase):
         self.runs("neon", "SPLIT_CONTIGUOUS", "aarch64-linux-gnu-gcc",
                   "-march=armv8.2-a+fp16+fp16fml", "qemu-aarch64-static", "max", cand=NEON_SPLIT)
 
+    def test_neon_bc_lane_runs(self):
+        # B's element into lane 0 (ld1 {v.h}[0]), broadcast from there (dup)
+        p = self.runs("neon", "SPLIT_CONTIGUOUS", "aarch64-linux-gnu-gcc",
+                      "-march=armv8.2-a+fp16+fp16fml", "qemu-aarch64-static", "max",
+                      cand="fma[PART+widening_method=SPLIT_CONTIGUOUS](A.VEC:direct, "
+                           "B.VEC:bc_lane, C.VEC){i=m, n=1, k*=1}")
+        body = p.blocks[0].sections["body"]
+        self.assertTrue(any(l.startswith("ld1 {") and "}[0]" in l for l in body))
+        self.assertTrue(any(l.startswith("dup ") for l in body))
+
     def test_sve_runs(self):
         # bottom and top: fmlalb/fmlalt into even and odd elements, stored
         # interleaved again (st2w)
