@@ -74,6 +74,16 @@ class model_stage(stage):
                                 f"through them, reloading; a component kept in registers "
                                 f"between STOs needs one per tile")
 
+        for comp in self.memory:
+            self.params[f"{comp}-subtiling"] = stage_param(
+                    value=None, required=False,
+                    description=f"How {comp}'s loops over subtiles run, overriding the "
+                                f"defaults: ';'-separated [resolution:]key=value,... - unroll "
+                                f"(subtiles an iteration takes, a factor keeping the count "
+                                f"whole), registers (registers an iteration's temporaries "
+                                f"rotate through, up to unroll), order (1 forwards, -1 from "
+                                f"the last subtile, where the steps allow it). "
+                                f"--list-subtilings shows them")
         default_order = [c.name for c in composition.get_components()]
         self.params["resolve-order"] = stage_param(
                 value=default_order, default=default_order, multi=True, required=False,
@@ -84,6 +94,10 @@ class model_stage(stage):
         self.params["no-preload"] = stage_param(
                 value=False, default=False, flag=True, required=False,
                 description="Do not load a loop's streamed operands an iteration ahead")
+        self.params["list-subtilings"] = stage_param(
+                value=False, default=False, flag=True, required=False,
+                description="List the loops over subtiles - their counts, the unrolls keeping "
+                            "them whole, their settings - and exit")
         self.params["print-ir"] = stage_param(
                 value=False, default=False, flag=True, required=False,
                 description="Print the LSC IR and exit")
@@ -107,6 +121,23 @@ class model_stage(stage):
                 raise stage_error(f"--{comp}-data-regs must be a positive integer, got {value}")
             data_regs[comp] = int(value)
 
+        subtilings = {}
+        for comp in self.memory:
+            value = self.params[f"{comp}-subtiling"].value
+            entries = []
+            for entry in filter(None, (e.strip() for e in str(value or "").split(";"))):
+                tag, _, settings = entry.rpartition(":")
+                kv = {}
+                for item in filter(None, (i.strip() for i in settings.split(","))):
+                    key, _, val = item.partition("=")
+                    if key not in ("unroll", "registers", "order") or \
+                            not val.lstrip("-").isdigit():
+                        raise stage_error(f"--{comp}-subtiling: '{item}' is not unroll=N, "
+                                          f"registers=N or order=1|-1")
+                    kv[key] = int(val)
+                entries.append((tag or None, kv))
+            if entries:
+                subtilings[comp] = entries
         names = [c.name for c in self.context.composition.get_components()]
         order = list(self.params["resolve-order"].value or [])
         unknown = [c for c in order if c not in names]
@@ -118,12 +149,15 @@ class model_stage(stage):
         try:
             programs = [program_builder(self.context, part, addressing, data_regs,
                                         preload=not self.params["no-preload"].value,
-                                        resolve_order=order).build()
+                                        resolve_order=order, subtilings=subtilings).build()
                         for part in range(len(self.context.to_parts))]
         except model_error as err:
             raise stage_error(str(err)) from err
         self.context.programs = programs
 
+        if self.params["list-subtilings"].value:
+            raise early_exit("\n".join(subtiling_listing(self.context, programs))
+                             or "no loops over subtiles")
         text = "\n\n".join(p.render() for p in programs)
         if self.params["print-ir"].value:
             raise early_exit(text)
@@ -132,3 +166,30 @@ class model_stage(stage):
 
         self.context.params.update(self.params)
         return []
+
+
+def subtiling_listing(context, programs) -> list[str]:
+    """
+    One line per loop over subtiles: its component, resolution and direction,
+    count, the unrolls keeping it whole, order and settings
+    """
+    from asmgen.registers import adt_size
+    from ...models.load_store_operations import lsc_loop
+    lines, seen = [], set()
+    for program in programs:
+        for block in program.blocks:
+            for section in ("prologue", "body", "epilogue", "tail"):
+                for op in getattr(block, section, None) or []:
+                    if not isinstance(op, lsc_loop):
+                        continue
+                    comp, st = op.info.get("component"), op.subtiling
+                    key = (comp, op.walks[0].anchor.rsln, op.info.get("direction"))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    unrolls = st.count.count_unrolls(16 // adt_size(context.component_dts[comp]))
+                    lines.append(f"{comp} ({key[1]}, {key[2]}): {st.count} subtiles of "
+                                 f"{st.shape.dima.size}x{st.shape.dimb.size}; unrolls "
+                                 f"{', '.join(map(str, unrolls))}; order {st.order:+d}; unroll "
+                                 f"{st.unroll}, registers {st.registers} (--{comp}-subtiling)")
+    return lines

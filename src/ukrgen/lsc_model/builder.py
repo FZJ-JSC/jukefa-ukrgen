@@ -104,7 +104,10 @@ class program_builder:
                  addressing: dict[str, addressing_plan] | None = None,
                  data_regs: dict[str, int] | None = None,
                  preload: bool = True,
-                 resolve_order: list[str] | None = None):
+                 resolve_order: list[str] | None = None,
+                 subtilings: dict | None = None):
+        #: per component, [(resolution or None, {unroll, registers, order})]
+        self.subtilings = subtilings or {}
         self.lane_groups: dict = {}
         self.vidx: dict[str, str] = {}
         self.ctx = ctx
@@ -369,11 +372,27 @@ class program_builder:
         element = tile(one, one)
         vector = tile(dimp(dt=dimt.vla, size=1), one)
         stride = self.strides.get(memory, {}).get(vidx)
+        count = element.count_in(vector)[0]
+        # the user's settings for this component's loops, this resolution's last
+        settings = {}
+        for tag, kv in self.subtilings.get(memory, []):
+            if tag in (None, anchor.rsln):
+                settings.update(kv)
+        unrolls = count.count_unrolls(16 // adt_size(self.ctx.component_dts[memory]))
+        unroll = settings.get("unroll", 1)
+        if unroll not in unrolls:
+            raise model_error(f"{memory}: {anchor.rsln}'s loop over {count} elements unrolls "
+                              f"by {', '.join(map(str, unrolls))}, not {unroll}")
+        if settings.get("order", order) != order:
+            raise model_error(f"{memory}: {anchor.rsln}'s steps run its loop "
+                              f"{'forwards' if order > 0 else 'from the last element'} only")
+        registers = max(1, min(settings.get("registers", 1), unroll))
         return lsc_loop(block=block,
-                        subtiling=subtiling(shape=element, count=element.count_in(vector)[0],
-                                            order=order),
+                        subtiling=subtiling(shape=element, count=count, order=order,
+                                            unroll=unroll, registers=registers),
                         walks=[loop_walk(anchor=anchor, step=stride)],
-                        info=dict(info, component=memory, index=vidx, stride=stride))
+                        info=dict(info, component=memory, index=vidx, stride=stride,
+                                  explicit=bool(settings)))
 
     def move_vla(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
         """

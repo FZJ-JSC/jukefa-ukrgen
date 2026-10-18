@@ -70,7 +70,7 @@ class test_vla_repeat(unittest.TestCase):
         self.assertEqual([1, 2], r.subtiling.count.count_unrolls(2))   # 16 bytes of doubles
         self.assertEqual(1, r.subtiling.order)
         self.assertEqual({"component": "A", "index": "m", "direction": "load"},
-                         {k: v for k, v in r.info.items() if k != "stride"})
+                         {k: v for k, v in r.info.items() if k not in ("stride", "explicit")})
 
     def test_loop(self):
         ctx, res = run()
@@ -159,6 +159,34 @@ class test_vla_repeat(unittest.TestCase):
         emulate(self, ctx, "strided_mm_harness.c", "riscv64-linux-gnu-gcc", "-march=rv64gcv",
                 "qemu-riscv64-static", [("rv64,v=true,vlen=128,elen=64", "tile 4 x 2"),
                                         ("rv64,v=true,vlen=256,elen=64", "tile 8 x 2")])
+
+
+    def test_subtiling_listing(self):
+        ctx, res = run(**{"list-subtilings": True})
+        self.assertFalse(res.completed)
+        self.assertIn("A (vla_lanes, load): 1v subtiles of 1x1; unrolls 1, 2; order +1; "
+                      "unroll 1, registers 1", res.output)
+
+    def test_subtiling_override(self):
+        # set per component and resolution: two elements an iteration, in two
+        # registers - the unroll_loops irmod not needed
+        ctx, res = run(**{"A-subtiling": "vla_lanes:unroll=2,registers=2"})
+        body = ctx.emitted[0].blocks[0].sections["body"]
+        start = next(i for i, l in enumerate(body) if l.endswith("_elements:"))
+        loop = [l.split()[0] for l in body[start + 1:] if l.startswith(("fld", "vfslide1down"))][:4]
+        self.assertEqual(["fld", "fld", "vfslide1down.vf", "vfslide1down.vf"], loop)
+        emulate(self, ctx, "strided_mm_harness.c", "riscv64-linux-gnu-gcc", "-march=rv64gcv",
+                "qemu-riscv64-static", [("rv64,v=true,vlen=128,elen=64", "tile 4 x 2"),
+                                        ("rv64,v=true,vlen=256,elen=64", "tile 8 x 2")])
+
+    def test_subtiling_refused(self):
+        from ukrgen.flow.stages.stage import stage_error
+        with self.assertRaisesRegex(stage_error, "unrolls by 1, 2, not 4"):
+            run(**{"A-subtiling": "unroll=4"})
+        with self.assertRaisesRegex(stage_error, "forwards only"):
+            run(**{"A-subtiling": "order=-1"})
+        with self.assertRaisesRegex(stage_error, "is not unroll=N"):
+            run(**{"A-subtiling": "speed=11"})
 
 
 if __name__ == "__main__":

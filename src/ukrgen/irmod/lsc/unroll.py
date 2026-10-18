@@ -35,6 +35,9 @@ class unroll_loops(lsc_irmod):
         want = max(1, int(self.values["factor"]))
         changed = 0
         for op in repeats(program):
+            if op.info.get("explicit"):
+                # set for this component (--COMP-subtiling): left as set
+                continue
             # a vector holds a multiple of 16 bytes: the factors keeping the
             # count whole
             dt = self.ctx.component_dts[op.info["component"]]
