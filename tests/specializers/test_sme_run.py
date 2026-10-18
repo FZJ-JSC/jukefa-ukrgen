@@ -170,3 +170,42 @@ class test_sme_gemm(unittest.TestCase):
                 self.assertEqual(0, r.returncode, r.stdout + r.stderr)
                 self.assertIn(tile, r.stdout)
                 self.assertIn(", 0 wrong", r.stdout)
+
+
+class test_slice_irmods(unittest.TestCase):
+    """
+    gemm's loops over tiles' slices fused (each tile's scaling and store in one
+    pass), C stored from the vectors rather than through its tile, the tile
+    writes then dead dropped, alpha's and beta's broadcasts hoisted out
+    """
+
+    def build(self, **extra):
+        stages = list(t.STAGES)
+        i = [x.__name__ for x in stages].index("model_stage") + 1
+        saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
+        try:
+            ctx, res = t.mm(isa="sme", ukr="gemm", **GEMM, **extra)
+        finally:
+            t.STAGES = saved
+        return ctx.emitted[0].instructions()
+
+    def test_fewer(self):
+        plain = self.build(**{"pre-specialize-irmods": ["hoist"]})
+        fused = self.build()
+        count = lambda code, f: sum(1 for l in code if f(l))
+        self.assertLess(count(fused, lambda l: l.endswith("_slices:")),
+                        count(plain, lambda l: l.endswith("_slices:")))
+        self.assertLess(count(fused, lambda l: l.startswith("mova")),
+                        count(plain, lambda l: l.startswith("mova")))
+        self.assertLess(count(fused, lambda l: l.startswith("st1d {za")),
+                        count(plain, lambda l: l.startswith("st1d {za")))
+        self.assertLess(len(fused), len(plain))
+        # no broadcast left inside a loop over slices
+        inside = False
+        for l in fused:
+            if l.endswith("_slices:"):
+                inside = True
+            elif l.startswith("cbnz") and "_slices" in l:
+                inside = False
+            elif inside:
+                self.assertFalse(l.startswith("ld1rd"), l)
