@@ -14,6 +14,15 @@ class isaparam_stage(stage):
         for name in isaparams:
             pname = f"{isa}-{name}"
             default_value =self.context.gen.get_param_value(name) 
+            if name in getattr(self.context.gen, "FEATURES", ()):
+                # an optional extension: off unless enabled
+                self.params[pname] = stage_param(
+                        value=default_value,
+                        default=default_value,
+                        required=False,
+                        description=f"{isa} optional extension {name}: on or off"
+                        )
+                continue
             self.params[pname] = stage_param(
                     value=default_value,
                     default=default_value,

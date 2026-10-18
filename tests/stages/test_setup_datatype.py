@@ -24,7 +24,9 @@ def _setup(isa, ukr="gemm"):
 class test_setup(unittest.TestCase):
 
     def test_allocates_generator_and_composition(self):
-        ctx, spawned = _setup("sve")
+        # an ISA without parameters spawns no parameter stage (SVE has its
+        # optional extensions)
+        ctx, spawned = _setup("avx256")
         self.assertIs(gemm_composition, ctx.composition)
         self.assertTrue(hasattr(ctx.gen, "fma"))
         self.assertEqual([], spawned)

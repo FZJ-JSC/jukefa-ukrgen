@@ -14,7 +14,9 @@ from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MIXED = {"A-data-type": "FP16", "B-data-type": "FP16", "C-data-type": "FP32"}
-MIXED_FOR = {"neon": MIXED, "sve": MIXED,
+#: the optional extensions the widening needs: FEAT_FHM (fmlal), FEAT_SVE2 (fmlalb)
+FEATURES = {"neon": {"neon-FHM": "on"}, "sve": {"sve-SVE2": "on"}, "rvv": {}}
+MIXED_FOR = {"neon": {**MIXED, **FEATURES["neon"]}, "sve": {**MIXED, **FEATURES["sve"]},
              "rvv": {"A-data-type": "FP32", "B-data-type": "FP32", "C-data-type": "FP64"}}
 NEON_SPLIT = "fma[PART+widening_method=SPLIT_CONTIGUOUS](A.VEC:direct, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"
 
@@ -24,7 +26,7 @@ def run(isa, **extra):
     i = [s.__name__ for s in stages].index("model_stage") + 1
     saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
     try:
-        return t.mm(isa=isa, **MIXED, **extra)
+        return t.mm(isa=isa, **MIXED_FOR[isa], **extra)
     finally:
         t.STAGES = saved
 
@@ -35,10 +37,20 @@ class test_widen(unittest.TestCase):
         # a wide register counts as a group: the extents agree
         saved, t.STAGES = t.STAGES, t.STAGES[:5]
         try:
-            ctx, res = t.mm(isa="neon", **MIXED, **{"list-to-candidates": True, "mm-to": None})
+            ctx, res = t.mm(isa="neon", **MIXED_FOR["neon"], **{"list-to-candidates": True, "mm-to": None})
         finally:
             t.STAGES = saved
         self.assertIn(NEON_SPLIT, [l.split('"')[1] for l in res.output.splitlines() if "--mm-to" in l])
+
+    def test_gated(self):
+        # fmlal needs FEAT_FHM: without it, FP16 inputs have no implementation
+        from ukrgen.flow.stages.stage import stage_error
+        saved, t.STAGES = t.STAGES, t.STAGES[:5]
+        try:
+            with self.assertRaisesRegex(stage_error, "no implementation for data types"):
+                t.mm(isa="neon", **MIXED, **{"mm-to": [NEON_SPLIT]})
+        finally:
+            t.STAGES = saved
 
     def test_neon_halves(self):
         # fmlal and fmlal2 per register of A, into the members of a C group;
@@ -130,7 +142,7 @@ class test_widen(unittest.TestCase):
         i = [s.__name__ for s in stages].index("model_stage") + 1
         saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
         types = {f"{c}-data-type": wide for c in ("C", "AB", "alpha", "beta")}
-        types.update({"A-data-type": narrow, "B-data-type": narrow})
+        types.update({"A-data-type": narrow, "B-data-type": narrow}, **FEATURES[isa])
         if "rvv" == isa:
             types["rvv-LMUL"] = "1"
         try:
