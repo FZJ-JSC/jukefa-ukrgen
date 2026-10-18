@@ -733,7 +733,7 @@ class signature_emitter:
         comp = op.indices[0].component
         key = (comp, op.properties.get("stride_index"))
         if key not in self.indexes:
-            stride = self.stride_of(op, setup=True)
+            stride = self.stride_of(op)
             if stride is None:
                 return None
             vreg = self.gen.vreg(self.rt.reserve_any_reg("vreg"))
@@ -742,7 +742,8 @@ class signature_emitter:
                                               dt=self.ctx.component_dts[comp])
             except NotImplementedError as err:
                 raise specialization_error(f"index vector for {comp}: {err}") from err
-            self.late_setup.append(text)
+            # built where the region using it starts
+            self.region_loads += [l.strip() for l in text.splitlines() if l.strip()]
             self.indexes[key] = vreg
         return self.indexes[key]
 
@@ -1113,6 +1114,7 @@ class signature_emitter:
             later = set().union(*regions[i + 1:], *case_comps, conditions)
             new_before = set(self.aregs)
             self.region_loads = self.start_addresses(regions[i], later)
+            self.start_indexes([b])
             counters = None
             if b.loop_index is not None:
                 counters, count_lines = self.loop_counts(b, b.loop_index in loops[i + 1:])
@@ -1128,19 +1130,24 @@ class signature_emitter:
                 if reg is not None:
                     self.rt.unuse_reg("greg", reg.idx)
             self.release_params(later, set(loops[i + 1:]))
+            self.release_indexes(set().union(*[self.index_keys([x]) for x in prefix[i + 1:]],
+                                             *[self.index_keys(c.blocks) for c in self.program.cases]))
         self.dispatch_code = self.dispatch() if self.program.cases else []
         # every case starts with the registers where the dispatch leaves them;
         # the cases exclude each other, so they share the registers left, and
         # a parameter's register can become an address register in each
         start = (dict(self.positions), dict(self.phys), dict(self.numbers),
-                 copy.deepcopy(self.rt), dict(self.aregs), set(self.live_params), self.vtype)
+                 copy.deepcopy(self.rt), dict(self.aregs), set(self.live_params), self.vtype,
+                 dict(self.indexes))
         main_rt = self.rt
         cases = []
         for j, c in enumerate(self.program.cases):
             self.positions, self.phys, self.numbers = dict(start[0]), dict(start[1]), dict(start[2])
             self.rt, self.aregs, self.live_params = copy.deepcopy(start[3]), dict(start[4]), set(start[5])
             self.vtype = start[6]
+            self.indexes = dict(start[7])
             self.region_loads = self.start_addresses(case_comps[j], set())
+            self.start_indexes(c.blocks)
             out = [self.block(b, list(c.blocks[i + 1:])) for i, b in enumerate(c.blocks)]
             if out:
                 out[0].loads = self.region_loads + out[0].loads
@@ -1285,6 +1292,36 @@ class signature_emitter:
                     if isinstance(op, (lsc_load, lsc_store, lsc_addr_compute)):
                         comps.add(op.indices[0].component)
         return comps
+
+    def gathers(self, blocks) -> list:
+        """
+        A region's gathers and scatters: loads and stores through an index
+        vector, which the region builds at its start
+        """
+        found = []
+        for b in blocks:
+            for section in ("prologue", "body", "epilogue", "tail", "subtail"):
+                for op in getattr(b, section, None) or []:
+                    if isinstance(op, (lsc_load, lsc_store)) and "VINDEX" in \
+                            {m.name for m in (getattr(op.step, "op_mod_reqs", None) or set())}:
+                        found.append(op)
+        return found
+
+    def index_keys(self, blocks) -> set:
+        return {(op.indices[0].component, op.properties.get("stride_index"))
+                for op in self.gathers(blocks)}
+
+    def start_indexes(self, blocks):
+        """
+        The index vectors a region's gathers and scatters need, allocated and
+        built at its start - before anything the region allocates itself
+        """
+        for op in self.gathers(blocks):
+            self.index_vector(op)
+
+    def release_indexes(self, later: set):
+        for key in [k for k in self.indexes if k not in later]:
+            self.rt.unuse_reg("vreg", self.indexes.pop(key).idx)
 
     def start_addresses(self, comps, later) -> list[str]:
         """

@@ -232,7 +232,9 @@ class test_signature_specializer(unittest.TestCase):
     def test_sve_gather(self):
         # the index vector is built once from A's stride register, in bytes
         p = self.gather("sve")
-        self.assertTrue(any(l.startswith("index ") for l in p.setup))
+        # built at the start of the region using it, before its loop
+        loop = next(i for i, l in enumerate(p.code) if l.endswith("_loop:"))
+        self.assertTrue(any(l.startswith("index ") for l in p.code[:loop]))
         self.assertTrue(any(", z" in l and l.startswith("ld1d") for l in p.blocks[0].sections["body"]))
         if shutil.which("aarch64-linux-gnu-as"):
             ok, err = assembles(p.instructions(), arch="armv8-a+sve")
@@ -254,7 +256,9 @@ class test_signature_specializer(unittest.TestCase):
         # the index vector of byte offsets, vluxei64 loads through it
         p = self.rvv(**{"A-layout": ["m:s", "k:c"],
                         "mm-to": ["fma(A.VEC:gather, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
-        self.assertTrue(any(l.startswith("vid.v") for l in p.setup))
+        # built at the start of the region using it, before its loop
+        loop = next(i for i, l in enumerate(p.code) if l.endswith("_loop:"))
+        self.assertTrue(any(l.startswith("vid.v") for l in p.code[:loop]))
         self.assertTrue(any(l.startswith("vluxei64") for l in p.blocks[0].sections["body"]))
 
     def test_avx_block_lanes(self):
