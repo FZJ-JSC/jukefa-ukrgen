@@ -121,5 +121,28 @@ class test_vla_repeat(unittest.TestCase):
                 "qemu-aarch64-static", [("max,sve256=on", "tile 8 x 2"), ("max,sve512=on", "tile 16 x 2")])
 
 
+    def test_vectorized(self):
+        # the fill information is enough to turn the loop into a strided load
+        ctx, res = run(**{"pre-specialize-irmods": ["hoist", "vectorize_loops"]})
+        body = ctx.emitted[0].blocks[0].sections["body"]
+        self.assertFalse(any(l.startswith("vfslide1down") for l in body))
+        self.assertTrue(any(l.startswith("vlse64.v") and l.endswith(ctx.emitted[0].params["stride(A,m)"])
+                            for l in body))
+        emulate(self, ctx, "strided_mm_harness.c", "riscv64-linux-gnu-gcc", "-march=rv64gcv",
+                "qemu-riscv64-static", [("rv64,v=true,vlen=256,elen=64", "tile 8 x 2")])
+
+    def test_unrolled(self):
+        # two elements an iteration: the body twice, the count stepping by 2
+        ctx, res = run(**{"pre-specialize-irmods": ["hoist", "unroll_loops"]})
+        body = ctx.emitted[0].blocks[0].sections["body"]
+        start = next(i for i, l in enumerate(body) if l.endswith("_elements:"))
+        end = next(i for i, l in enumerate(body) if i > start and l.startswith("bne"))
+        self.assertEqual(2, sum(l.startswith("fld") for l in body[start:end]))
+        self.assertTrue(any(l.endswith(",-2") for l in body[start:end]))
+        emulate(self, ctx, "strided_mm_harness.c", "riscv64-linux-gnu-gcc", "-march=rv64gcv",
+                "qemu-riscv64-static", [("rv64,v=true,vlen=128,elen=64", "tile 4 x 2"),
+                                        ("rv64,v=true,vlen=256,elen=64", "tile 8 x 2")])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -13,8 +13,10 @@ from .lanefuse import lanefuse
 from .ldinc import ldinc
 from .widen import widen
 from .hoist import hoist
+from .vectorize import vectorize_loops
+from .unroll import unroll_loops
 
-IRMODS : list[type[lsc_irmod]] = [widen, hoist, lanefuse, ldinc]
+IRMODS : list[type[lsc_irmod]] = [widen, vectorize_loops, unroll_loops, hoist, lanefuse, ldinc]
 
 
 def irmods_at(placement: irmod_placement) -> list[type[lsc_irmod]]:

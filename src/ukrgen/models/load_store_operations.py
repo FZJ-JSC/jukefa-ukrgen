@@ -439,6 +439,8 @@ class lsc_repeat(lsc_load):
         self.body = body
         self.divisor = divisor
         self.fill = fill
+        #: elements an iteration takes: a divisor of divisor
+        self.unroll = 1
 
 
 class lsc_repeat_store(lsc_store):
@@ -456,3 +458,5 @@ class lsc_repeat_store(lsc_store):
         self.body = body
         self.divisor = divisor
         self.fill = fill
+        #: elements an iteration takes: a divisor of divisor
+        self.unroll = 1

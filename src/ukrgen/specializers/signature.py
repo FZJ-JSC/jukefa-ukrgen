@@ -687,17 +687,20 @@ class signature_emitter:
             lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
         loop = f"ukr{next(self.labels)}_elements"
         lines.append(self.gen.label(label=loop))
-        for step in op.body:
-            if isinstance(step, (lsc_load, lsc_store)):
-                line = self._mem(step, self.reg(step.indices[1], step.rtypes[1]), walker, 0)
-                if line is None:
-                    raise specialization_error(f"{op.rsln}: no {step.step.op} of one {comp} "
-                                               "element takes a plain address")
-                lines.append(line)
-            else:
-                lines.append(self.move(step))
-        lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
-        lines.append(self.gen.add_greg_imm(reg=counter, imm=-1))
+        # the body as often as an iteration takes elements, the pointer moved
+        # after each
+        for _ in range(getattr(op, "unroll", 1)):
+            for step in op.body:
+                if isinstance(step, (lsc_load, lsc_store)):
+                    line = self._mem(step, self.reg(step.indices[1], step.rtypes[1]), walker, 0)
+                    if line is None:
+                        raise specialization_error(f"{op.rsln}: no {step.step.op} of one {comp} "
+                                                   "element takes a plain address")
+                    lines.append(line)
+                else:
+                    lines.append(self.move(step))
+            lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
+        lines.append(self.gen.add_greg_imm(reg=counter, imm=-getattr(op, "unroll", 1)))
         lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
         for r in (walker, counter, delta):
             self.rt.unuse_reg("greg", r.idx)
