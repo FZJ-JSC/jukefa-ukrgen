@@ -248,7 +248,12 @@ class program_builder:
         reg_tile = tiling.registers[comp]
         dims = (reg_tile.dima, reg_tile.dimb)
         live = [(pos, idx) for pos, idx in enumerate(indices) if idx is not None]
-        return {idx: sym.extent(dims[pos]) * c for (pos, idx), c in zip(live, coord)}
+        # an STO looping over a tile's slices covers the tile along the index
+        # they iterate: its coordinates step by the tile there
+        loop = getattr(tiling, "slice_loop", None)
+        step = lambda pos, idx: sym.extent(tiling.extents[idx]) if loop is not None \
+            and idx == loop[0] else sym.extent(dims[pos])
+        return {idx: step(pos, idx) * c for (pos, idx), c in zip(live, coord)}
 
     def address(self, sto: str, comp: str, direction: str, coord: tuple,
                 elements: dict[str, sym]) -> addr_ref:
@@ -632,7 +637,7 @@ class program_builder:
 
         return nest(items, 0, [])
 
-    def emit_compute(self, sto: str, tiling, op, impl=None) -> list:
+    def emit_compute(self, sto: str, tiling, op, impl=None, slices=None) -> list:
         """
         One STO operation: each step of the chosen implementation, with the
         data its operands need loaded first unless a register holds it
@@ -649,6 +654,7 @@ class program_builder:
             loads: list[access_group] = []
             hws, indices, tiles, reads, writes, read_regs = [], [], [], [], [], []
             written = []
+            outward = []
             for pos, (hw, math) in enumerate(step.name_mapping.items()):
                 is_read, is_written = get_operand_io(step.hw_ast, hw)
                 rtype = sig.operands[hw].rtype
@@ -677,6 +683,12 @@ class program_builder:
                                 access, coord))
                             self.lane_holder[(reg, by_lane[0])] = (math, coord)
                         self.holder[reg] = (math, coord)
+                    elif slices and is_read and strat is not None and \
+                            getattr(strat.rsln, "resident_rtype", None) is not None:
+                        # the slice moved from the tile into the operation's
+                        # vector (slice_vec)
+                        loads.append(access_group(math, reg, [self.slice_move(
+                            strat, math, coord, reg, rtype, slices, inward=True)], False, coord))
                     elif is_read and strat is not None and strat.rsln.steps:
                         if self.holder.get(reg) != (math, coord):
                             access = read_access.STREAM == self.flow[(sto, math)].read
@@ -696,6 +708,11 @@ class program_builder:
                         lane = lanes[0]
                     if is_written:
                         written.append((reg, math, coord))
+                        out = res.operand_strategies.get((hw, dmd.OUT))
+                        if slices and out is not None and \
+                                getattr(out.rsln, "resident_rtype", None) is not None:
+                            outward.append(self.slice_move(out, math, coord, reg, rtype, slices,
+                                                           inward=False))
                 hws.append(hw)
                 indices.append(_index(reg, lane))
                 tiles.append(tile)
@@ -712,6 +729,7 @@ class program_builder:
                                    resolution=res, hw_operands=hws,
                                    rtypes=[sig.operands[hw].rtype for hw in hws]),
                 read_regs))
+            items += outward
             for reg, math, coord in written:
                 self.holder[reg] = (math, coord)
                 for key in [k for k in self.lane_holder if k[0] == reg]:
@@ -740,11 +758,66 @@ class program_builder:
         tiling = tiling or self.stos[sto]
         kind = self.comp.get_sto(sto).kind
         items = []
+        slice_loop = getattr(tiling, "slice_loop", None)
         for op in ops:
-            items += self.emit_compute(sto, tiling, op, impl) if sto_kind.COMPUTE == kind \
-                else self.emit_store(sto, tiling, op)
+            if sto_kind.COMPUTE == kind and slice_loop is not None:
+                items += self.slice_compute(sto, tiling, op, impl, slice_loop)
+            else:
+                items += self.emit_compute(sto, tiling, op, impl) if sto_kind.COMPUTE == kind \
+                    else self.emit_store(sto, tiling, op)
             self.pos += 1
         return items
+
+    def slice_move(self, strat, math, coord, reg, rtype, axis, inward) -> lsc_move:
+        """
+        A slice of the tile a component is resident in moved into the
+        operation's vector register, or back: its slice index the loop's
+        """
+        resident = strat.rsln.resident_rtype
+        tile_reg = self.reg_of(math, resident, coord)
+        step = strat.resolved_steps[0]
+        dt = self.ctx.component_dts.get(math)
+        sigs = getattr(step, "sg", None) or self.step_sigs(step.step, dt)
+        src, dst = (tile_reg, reg) if inward else (reg, tile_reg)
+        move = lsc_move(_index(src), _index(dst), [scalar_tile, scalar_tile], rsln=strat.rsln.unique_tag,
+                        step=step.step, sigs=sigs, rtypes=[src.rtype, dst.rtype])
+        move.add_property("slice", axis)
+        if not inward:
+            # the tile holds the component again, slice by slice
+            self.holder[tile_reg] = (math, coord)
+        return move
+
+    def slice_compute(self, sto, tiling, op, impl, slice_loop) -> list:
+        """
+        An STO operating on a tile resident in registers slice by slice: its
+        operation for one slice - the tile's slices moved into the operation's
+        vectors and back, memory operands accessed at the slice's position -
+        in a loop over the tile's slices (an lsc_loop: the tile one register
+        throughout, covered completely), memory walking along the index the
+        slices iterate
+        """
+        index, axis, comp = slice_loop
+        items = self.emit_compute(sto, tiling, op, impl, slices=axis)
+        block = []
+        for item in items:
+            block += list(item.ops) if isinstance(item, access_group) else \
+                [item.op] if isinstance(item, compute_item) else [item]
+        walks = []
+        for b in block:
+            if isinstance(b, (lsc_load, lsc_store)):
+                memory = b.indices[0].component
+                b.add_property("walk", len(walks))
+                walks.append(loop_walk(anchor=_clone(b),
+                                       step=self.strides.get(memory, {}).get(index, sym.const(0))))
+        one = dimp(dt=dimt.fixed, size=1)
+        element = tile(one, one)
+        vector = tile(dimp(dt=dimt.vla, size=1), one)
+        loop = lsc_loop(block=block,
+                        subtiling=subtiling(shape=element, count=element.count_in(vector)[0]),
+                        walks=walks,
+                        info={"kind": "slices", "axis": axis, "index": index, "component": comp,
+                              "direction": "compute"})
+        return [compute_item(loop, [])]
 
     def emit_section(self, parts: list[tuple]) -> list:
         """

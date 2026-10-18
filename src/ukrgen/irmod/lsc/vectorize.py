@@ -9,7 +9,9 @@ from .base import irmod_placement, lsc_irmod, blocks_and_sections
 def repeats(program):
     for block, section in blocks_and_sections(program):
         for op in getattr(block, section) or []:
-            if isinstance(op, lsc_loop) and op.info.get("direction"):
+            # loops over a vector's elements, filling or draining it
+            if isinstance(op, lsc_loop) and op.info.get("direction") in ("load", "store") \
+                    and "slices" != op.info.get("kind"):
                 yield op
 
 
@@ -64,7 +66,8 @@ class vectorize_loops(lsc_irmod):
         for block, section in blocks_and_sections(program):
             out = []
             for op in getattr(block, section) or []:
-                if not (isinstance(op, lsc_loop) and op.info.get("direction")):
+                if not (isinstance(op, lsc_loop) and op.info.get("direction") in ("load", "store")
+                        and "slices" != op.info.get("kind")):
                     out.append(op)
                     continue
                 dt = self.ctx.component_dts[op.info["component"]]

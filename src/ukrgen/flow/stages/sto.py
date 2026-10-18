@@ -17,6 +17,40 @@ from .stage import stage, early_exit, stage_error
 from .ukr.ukr import sto_kind, block_description
 
 
+VLA_ONE = dimp(dt=dimt.vla, size=1)
+
+
+def resident_components(impl) -> set[str]:
+    """
+    The components an implementation reaches resident in a tile, slice by
+    slice
+    """
+    return {step.name_mapping.get(hw, hw)
+            for res, step in zip(impl.resolved_chain, impl.math_chain)
+            for (hw, _), strat in res.operand_strategies.items()
+            if getattr(strat.rsln, "resident_rtype", None) is not None}
+
+
+def resident_slice_loop(impl, operands) -> tuple | None:
+    """
+    Where an implementation reaches an operand resident in a tile slice by
+    slice (slice_vec): the index its slices iterate, their axis, and the
+    tile's component - columns span the tile's first index, so a loop over
+    them walks its second; rows the other way
+    """
+    for res, step in zip(impl.resolved_chain, impl.math_chain):
+        for (hw, _), strat in res.operand_strategies.items():
+            if getattr(strat.rsln, "resident_rtype", None) is None:
+                continue
+            comp = step.name_mapping.get(hw, hw)
+            indices = [i for i in operands.get(comp, ()) if i is not None]
+            if len(indices) < 2:
+                continue
+            axis = "col" if strat.rsln.unique_tag.endswith("_col") else "row"
+            return (indices[1] if "col" == axis else indices[0], axis, comp)
+    return None
+
+
 @dataclass
 class sto_tiling:
     """
@@ -111,6 +145,13 @@ class sto_stage(stage):
                 lanes = lane_axes(gen, impl, sto.req, self.context.component_layouts)
                 registers = register_tiles(tiles, lanes, sto.req)
                 operands = sto.operand_indices
+                # an operand resident in a tile, reached slice by slice through
+                # the operation's vectors: the STO covers the tile, looping over
+                # its slices along the index they iterate - columns span the
+                # tile's first index, so walk its second
+                slice_loop = resident_slice_loop(impl, operands)
+                if slice_loop is not None:
+                    extents[slice_loop[0]] = VLA_ONE
                 io = {op: sto.io(op) for op in operands}
                 opstr = ";".join(part_enc.split("(")[0].split("[")[0]
                                  for part_enc in chosen[name].encoding.split(" ; "))
@@ -140,7 +181,9 @@ class sto_stage(stage):
             if sto_kind.COMPUTE == sto.kind:
                 for op in sto.operands:
                     if sto.io(op)[1]:
-                        left[op] = (tiles[op], operands[op])
+                        # a tile reached slice by slice is left as the tile
+                        whole = op in resident_components(impl)
+                        left[op] = (tile(VLA_ONE, VLA_ONE) if whole else tiles[op], operands[op])
 
             sto_order = tuple(i for i in order if i in extents)
             ops = generate(order=sto_order, counts=counts, operands=operands,
@@ -152,6 +195,8 @@ class sto_stage(stage):
                                                           operands=operands,
                                                           tiles=registers, io=io,
                                                           lanes=lanes, opstr=opstr))
+            if sto_kind.COMPUTE == sto.kind and slice_loop is not None:
+                tilings[name].slice_loop = slice_loop
 
     def tile_part(self, part: dict, subtail: dict | None = None) \
             -> tuple[dict[str, sto_tiling], dict[str, sto_tiling]]:
