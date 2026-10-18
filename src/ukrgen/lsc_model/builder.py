@@ -300,12 +300,10 @@ class program_builder:
         dt = self.ctx.component_dts[memory]
         self.vidx.setdefault(memory, self.vector_index(tiling, comp))
         repeats = [getattr(rs.step, "repeat", None) for rs in steps]
-        if any(r is not None and r.vla for r in repeats):
-            return self.move_vla(sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt)
         if any(r is not None and r.group for r in repeats):
             return self.move_lane_group(sto, tiling, comp, coord, reg, steps, direction, tag,
                                         memory, dt)
-        if any(r is not None and (r.lane_operand or r.per_block or r.block_operand)
+        if any(r is not None and (r.vla or r.lane_operand or r.per_block or r.block_operand)
                for r in repeats):
             return self.move_nest(sto, tiling, comp, coord, reg, steps, direction, tag,
                                   memory, dt)
@@ -504,6 +502,9 @@ class program_builder:
         """
         size, simd = adt_size(dt), self.gen.simd_size
         rep = step.repeat
+        if rep.vla:
+            # every element, as many as the vector has at run time: a loop
+            return [("element", None, 1)]
         if not (rep.per_block or rep.block_operand):
             return [("lane", simd // size, 1)]
         levels = [("chunk", simd // top, top // size)] if top > 16 else []
@@ -515,9 +516,10 @@ class program_builder:
     def move_nest(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
         """
         A step chain repeating over a register's subtiles - lanes, blocks,
-        chunks - as a loop nest: within a subtile the steps in their order, a
-        run of consecutive steps going a level deeper iterating that level
-        once together. block_lanes_256 so loads per chunk, per block its lanes
+        chunks, elements - as a loop nest: within a subtile the steps in their
+        order, a run of consecutive steps going a level deeper iterating that
+        level once together - unrolled where its count is fixed, a loop
+        (lsc_loop) where it is known at run time only. block_lanes_256 so loads per chunk, per block its lanes
         then its 128-bit insert, then the chunk's 256-bit insert; a block store
         per block its extract, then its lanes' stores; lanes per lane
         """
@@ -565,8 +567,14 @@ class program_builder:
                 j = i
                 while j < len(run) and len(run[j][1]) > depth:
                     j += 1
-                for k in range(run[i][1][depth][1]):
-                    ops += nest(run[i:j], depth + 1, idxs + [k])
+                if run[i][1][depth][1] is None:
+                    # a count known at run time only: the run's steps for one
+                    # element, in a loop over them (lsc_loop)
+                    ops += self.move_vla(sto, tiling, comp, coord, reg,
+                                         [rs for rs, _ in run[i:j]], direction, tag, memory, dt)
+                else:
+                    for k in range(run[i][1][depth][1]):
+                        ops += nest(run[i:j], depth + 1, idxs + [k])
                 i = j
             return ops
 
