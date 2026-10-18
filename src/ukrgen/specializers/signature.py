@@ -634,8 +634,9 @@ class signature_emitter:
                     except ArgumentDependencyError:
                         continue
                     if len(allowed) < count:
+                        # below callee-saved registers' -1
                         for n in allowed:
-                            self.rt.set_priority(tag, n, min(-1, self.rt.priority(tag, n)))
+                            self.rt.set_priority(tag, n, min(-2, self.rt.priority(tag, n)))
 
     def release(self, key):
         """
@@ -1454,6 +1455,9 @@ class signature_emitter:
                     factors.update(f for f in term if f.startswith("stride("))
         names += sorted(factors)
         self.cc = self.gen.create_callconv()
+        # the callee's registers last: no save and restore unless needed
+        if hasattr(self.cc, "deprioritize_callee_saved"):
+            self.cc.deprioritize_callee_saved(self.rt, self.gen)
         for name in names:
             self.cc.add_param("greg", name)
         self.fn = fngen(gen=self.gen, rt=self.rt)
