@@ -688,22 +688,52 @@ class signature_emitter:
         loop = f"ukr{next(self.labels)}_elements"
         lines.append(self.gen.label(label=loop))
         # the body as often as an iteration takes elements, the pointer moved
-        # after each
-        for _ in range(getattr(op, "unroll", 1)):
-            for step in op.body:
-                if isinstance(step, (lsc_load, lsc_store)):
-                    line = self._mem(step, self.reg(step.indices[1], step.rtypes[1]), walker, 0)
-                    if line is None:
-                        raise specialization_error(f"{op.rsln}: no {step.step.op} of one {comp} "
-                                                   "element takes a plain address")
-                    lines.append(line)
-                else:
-                    lines.append(self.move(step))
-            lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
+        # after each; its scalar rotating through as many registers as asked,
+        # so the elements' scalar loads and stores need not wait for each other
+        unroll = getattr(op, "unroll", 1)
+        count = max(1, min(getattr(op, "registers", 1), unroll))
+        first = op.body[0]
+        scalars, extra = [self.reg(first.indices[1], first.rtypes[1])], []
+        for _ in range(count - 1):
+            tag = "freg" if rgt.FP == first.rtypes[1] else "greg"
+            number = self.rt.reserve_any_reg(tag)
+            extra.append((tag, number))
+            scalars.append(self.gen.freg(number, dt) if "freg" == tag else self.gen.greg(number))
+
+        def access(step, data):
+            line = self._mem(step, data, walker, 0)
+            if line is None:
+                raise specialization_error(f"{op.rsln}: no {step.step.op} of one {comp} "
+                                           "element takes a plain address")
+            return line
+
+        if "load" == op.fill["direction"]:
+            # a batch of loads into different registers, then their fills in
+            # order: the loads don't wait for the fills
+            load, fill = op.body
+            for start in range(0, unroll, count):
+                batch = range(start, min(unroll, start + count))
+                for e in batch:
+                    lines.append(access(load, scalars[e - start]))
+                    lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
+                for e in batch:
+                    lines.append(self.move(fill, src=scalars[e - start]))
+        else:
+            # the extract and shift a chain on the vector; each extract into the
+            # next register, so it needn't wait for the store before
+            extract, store, shift = op.body
+            for e in range(unroll):
+                scalar = scalars[e % count]
+                lines.append(self.move(extract, dst=scalar))
+                lines.append(self.move(shift))
+                lines.append(access(store, scalar))
+                lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
         lines.append(self.gen.add_greg_imm(reg=counter, imm=-getattr(op, "unroll", 1)))
         lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
         for r in (walker, counter, delta):
             self.rt.unuse_reg("greg", r.idx)
+        for tag, number in extra:
+            self.rt.unuse_reg(tag, number)
         return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
                 if l.strip()]
 
@@ -1057,12 +1087,14 @@ class signature_emitter:
             return [self.move(op)]
         raise specialization_error(f"cannot emit {type(op).__name__}")
 
-    def move(self, op: lsc_move) -> str:
+    def move(self, op: lsc_move, src=None, dst=None) -> str:
         """
         A move between registers through the first unmasked signature taking it
+        (src, dst: other physical registers than the operation's, an unrolled
+        loop's rotation)
         """
-        src = self.reg(op.indices[0], op.rtypes[0])
-        dst = self.reg(op.indices[1], op.rtypes[1])
+        src = self.reg(op.indices[0], op.rtypes[0]) if src is None else src
+        dst = self.reg(op.indices[1], op.rtypes[1]) if dst is None else dst
         # the destination's type, or the source's where the destination is a
         # scratch (a drain loop's extract into a scalar)
         dt = self.dts.get((op.indices[1].component, op.indices[1].indices[0])) or \

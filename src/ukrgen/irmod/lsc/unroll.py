@@ -20,7 +20,11 @@ class unroll_loops(lsc_irmod):
     default_enabled = False
     params = [irmod_param(name="factor", default=2, parse=int,
                           description="elements a loop iteration takes: the largest dividing "
-                                      "the loop's divisor, up to this")]
+                                      "the loop's divisor, up to this"),
+              irmod_param(name="registers", default=1, parse=int,
+                          description="registers an iteration's scalars rotate through "
+                                      "(up to its elements): scalar loads and stores in "
+                                      "flight together")]
     constraints = "the factor divides the element count, which is a multiple of the divisor"
 
     def apply(self, program) -> int:
@@ -30,5 +34,6 @@ class unroll_loops(lsc_irmod):
             factor = max(f for f in range(1, want + 1) if 0 == op.divisor % f)
             if factor > 1:
                 op.unroll = factor
+                op.registers = max(1, min(int(self.values["registers"]), factor))
                 changed += 1
         return changed

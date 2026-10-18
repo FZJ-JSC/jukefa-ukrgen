@@ -144,5 +144,19 @@ class test_vla_repeat(unittest.TestCase):
                                         ("rv64,v=true,vlen=256,elen=64", "tile 8 x 2")])
 
 
+    def test_unrolled_registers(self):
+        # two registers: both elements' loads, then both fills
+        ctx, res = run(**{"pre-specialize-irmods": ["hoist", "unroll_loops"],
+                          "unroll_loops-factor": "2", "unroll_loops-registers": "2"})
+        body = ctx.emitted[0].blocks[0].sections["body"]
+        start = next(i for i, l in enumerate(body) if l.endswith("_elements:"))
+        loop = [l for l in body[start + 1:] if l.startswith(("fld", "vfslide1down"))][:4]
+        self.assertEqual(["fld", "fld", "vfslide1down.vf", "vfslide1down.vf"], [l.split()[0] for l in loop])
+        self.assertNotEqual(loop[0].split()[1], loop[1].split()[1])
+        emulate(self, ctx, "strided_mm_harness.c", "riscv64-linux-gnu-gcc", "-march=rv64gcv",
+                "qemu-riscv64-static", [("rv64,v=true,vlen=128,elen=64", "tile 4 x 2"),
+                                        ("rv64,v=true,vlen=256,elen=64", "tile 8 x 2")])
+
+
 if __name__ == "__main__":
     unittest.main()

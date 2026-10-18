@@ -441,6 +441,8 @@ class lsc_repeat(lsc_load):
         self.fill = fill
         #: elements an iteration takes: a divisor of divisor
         self.unroll = 1
+        #: registers an unrolled iteration's scalars rotate through
+        self.registers = 1
 
 
 class lsc_repeat_store(lsc_store):
@@ -460,3 +462,5 @@ class lsc_repeat_store(lsc_store):
         self.fill = fill
         #: elements an iteration takes: a divisor of divisor
         self.unroll = 1
+        #: registers an unrolled iteration's scalars rotate through
+        self.registers = 1
