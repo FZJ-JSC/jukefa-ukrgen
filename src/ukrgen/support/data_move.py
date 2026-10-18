@@ -191,6 +191,10 @@ class dm_repeat:
     block_operand : str | None = None
     #: size of those blocks: 16 (128 bits) or 32 (256 bits, AVX-512)
     block_bytes : int = 16
+    #: one element per lane: consecutive elements along the operand's
+    #: contiguous index share a register loaded once, each moved out of its
+    #: lane (bc_lanes)
+    group : bool = False
 
 
 @dataclass(frozen=True)

@@ -89,6 +89,7 @@ class program_builder:
                  data_regs: dict[str, int] | None = None,
                  preload: bool = True,
                  resolve_order: list[str] | None = None):
+        self.lane_groups: dict = {}
         self.vidx: dict[str, str] = {}
         self.ctx = ctx
         self.gen = ctx.gen
@@ -283,6 +284,9 @@ class program_builder:
         dt = self.ctx.component_dts[memory]
         self.vidx.setdefault(memory, self.vector_index(tiling, comp))
         repeats = [getattr(rs.step, "repeat", None) for rs in steps]
+        if any(r is not None and r.group for r in repeats):
+            return self.move_lane_group(sto, tiling, comp, coord, reg, steps, direction, tag,
+                                        memory, dt)
         if any(r is not None and (r.per_block or r.block_operand) for r in repeats):
             return self.move_blocks(sto, tiling, comp, coord, reg, steps, direction, tag,
                                     memory, dt)
@@ -337,6 +341,46 @@ class program_builder:
                         # a move from or into one lane: the lane the element is in
                         op.add_property("lane", 0 if lane is None else lane)
                     ops.append(op)
+        return ops
+
+    def move_lane_group(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
+        """
+        An element of a group sharing a register (bc_lanes): consecutive
+        elements along the component's contiguous index, as many as a register
+        has lanes. The group's register is loaded where an element of another
+        group was loaded last, the element then moved out of its lane
+        """
+        ops: list[lsc_operation] = []
+        lanes = self.gen.simd_size // adt_size(dt)
+        elements = self.elements(tiling, comp, coord)
+        strides = self.strides.get(memory, {})
+        along = next((i for i in elements if dict(strides.get(i, sym()).terms) == {(): 1}), None)
+        if along is None:
+            raise model_error(f"{tag}: {memory} has no contiguous index to group its elements along")
+        at = dict(elements[along].terms).get((), 0)
+        position = at % lanes
+        start = dict(elements)
+        start[along] = elements[along] + sym.const(-position)
+        key = (memory, tuple(sorted((i, str(e)) for i, e in start.items())))
+        load, move = steps[0], steps[1]
+        if self.lane_groups.get(memory) != key:
+            data = self.ref_reg(load.step.dest, load.step.dest_rtype, reg)
+            addr = self.address(sto, memory, direction, coord, start)
+            ops.append(lsc_load(memory, data.index, addr.reg, None, None,
+                                self.reg_tile(tiling, data), set(), data=_index(data), rsln=tag,
+                                step=load.step, sigs=getattr(load, "sg", None) or
+                                self.step_sigs(load.step, dt),
+                                offset=addr.offset, rtypes=[None, data.rtype]))
+            self.lane_groups[memory] = key
+        src = self.ref_reg(move.step.src[0], move.step.src_rtypes[0], reg)
+        dest = self.ref_reg(move.step.dest, move.step.dest_rtype, reg)
+        op = lsc_move(_index(src), _index(dest),
+                      [self.reg_tile(tiling, src), self.reg_tile(tiling, dest)],
+                      rsln=tag, step=move.step,
+                      sigs=getattr(move, "sg", None) or self.step_sigs(move.step, dt),
+                      rtypes=[src.rtype, dest.rtype])
+        op.add_property("lane", position)
+        ops.append(op)
         return ops
 
     def move_blocks(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
@@ -519,6 +563,8 @@ class program_builder:
         """
         Emit STOs' operations as one section: (sto, ops, tiling, impl) each
         """
+        # which group's register a section loaded last starts afresh
+        self.lane_groups = {}
         self.begin_section([(sto, ops) for sto, ops, _, _ in parts])
         items = []
         for sto, ops, tiling, impl in parts:

@@ -12,6 +12,7 @@ from asmgen.asmblocks.op import (
 from ...matching.math import transformation as tf
 
 from ..data_move import (
+    dm_repeat,
     resolution_registry,
     tfr_key,
     transformation_resolution as tr,
@@ -112,6 +113,29 @@ class scalar_reduce_provider(resolution_provider):
                                 temp_ref(tag="0") : {omod.ILANE},
                                 orig_ref(): {omod.BCAST}
                                 })
+                    ]))
+
+        # example NEON, a vector of elements, a broadcast per lane:
+        #  ld1 {v0.2d}, [x5]
+        #  dup v1.2d, v0.d[0]
+        #  dup v2.2d, v0.d[1]
+        #  fmla v3.2d, v4.2d, v1.2d
+        #  fmla v5.2d, v4.2d, v2.2d
+        registry.add_resolution(
+            key=tfr_key(tfs=frozenset({tf.SCALAR_REDUCE}),
+                        rtype=rgt.VEC, ddir=dmd.IN),
+            rsln=tr(
+                unique_tag='bc_lanes',
+                steps=[
+                    dm_step(op="load", dest=temp_ref(tag="0"), dest_rtype=rgt.VEC,
+                            forbidden_opd_mods={temp_ref(tag="0"): {omod.ILANE, omod.BCAST}}),
+                    dm_step(op="move", dest=orig_ref(), dest_rtype=rgt.VEC,
+                            src=[temp_ref(tag="0")], src_rtypes=[rgt.VEC],
+                            opd_mod_reqs={
+                                temp_ref(tag="0") : {omod.ILANE},
+                                orig_ref(): {omod.BCAST}
+                                },
+                            repeat=dm_repeat(lane_operand="adreg_lane", group=True))
                     ]))
 
         # example SVE, an FMA using one element of each 128-bit block:
