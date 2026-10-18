@@ -394,6 +394,30 @@ class program_builder:
                         info=dict(info, component=memory, index=vidx, stride=stride,
                                   explicit=bool(settings)))
 
+    def slice_loop(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
+        """
+        A tile moved slice by slice (slices_col, slices_row): one lsc_loop, its
+        block the access of one slice - the slice index the emitter's register
+        - walking the index across slices: a column spans the tile's first
+        index, so a loop over columns walks its second; rows the other way
+        """
+        step = steps[0].step
+        sigs = getattr(steps[0], "sg", None) or self.step_sigs(step, dt)
+        col = any("COL" == m.name for mods in (step.opd_mod_reqs or {}).values() for m in mods)
+        first, second = tiling.generate_args["operands"][comp][:2]
+        elements = self.elements(tiling, comp, coord)
+        addr = self.address(sto, memory, direction, coord, elements)
+        if "load" == step.op:
+            data, cls = self.ref_reg(step.dest, step.dest_rtype, reg), lsc_load
+        else:
+            data, cls = self.ref_reg(step.src[0], step.src_rtypes[0], reg), lsc_store
+        access = lambda: cls(memory, data.index, addr.reg, None, None,
+                             self.reg_tile(tiling, data), set(), data=_index(data), rsln=tag,
+                             step=step, sigs=sigs, offset=addr.offset, rtypes=[None, data.rtype])
+        return [self.element_loop([access()], access(), memory, second if col else first, 1,
+                                  {"direction": step.op, "kind": "slices",
+                                   "axis": "col" if col else "row"})]
+
     def move_vla(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
         """
         A vector filled element by element (vla_lanes): one lsc_loop, its block
@@ -586,8 +610,10 @@ class program_builder:
                 while j < len(run) and len(run[j][1]) > depth:
                     j += 1
                 if "slice" == run[i][1][depth][0]:
-                    raise model_error(f"{tag}: loops over {comp}'s tile slices are not "
-                                      f"emitted yet")
+                    ops += self.slice_loop(sto, tiling, comp, coord, reg,
+                                           [rs for rs, _ in run[i:j]], direction, tag, memory, dt)
+                    i = j
+                    continue
                 if run[i][1][depth][1] is None:
                     # a count known at run time only: the run's steps for one
                     # element, in a loop over them (lsc_loop)

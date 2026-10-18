@@ -1,0 +1,72 @@
+"""
+An SME FP64 mm: outer products (fmopa) into ZA tiles, the tiles zeroed,
+stored slice by slice in loops over their columns - run under qemu against
+a reference, the same binary at two streaming vector lengths
+"""
+
+import os
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+import specializers.test_signature as t
+from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+PARAMS = {"sme-F64F64": "on", "mm-to": ["fopa(A.VEC:direct, B.VEC:direct, C.TILE){i=m, j=n, k*=1}"],
+          "store-to": ["C.TILE:slices_col"]}
+
+
+def run(**extra):
+    stages = list(t.STAGES)
+    i = [x.__name__ for x in stages].index("model_stage") + 1
+    saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
+    try:
+        return t.mm(isa="sme", **PARAMS, **extra)
+    finally:
+        t.STAGES = saved
+
+
+class test_sme_run(unittest.TestCase):
+
+    def test_code(self):
+        ctx, res = run()
+        code = ctx.emitted[0].instructions()
+        self.assertTrue(any(l.startswith("fmopa za0.d") for l in code))
+        self.assertTrue(any(l.startswith("zero {za0.d}") for l in code))
+        self.assertTrue(any(l.startswith("st1d {za0v.d[w12, 0]}") for l in code))
+        # streaming mode once in, once out; the caller's d8-d15 kept
+        self.assertEqual(1, sum("smstart" == l for l in code))
+        self.assertEqual(1, sum("smstop" == l for l in code))
+        self.assertTrue(any(l.startswith("stp d8, d9") for l in code))
+
+    def test_runs(self):
+        cc, qemu = "aarch64-linux-gnu-gcc", "qemu-aarch64-static"
+        if not (shutil.which(cc) and shutil.which(qemu)):
+            self.skipTest(f"needs {cc} and {qemu}")
+        ctx, res = run()
+        self.assertEqual(["k", "base(A)", "base(B)", "base(C)", "stride(C,n)"],
+                         list(ctx.emitted[0].params))
+        with tempfile.TemporaryDirectory() as d:
+            src, obj, exe = (os.path.join(d, n) for n in ("ukr.s", "ukr.o", "run"))
+            with open(src, "w") as f:
+                f.write("\n".join(ctx.emitted[0].function("ukr")) + "\n")
+            r = subprocess.run([cc, "-c", "-Wa,-march=armv9-a+sme+sme-f64f64", src, "-o", obj],
+                               capture_output=True, text=True)
+            if r.returncode and "sme" in r.stderr:
+                self.skipTest("the assembler doesn't know SME")
+            self.assertEqual(0, r.returncode, r.stderr)
+            r = subprocess.run([cc, "-static", "-O1", os.path.join(HERE, "mm_harness.c"), obj,
+                                "-o", exe, "-lm"], capture_output=True, text=True)
+            self.assertEqual(0, r.returncode, r.stderr)
+            for svl, tile in ((256, "tile 8 x 8"), (512, "tile 16 x 16")):
+                r = subprocess.run([qemu, "-cpu", f"max,sme=on,sme{svl}=on", exe],
+                                   capture_output=True, text=True, timeout=120)
+                self.assertEqual(0, r.returncode, r.stdout + r.stderr)
+                self.assertIn(tile, r.stdout)
+                self.assertIn(", 0 wrong", r.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

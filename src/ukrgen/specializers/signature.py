@@ -558,6 +558,13 @@ class signature_emitter:
                 self.rt.reserve_specific_reg("vreg", number)
                 tag = "vreg"
                 self.phys[key] = self.gen.freg(number, dt)
+            elif rgt.TILE == rtype:
+                # a tile (SME ZA): from its own file
+                if "treg" not in getattr(self.rt, "registered_types", ()):
+                    self.rt.add_type("treg", self.gen.max_tregs(dt))
+                number = self.rt.reserve_any_reg("treg")
+                tag = "treg"
+                self.phys[key] = self.gen.treg(number, dt)
             else:
                 raise specialization_error(f"{rtype.name} registers are not specialized yet")
             self.numbers[key] = (tag, number)
@@ -659,12 +666,60 @@ class signature_emitter:
 
     # --- operations ----------------------------------------------------------
 
+    def slices(self, op) -> list[str]:
+        """
+        A loop over a tile's slices, as many as it has rows or columns at run
+        time: a walking pointer from the first slice, the slice index in one of
+        w12-w15 counting up - an unrolled iteration's slices at its immediates
+        """
+        anchor = op.walks[0].anchor
+        comp, reg = anchor.indices[0].component, anchor.indices[0].indices[0]
+        dt = self.ctx.component_dts[comp]
+        elements = self.program.offsets.elements_offset(anchor.offset, self.program.strides.get(comp, {}))
+        start = elements - self.positions[(comp, reg)]
+        used = self.rt.get_used_regs("greg")
+        number = next((n for n in range(12, 16) if n not in used), None)
+        if number is None:
+            raise specialization_error(f"{comp}: w12-w15, the slice index registers, are all taken")
+        self.rt.reserve_specific_reg("greg", number)
+        index = self.gen.greg(number)
+        walker, counter, delta = self.greg(), self.greg(), self.greg()
+        lines = [self.gen.mov_greg(src=self.aregs[(comp, reg)], dst=walker)]
+        lines += self.add_bytes(walker, self.bytes_of(comp, start), comp)
+        lines.append(self.gen.mov_greg(src=self.vl_elements(dt), dst=counter))
+        lines.append(self.gen.mov_greg_imm(reg=index, imm=0))
+        terms = dict(op.walks[0].step.terms)
+        if set(terms) == {()}:
+            lines.append(self.gen.mov_greg_imm(reg=delta, imm=terms[()] * adt_size(dt)))
+        else:
+            lines.append(self.gen.mov_greg(src=self.stride_reg(next(iter(terms))[0]), dst=delta))
+        loop = f"ukr{next(self.labels)}_slices"
+        lines.append(self.gen.label(label=loop))
+        access, unroll = op.block[0], op.subtiling.unroll
+        for u in range(unroll):
+            access.properties.update(slice_reg=index, slice_imm=u)
+            line = self._mem(access, self.reg(access.indices[1], access.rtypes[1]), walker, 0)
+            if line is None:
+                raise specialization_error(f"{op.walks[0].anchor.rsln}: no {access.step.op} of a "
+                                           f"{comp} slice takes slice immediate {u}")
+            lines.append(line)
+            lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
+        lines.append(self.gen.add_greg_imm(reg=index, imm=unroll))
+        lines.append(self.gen.add_greg_imm(reg=counter, imm=-unroll))
+        lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
+        for r in (walker, counter, delta, index):
+            self.rt.unuse_reg("greg", r.idx)
+        return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
+                if l.strip()]
+
     def loop(self, op) -> list[str]:
         """
         A loop over a vector's elements, as many as it has of its type at run
         time: a walking pointer from the first element, one element's steps,
         the pointer moved by the element stride
         """
+        if "slices" == op.info.get("kind"):
+            return self.slices(op)
         anchor = op.walks[0].anchor
         comp, reg = anchor.indices[0].component, anchor.indices[0].indices[0]
         dt = self.ctx.component_dts[comp]
@@ -1009,6 +1064,12 @@ class signature_emitter:
             prefix = []
             if not self._predicate(sig, kwargs, prefix, dt):
                 continue
+            # a tile slice's index: the loop's register and immediate
+            for name in sig.operands:
+                if name.endswith(("_rowreg", "_colreg")) and "slice_reg" in op.properties:
+                    kwargs[name] = op.properties["slice_reg"]
+                elif name.endswith(("_immrow", "_immcol")) and "slice_imm" in op.properties:
+                    kwargs[name] = op.properties["slice_imm"]
             side = op.properties.get("side")
             for name, shape in sig.operands.items():
                 if ot.IMMEDIATE == shape.otype and name.endswith("_lane") and \
@@ -1094,6 +1155,10 @@ class signature_emitter:
             return self.memory(op)
         if isinstance(op, lsc_transformation):
             return [self.compute(op)]
+        if isinstance(op, lsc_zero) and rgt.TILE == op.rtypes[0]:
+            reg = self.reg(op.indices[0], op.rtypes[0])
+            return [self.gen.zero_treg(treg=reg, dt=self.dts[(op.indices[0].component,
+                                                              op.indices[0].indices[0])])]
         if isinstance(op, lsc_zero):
             reg = self.reg(op.indices[0], op.rtypes[0])
             return [self.gen.zero_vreg(vreg=reg, dt=self.dts[(op.indices[0].component,
@@ -1305,6 +1370,16 @@ class signature_emitter:
         # what emission found it needs: right after the ISA's setup
         late = [l.strip() for chunk in self.late_setup for l in chunk.splitlines() if l.strip()]
         setup = setup[:self.isa_setup_lines] + late + setup[self.isa_setup_lines:]
+        entry, leave = lines(save) + lines(load), lines(restore) + lines(self.gen.ret())
+        if any("smstart" == l.strip() for l in setup):
+            # the ISA's setup enters streaming mode (SME), its teardown leaves
+            # it: changing mode zeroes the vector registers - the caller's
+            # d8-d15 kept around both, after the prologue so the parameters'
+            # stack offsets stand
+            entry = entry + ["stp d8, d9, [sp, #-64]!", "stp d10, d11, [sp, #16]",
+                             "stp d12, d13, [sp, #32]", "stp d14, d15, [sp, #48]"]
+            leave = ["ldp d10, d11, [sp, #16]", "ldp d12, d13, [sp, #32]",
+                     "ldp d14, d15, [sp, #48]", "ldp d8, d9, [sp], #64"] + leave
         return emitted_program(
             setup=setup, blocks=blocks, cases=cases,
             teardown=lines(isa.teardown(rt=self.rt, dt=dt)), data=lines(isa.data()),
@@ -1312,7 +1387,7 @@ class signature_emitter:
             registers={k: str(v) for k, v in self.phys.items()},
             code=self.control(blocks, cases),
             params={n: str(r) for n, r in self.params.items()},
-            entry=lines(save) + lines(load), exit=lines(restore) + lines(self.gen.ret()))
+            entry=entry, exit=leave)
 
     # --- control flow ---------------------------------------------------------
 
