@@ -173,32 +173,43 @@ class dm_location(Enum):
 @dataclass(frozen=True)
 class dm_repeat:
     """
-    A data movement step executed once per lane of the operand's vector, with
-    the lane number in a signature operand - e.g. NEON loading a strided vector
-    one lane at a time. The lane count must fit the operand's value constraint:
-    a lane immediate of 0..1 covers a 2-lane vector but not an 8-lane one.
+    A step repeated over a register's subtiles. levels, outermost first:
+    blocks by their size in bits (256, 128), then "lane" - every element of
+    the block above, or of the register - or "element" - every element of a
+    vector, as many as it has at run time: a loop. Each level's count is the
+    level above's size over its own.
 
-    Only fixed lane counts are supported: a vector-length agnostic count needs
-    a runtime loop, as do the planned tile-slice repeats for SME.
+    side: which operand takes the index at the last level, in data-flow terms
+    - "in" or "out": the one on that side carrying that level's modifier
+    (ILANE, IBLOCK); its name comes from the signature, whatever registers it
+    has.
 
-    :param lane_operand: signature operand taking the lane number
+    group: consecutive elements of the operand share one register, loaded
+    once (bc_lanes) - a subtiling of the operand's tile rather than of a
+    register's; it moves to the STO tiling with use_lane
     """
-    lane_operand : str | None = None
-    #: lanes within each 128-bit block, repeated per block: lane l of block b
-    #: is element b * block + l of the vector, loaded into lane l of a scratch
-    per_block : bool = False
-    #: once per block, the block number in this signature operand
-    block_operand : str | None = None
-    #: size of those blocks: 16 (128 bits) or 32 (256 bits, AVX-512)
-    block_bytes : int = 16
-    #: one element per lane: consecutive elements along the operand's
-    #: contiguous index share a register loaded once, each moved out of its
-    #: lane (bc_lanes)
+    levels : tuple = ()
+    side : str | None = None
     group : bool = False
-    #: once per element of the vector, a number known at run time only: a
-    #: loop (vector-length agnostic ISAs); the model emits it as lsc_repeat
-    vla : bool = False
 
+    @property
+    def vla(self) -> bool:
+        return "element" in self.levels
+
+
+def operand_side(sig, name: str, op: str) -> str:
+    """
+    A signature operand's side in data-flow terms: a load's data registers
+    are its outputs, a store's its inputs; otherwise the last data register is
+    the output, the others inputs
+    """
+    if "load" == op:
+        return "out"
+    if "store" == op:
+        return "in"
+    data = [n for n, o in sig.operands.items()
+            if "REGISTER" == o.otype.name and "DATA" == o.orole.name]
+    return "out" if data and name == data[-1] else "in"
 
 @dataclass(frozen=True)
 class tfr_key:

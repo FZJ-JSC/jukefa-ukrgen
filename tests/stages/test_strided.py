@@ -87,7 +87,7 @@ class test_strided(unittest.TestCase):
     def test_lane_count_must_fit(self):
         step = dm_step(op="load", dest=orig_ref(), dest_rtype=rgt.VEC,
                        opd_mod_reqs={orig_ref(): {omod.ILANE}},
-                       repeat=dm_repeat(lane_operand="adreg_lane"))
+                       repeat=dm_repeat(levels=("lane",), side="out"))
         def fits(isa, dt):
             gen = make_generator(isa)
             return any(repeat_fits(gen, s, step, dt) for s in gen.load.get_signatures()

@@ -25,6 +25,7 @@ from asmgen.registers import (
     adt_is_int
 )
 from .data_move import (
+    operand_side,
     dm_step,
     dm_direction as dmd,
     resolution_registry,
@@ -138,27 +139,37 @@ def repeat_fits(gen : asmgen, sig, step : dm_step, dt : adt) -> bool:
         # the lane count is only known at run time: needs a loop
         return False
     rep = step.repeat
-    block_lanes = 16 // adt_size(dt)
-    if rep.per_block:
-        # lanes of one 128-bit block
-        name, lanes = rep.lane_operand, block_lanes
-    elif rep.block_operand is not None:
-        # every block of block_bytes, the move's block size the same
-        if gen.simd_size // rep.block_bytes < 2:
-            return False
-        name, lanes = rep.block_operand, gen.simd_size // rep.block_bytes
-        size = sig.structural_params.get(name.replace("_block", "_blocksize"))
-        if size is not None and size != rep.block_bytes // adt_size(dt):
-            return False
-    else:
-        name, lanes = rep.lane_operand, gen.simd_size // adt_size(dt)
-    shape = sig.operands.get(name)
-    if shape is None:
+    if not rep.levels:
+        return True
+    # the count at the last level, the index the operand on the step's side
+    # carrying that level's modifier takes - every value of it encodable
+    size, parent, count = adt_size(dt), gen.simd_size * 8, 1
+    for level in rep.levels:
+        if "lane" == level:
+            count = parent // (8 * size)
+        else:
+            count, parent = parent // level, level
+    last = rep.levels[-1]
+    modifier, suffix = ("ILANE", "_lane") if "lane" == last else ("IBLOCK", "_block")
+    bases = [n for n, o in sig.operands.items()
+             if modifier in {m.name for m in (o.modifiers or set())}
+             and (rep.side is None or rep.side == operand_side(sig, n, step.op))]
+    if not bases:
         return False
-    for cons in shape.value_constraints:
-        maxval = getattr(cons, "maxval", None)
-        if maxval is not None and maxval < lanes - 1:
+    for base in bases:
+        if "lane" != last:
+            if count < 2:
+                return False
+            blocksize = sig.structural_params.get(base + "_blocksize")
+            if blocksize is not None and blocksize != last // (8 * size):
+                return False
+        shape = sig.operands.get(base + suffix)
+        if shape is None:
             return False
+        for cons in shape.value_constraints:
+            maxval = getattr(cons, "maxval", None)
+            if maxval is not None and maxval < count - 1:
+                return False
     return True
 
 

@@ -135,7 +135,7 @@ class scalar_reduce_provider(resolution_provider):
                                 temp_ref(tag="0") : {omod.ILANE},
                                 orig_ref(): {omod.BCAST}
                                 },
-                            repeat=dm_repeat(lane_operand="adreg_lane", group=True))
+                            repeat=dm_repeat(levels=("lane",), side="in", group=True))
                     ]))
 
         # example SVE, an FMA using one element of each 128-bit block:

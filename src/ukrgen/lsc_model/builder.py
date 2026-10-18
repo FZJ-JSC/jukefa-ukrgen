@@ -303,8 +303,7 @@ class program_builder:
         if any(r is not None and r.group for r in repeats):
             return self.move_lane_group(sto, tiling, comp, coord, reg, steps, direction, tag,
                                         memory, dt)
-        if any(r is not None and (r.vla or r.lane_operand or r.per_block or r.block_operand)
-               for r in repeats):
+        if any(r is not None and r.levels for r in repeats):
             return self.move_nest(sto, tiling, comp, coord, reg, steps, direction, tag,
                                   memory, dt)
         ops: list[lsc_operation] = []
@@ -492,26 +491,25 @@ class program_builder:
         ops.append(op)
         return ops
 
-    def subtile_path(self, step, dt, top: int) -> list[tuple[str, int, int]]:
+    def subtile_path(self, step, dt) -> list[tuple]:
         """
         The subtile levels a step repeats over, outermost first, each (level,
-        count, elements a subtile has): chunks of top bytes (AVX-512's 256-bit
-        halves), 128-bit blocks, lanes. A step ends at the level its repeat
-        names: lanes within each block, every block of block_bytes, every lane
-        of the register
+        count, elements a subtile has): blocks by their size in bits, each
+        level's count the level above's size over its own; lanes every element
+        of the level above; elements as many as the vector has at run time
+        (count None: a loop)
         """
-        size, simd = adt_size(dt), self.gen.simd_size
-        rep = step.repeat
-        if rep.vla:
-            # every element, as many as the vector has at run time: a loop
-            return [("element", None, 1)]
-        if not (rep.per_block or rep.block_operand):
-            return [("lane", simd // size, 1)]
-        levels = [("chunk", simd // top, top // size)] if top > 16 else []
-        levels.append(("block", (top if top > 16 else simd) // 16, 16 // size))
-        if rep.per_block:
-            return levels + [("lane", 16 // size, 1)]
-        return levels if 16 == rep.block_bytes else levels[:1]
+        size, parent = adt_size(dt), self.gen.simd_size * 8
+        path = []
+        for level in step.repeat.levels:
+            if "element" == level:
+                path.append(("element", None, 1))
+            elif "lane" == level:
+                path.append(("lane", parent // (8 * size), 1))
+            else:
+                path.append((level, parent // level, level // (8 * size)))
+                parent = level
+        return path
 
     def move_nest(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
         """
@@ -523,10 +521,7 @@ class program_builder:
         then its 128-bit insert, then the chunk's 256-bit insert; a block store
         per block its extract, then its lanes' stores; lanes per lane
         """
-        sizes = {rs.step.repeat.block_bytes for rs in steps
-                 if rs.step.repeat is not None and rs.step.repeat.block_operand}
-        top = max(sizes | {16})
-        items = [(rs, self.subtile_path(rs.step, dt, top)) for rs in steps]
+        items = [(rs, self.subtile_path(rs.step, dt)) for rs in steps]
         vidx = self.vector_index(tiling, comp)
 
         def emit(rs, path, idxs):
@@ -546,14 +541,18 @@ class program_builder:
                          sigs=sigs, offset=addr.offset, rtypes=[None, data.rtype])
                 op.add_property("lane", idxs[-1])
                 op.add_property("stride_index", vidx)
+                if step.repeat.side:
+                    op.add_property("side", step.repeat.side)
                 return [op]
             src = self.ref_reg(step.src[0], step.src_rtypes[0], reg)
             dest = self.ref_reg(step.dest, step.dest_rtype, reg)
             op = lsc_move(_index(src), _index(dest),
                           [self.reg_tile(tiling, src), self.reg_tile(tiling, dest)],
                           rsln=tag, step=step, sigs=sigs, rtypes=[src.rtype, dest.rtype])
-            # a block's number within its chunk, a chunk's among the register's
+            # a block's number within the level above
             op.add_property("block", idxs[-1])
+            if step.repeat.side:
+                op.add_property("side", step.repeat.side)
             return [op]
 
         def nest(run, depth, idxs):

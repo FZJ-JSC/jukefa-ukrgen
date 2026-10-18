@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from asmgen.callconv.fngen import fngen
+from ..support.data_move import operand_side
 from ..support.tiles import widening_ways
 from asmgen.asmblocks.noarch import comparison
 from asmgen.asmblocks.op import (
@@ -1008,8 +1009,10 @@ class signature_emitter:
             prefix = []
             if not self._predicate(sig, kwargs, prefix, dt):
                 continue
+            side = op.properties.get("side")
             for name, shape in sig.operands.items():
-                if ot.IMMEDIATE == shape.otype and name.endswith("_lane"):
+                if ot.IMMEDIATE == shape.otype and name.endswith("_lane") and \
+                        (side is None or side == operand_side(sig, name[:-5], op.step.op)):
                     kwargs[name] = lane
             kwargs.update(sig.structural_params)
             try:
@@ -1117,10 +1120,13 @@ class signature_emitter:
             masks = {}
             if not self._predicate(sig, masks):
                 continue
+            # the lane or block index for the operand on the step's side
+            side = op.properties.get("side")
+            on_side = lambda base: side is None or side == operand_side(sig, base, "move")
             blocks = {n: op.properties.get("block") for n in sig.operands
-                      if n.endswith("_block") and "block" in op.properties}
+                      if n.endswith("_block") and "block" in op.properties and on_side(n[:-6])}
             blocks.update({n: op.properties["lane"] for n in sig.operands
-                           if n.endswith("_lane") and "lane" in op.properties})
+                           if n.endswith("_lane") and "lane" in op.properties and on_side(n[:-5])})
             # a shift by a fixed amount (a fill loop's): the one the signature
             # takes, or the one recorded (a drain loop's)
             for n, shape in sig.operands.items():
