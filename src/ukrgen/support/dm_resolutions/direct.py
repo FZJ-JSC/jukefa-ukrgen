@@ -18,6 +18,7 @@ from ..data_move import (
     dm_step,
     orig_ref,
     temp_ref,
+    dm_repeat,
     resolution_provider
 )
 
@@ -60,6 +61,25 @@ class direct_provider(resolution_provider):
                                 forbidden_op_mods=STRIDED_FORMS)
                         ]))
             
+            if rgt.TILE == rtype:
+                # a tile moves slice by slice (SME): a row or a column per
+                # iteration, as many as the tile has at run time - its slices
+                # contiguous in memory, the loop walking the other index
+                for tag, mod in (("slices_col", omod.COL), ("slices_row", omod.ROW)):
+                    registry.add_resolution(
+                        key=tfr_key(tfs=frozenset(), rtype=rtype, ddir=dmd.IN),
+                        rsln=tr(unique_tag=tag, steps=[
+                            dm_step(op="load", dest=orig_ref(), dest_rtype=rtype,
+                                    opd_mod_reqs={orig_ref(): {mod}},
+                                    forbidden_op_mods=STRIDED_FORMS,
+                                    repeat=dm_repeat(levels=("slice",), side="out"))]))
+                    registry.add_resolution(
+                        key=tfr_key(tfs=frozenset(), rtype=rtype, ddir=dmd.OUT),
+                        rsln=tr(unique_tag=tag, steps=[
+                            dm_step(op="store", src=[orig_ref()], src_rtypes=[rtype],
+                                    opd_mod_reqs={orig_ref(): {mod}},
+                                    forbidden_op_mods=STRIDED_FORMS,
+                                    repeat=dm_repeat(levels=("slice",), side="in"))]))
             # Exactly the same, but with tf.NONE instead of an empty set
 
             # Direct load

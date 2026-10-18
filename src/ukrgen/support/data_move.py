@@ -194,7 +194,11 @@ class dm_repeat:
 
     @property
     def vla(self) -> bool:
-        return "element" in self.levels
+        """
+        Whether a level's count is known at run time only: every element of a
+        vector, every slice of a tile
+        """
+        return bool({"element", "slice"} & set(self.levels))
 
 
 def operand_side(sig, name: str, op: str) -> str:

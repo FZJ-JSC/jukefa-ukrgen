@@ -521,8 +521,8 @@ class program_builder:
         size, parent = adt_size(dt), self.gen.simd_size * 8
         path = []
         for level in step.repeat.levels:
-            if "element" == level:
-                path.append(("element", None, 1))
+            if level in ("element", "slice"):
+                path.append((level, None, 1))
             elif "lane" == level:
                 path.append(("lane", parent // (8 * size), 1))
             else:
@@ -585,6 +585,9 @@ class program_builder:
                 j = i
                 while j < len(run) and len(run[j][1]) > depth:
                     j += 1
+                if "slice" == run[i][1][depth][0]:
+                    raise model_error(f"{tag}: loops over {comp}'s tile slices are not "
+                                      f"emitted yet")
                 if run[i][1][depth][1] is None:
                     # a count known at run time only: the run's steps for one
                     # element, in a loop over them (lsc_loop)

@@ -131,6 +131,9 @@ def repeat_fits(gen : asmgen, sig, step : dm_step, dt : adt) -> bool:
     """
     if step.repeat is None:
         return True
+    if "slice" in step.repeat.levels:
+        # a loop over a tile's slices: the slice index a register operand
+        return bool(gen.is_vla) and any(n.endswith(("_rowreg", "_colreg")) for n in sig.operands)
     if step.repeat.vla:
         # a loop over the elements: where their number is known at run time
         # only (a fill shifting up - SVE insr - walks memory backwards)
