@@ -29,6 +29,7 @@ from ..support.sig_group import group_sigs
 from .addressing import sym, offset_db, layout_strides, addr_pattern
 from ..components.tile import scalar_tile
 from ..models.load_store_operations import (
+    lsc_repeat,
     lsc_operation, lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, ldst_modifier)
 from ..models.lsc.index import lsc_reg_index
 from .ir import vreg, addr_ref, ir_block, ir_case, ir_program
@@ -284,6 +285,8 @@ class program_builder:
         dt = self.ctx.component_dts[memory]
         self.vidx.setdefault(memory, self.vector_index(tiling, comp))
         repeats = [getattr(rs.step, "repeat", None) for rs in steps]
+        if any(r is not None and r.vla for r in repeats):
+            return self.move_vla(sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt)
         if any(r is not None and r.group for r in repeats):
             return self.move_lane_group(sto, tiling, comp, coord, reg, steps, direction, tag,
                                         memory, dt)
@@ -342,6 +345,38 @@ class program_builder:
                         op.add_property("lane", 0 if lane is None else lane)
                     ops.append(op)
         return ops
+
+    def move_vla(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
+        """
+        A vector filled element by element in a loop whose count is the number
+        of its elements at run time (vla_lanes): one lsc_repeat, its body one
+        element's steps, its address the vector's first element
+        """
+        if "load" != steps[0].step.op:
+            raise model_error(f"{tag}: storing element by element is not modelled yet")
+        load, fill = steps[0], steps[1]
+        elements = self.elements(tiling, comp, coord)
+        addr = self.address(sto, memory, direction, coord, elements)
+        scalar = self.ref_reg(load.step.dest, load.step.dest_rtype, reg)
+        vector = self.ref_reg(fill.step.dest, fill.step.dest_rtype, reg)
+        load_sigs = getattr(load, "sg", None) or self.step_sigs(load.step, dt)
+        fill_sigs = getattr(fill, "sg", None) or self.step_sigs(fill.step, dt)
+        body = [lsc_load(memory, scalar.index, addr.reg, None, None,
+                         self.reg_tile(tiling, scalar), set(), data=_index(scalar), rsln=tag,
+                         step=load.step, sigs=load_sigs, offset=addr.offset,
+                         rtypes=[None, scalar.rtype]),
+                lsc_move(_index(scalar), _index(vector),
+                         [self.reg_tile(tiling, scalar), self.reg_tile(tiling, vector)],
+                         rsln=tag, step=fill.step, sigs=fill_sigs,
+                         rtypes=[scalar.rtype, vector.rtype])]
+        vidx = self.vector_index(tiling, comp)
+        return [lsc_repeat(memory, vector.index, addr.reg, self.reg_tile(tiling, vector),
+                           body=body, divisor=16 // adt_size(dt),
+                           fill={"component": memory, "index": vidx,
+                                 "stride": self.strides.get(memory, {}).get(vidx),
+                                 "direction": "load"},
+                           data=_index(vector), rsln=tag, step=load.step, sigs=load_sigs,
+                           offset=addr.offset, rtypes=[None, vector.rtype])]
 
     def move_lane_group(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
         """

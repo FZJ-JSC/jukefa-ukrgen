@@ -130,6 +130,14 @@ def repeat_fits(gen : asmgen, sig, step : dm_step, dt : adt) -> bool:
     """
     if step.repeat is None:
         return True
+    if step.repeat.vla:
+        # a loop over the elements: where their number is known at run time
+        # only. A fill shifting up (SVE insr, into lane 0) would walk memory
+        # backwards from the last element: not emitted yet
+        irot = sig.operands.get("bdreg_irot")
+        if irot is not None and any(getattr(c, "minval", 0) > 0 for c in irot.value_constraints):
+            return False
+        return bool(gen.is_vla)
     if gen.is_vla:
         # the lane count is only known at run time: needs a loop
         return False

@@ -35,7 +35,7 @@ from ..lsc_model.addressing import sym
 from ..lsc_model.ir import ir_program, ir_block
 from ..components.tile import scalar_tile
 from ..models.load_store_operations import (
-    lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute)
+    lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_repeat)
 from ..models.lsc.index import lsc_reg_index
 
 
@@ -648,6 +648,37 @@ class signature_emitter:
 
     # --- operations ----------------------------------------------------------
 
+    def repeat(self, op) -> list[str]:
+        """
+        A loop over a vector's elements, as many as it has of its type at run
+        time: a walking pointer from the first element, one element's steps,
+        the pointer moved by the element stride
+        """
+        comp, reg = op.indices[0].component, op.indices[0].indices[0]
+        dt = self.ctx.component_dts[comp]
+        elements = self.program.offsets.elements_offset(op.offset, self.program.strides.get(comp, {}))
+        start = elements - self.positions[(comp, reg)]
+        walker, counter = self.greg(), self.greg()
+        lines = [self.gen.mov_greg(src=self.aregs[(comp, reg)], dst=walker)]
+        lines += self.add_bytes(walker, self.bytes_of(comp, start), comp)
+        lines.append(self.gen.mov_greg(src=self.vl_elements(dt), dst=counter))
+        loop = f"ukr{next(self.labels)}_elements"
+        lines.append(self.gen.label(label=loop))
+        load, fill = op.body
+        line = self._mem(load, self.reg(load.indices[1], load.rtypes[1]), walker, 0)
+        if line is None:
+            raise specialization_error(f"{op.rsln}: no load of one {comp} element takes "
+                                       "a plain address")
+        lines.append(line)
+        lines.append(self.move(fill))
+        lines += self.add_bytes(walker, self.bytes_of(comp, op.fill["stride"]), comp)
+        lines.append(self.gen.add_greg_imm(reg=counter, imm=-1))
+        lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
+        for r in (walker, counter):
+            self.rt.unuse_reg("greg", r.idx)
+        return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
+                if l.strip()]
+
     def memory(self, op) -> list[str]:
         """
         A load or store through the signature taking its offset from its address
@@ -968,6 +999,8 @@ class signature_emitter:
         return [l.strip() for chunk in self._emit_op(op) for l in chunk.splitlines() if l.strip()]
 
     def _emit_op(self, op) -> list[str]:
+        if isinstance(op, lsc_repeat):
+            return self.repeat(op)
         if isinstance(op, (lsc_load, lsc_store)):
             return self.memory(op)
         if isinstance(op, lsc_transformation):
@@ -997,6 +1030,12 @@ class signature_emitter:
                       if n.endswith("_block") and "block" in op.properties}
             blocks.update({n: op.properties["lane"] for n in sig.operands
                            if n.endswith("_lane") and "lane" in op.properties})
+            # a shift by a fixed amount (a fill loop's): the one the signature takes
+            for n, shape in sig.operands.items():
+                if n.endswith("_irot") and shape.value_constraints:
+                    c = shape.value_constraints[0]
+                    if getattr(c, "minval", None) is not None and c.minval == c.maxval:
+                        blocks[n] = c.minval
             try:
                 return self.gen.move(
                     dregs=[src, dst], dts=[dt, dt], modifiers=set(sig.modifiers),

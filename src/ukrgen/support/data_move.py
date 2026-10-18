@@ -195,6 +195,9 @@ class dm_repeat:
     #: contiguous index share a register loaded once, each moved out of its
     #: lane (bc_lanes)
     group : bool = False
+    #: once per element of the vector, a number known at run time only: a
+    #: loop (vector-length agnostic ISAs); the model emits it as lsc_repeat
+    vla : bool = False
 
 
 @dataclass(frozen=True)

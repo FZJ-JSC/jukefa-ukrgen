@@ -415,3 +415,27 @@ class lsc_transformation(lsc_operation):
         out += ", ".join(regstrs)
         out += ")"
         return out
+
+
+class lsc_repeat(lsc_load):
+    """
+    A loop over a vector's elements, as many as it has of its type at run
+    time (vector-length agnostic ISAs): one element's steps each time - a
+    scalar load and a fill move, filling the vector in place - walking memory
+    by the element stride. To the stages before emission it is a load of the
+    vector from its first element: its signatures are the scalar load's.
+
+    body: the steps for one element, in order
+    divisor: the element count is a multiple of it - the loop unrolls by any
+        of its divisors (16 bytes in elements: SVE's vector length is a
+        multiple of 128 bits, RVV's V extension has VLEN >= 128)
+    fill: what the loop does as data - component, index, element stride along
+        it, direction - for irmods turning it into a strided or contiguous
+        vector access where the ISA has one
+    """
+
+    def __init__(self, component, res_idx, addr_idx, t, *, body, divisor, fill, **kwargs):
+        super().__init__(component, res_idx, addr_idx, None, None, t, set(), **kwargs)
+        self.body = body
+        self.divisor = divisor
+        self.fill = fill

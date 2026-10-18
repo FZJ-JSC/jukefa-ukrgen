@@ -84,6 +84,18 @@ class strided_provider(resolution_provider):
                             src=[scratch], src_rtypes=[rgt.VEC],
                             opd_mod_reqs={orig_ref(): {omod.IBLOCK}},
                             repeat=dm_repeat(block_operand="bdreg_block"))]))
+                # a loop over the vector's elements where their number is
+                # known at run time only: each loaded into a scalar, filled
+                # into the vector shifting it in place (RVV vfslide1down)
+                if hasattr(omod, "FILLOTHERS"):
+                    scalar = temp_ref(tag="0")
+                    registry.add_resolution(key_in, tr(unique_tag="vla_lanes", steps=[
+                        dm_step(op="load", dest=scalar, dest_rtype=rgt.FP,
+                                repeat=dm_repeat(vla=True)),
+                        dm_step(op="move", dest=orig_ref(), dest_rtype=rgt.VEC,
+                                src=[scalar], src_rtypes=[rgt.FP],
+                                opd_mod_reqs={orig_ref(): {omod.ILANESHIFT, omod.FILLOTHERS}},
+                                repeat=dm_repeat(vla=True))]))
                 # AVX-512: 128-bit blocks into a 256-bit scratch, then 256-bit
                 # inserts - two on the destination instead of four, the halves
                 # built independently
