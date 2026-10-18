@@ -22,6 +22,7 @@ from asmgen.registers import adt_size
 
 from ..flow.stages.ukr.ukr import read_access, sto_kind, block_description
 from ..matching.math import get_operand_io
+from ..support.domains import operand_values
 from ..support.data_move import (
     dm_direction as dmd,
     orig_ref,
@@ -442,9 +443,8 @@ class program_builder:
                           [self.reg_tile(tiling, scalar), self.reg_tile(tiling, vector)],
                           rsln=tag, step=fill.step, sigs=fill_sigs,
                           rtypes=[scalar.rtype, vector.rtype])]
-        up = any(c.minval > 0 for s in _flat_sigs(fill_sigs)
-                 for n, o in s.operands.items() if n.endswith("_irot")
-                 for c in o.value_constraints if c.minval == c.maxval)
+        up = any((operand_values(s, n).single() or 0) > 0 for s in _flat_sigs(fill_sigs)
+                 for n in s.operands if n.endswith("_irot"))
         anchor = lsc_load(memory, vector.index, addr.reg, None, None,
                           self.reg_tile(tiling, vector), set(), data=_index(vector), rsln=tag,
                           step=load.step, sigs=load_sigs, offset=addr.offset,
@@ -468,8 +468,8 @@ class program_builder:
         shift_sigs = [s for s in self.gen.move.get_signatures()
                       if {"ILANESHIFT", "INVALIDOTHERS"} == {m.name for m in s.operands["adreg"].modifiers}
                       and dt == s.operands["adreg"].dt
-                      and any(getattr(c, "minval", 0) <= -1 <= getattr(c, "maxval", 0)
-                              for c in s.operands["adreg_irot"].value_constraints)]
+                      and "adreg_irot" in s.operands
+                      and -1 in operand_values(s, "adreg_irot")]
         if not shift_sigs:
             raise model_error(f"{tag}: no move shifts a {dt.name} vector down by a lane")
         first = lsc_move(_index(vector), _index(scalar),

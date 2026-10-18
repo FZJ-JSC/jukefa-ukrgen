@@ -67,6 +67,8 @@ class ldinc(lsc_irmod):
             if shape is None:
                 continue
             if not shape.value_constraints:
+                # unconstrained in asmgen: read conservatively as the
+                # transfer size, what every post-increment form takes
                 if increment == self.transfer_size(op):
                     return True
                 continue

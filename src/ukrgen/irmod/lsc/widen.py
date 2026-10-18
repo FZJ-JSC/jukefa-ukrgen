@@ -4,6 +4,7 @@ Widening: operations on narrow elements accumulating into wide ones
 
 import copy
 
+from ...support.domains import operand_values
 from asmgen.asmblocks.op import register_type as rgt
 from asmgen.registers import adt_size
 
@@ -122,9 +123,9 @@ class widen(lsc_irmod):
                 if shape is None:
                     unmet.add(f"{op.op}: its {method} signature takes no part")
                     continue
-                for cons in shape.value_constraints:
-                    if getattr(cons, "maxval", ways - 1) < ways - 1 or getattr(cons, "minval", 0) > 0:
-                        unmet.add(f"{op.op}: its signature doesn't take every part of {ways}")
+                parts = operand_values(sig, "part")
+                if not all(p in parts for p in range(ways)):
+                    unmet.add(f"{op.op}: its signature doesn't take every part of {ways}")
                 if "SPLIT_CONTIGUOUS" == method and ctx.gen.is_vla:
                     unmet.add(f"{op.op}: contiguous parts of a vector-length agnostic register")
             for comp, (ways, method) in wide_components(ctx, program).items():

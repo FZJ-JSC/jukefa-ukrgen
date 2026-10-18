@@ -19,7 +19,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from asmgen.asmblocks.op.constraint import ArgumentDependencyError
 from asmgen.callconv.fngen import fngen
+from ..support.domains import operand_values
 from ..support.data_move import operand_side
 from ..support.tiles import widening_ways
 from asmgen.asmblocks.noarch import comparison
@@ -186,7 +188,9 @@ def _accepts(sig, name: str, value) -> bool:
     for constraint in shape.value_constraints:
         try:
             constraint(name, set(sig.modifiers), value, {})
-        except ConstraintDoesNotApplyError:
+        except (ConstraintDoesNotApplyError, ArgumentDependencyError):
+            # doesn't apply, or depends on another operand: for when every
+            # operand is known
             continue
         except ValueError:
             return False
@@ -451,6 +455,8 @@ class signature_emitter:
         self.dts: dict[tuple, object] = self._register_types()
         self.numbers: dict[tuple, int] = {}
         self.bounds = self._register_bounds()
+        if hasattr(self.rt, "set_priority"):
+            self._required_priorities()
         # setup instructions found while emitting: vector length in bytes,
         # constant strides
         self.late_setup: list[str] = []
@@ -534,10 +540,10 @@ class signature_emitter:
                     number = self.rt.reserve_any_reg("vreg")
                 else:
                     used = self.rt.get_used_regs("vreg")
-                    free = [i for i in range(bound + 1) if i not in used]
+                    free = [i for i in bound if i not in used]
                     if not free:
                         raise specialization_error(
-                            f"no vector register up to {bound} left for {key[0]}{key[1]}")
+                            f"none of the vector registers {bound} left for {key[0]}{key[1]}")
                     number = free[0]
                     self.rt.reserve_specific_reg("vreg", number)
                 self.phys[key] = self.gen.vreg(number)
@@ -570,15 +576,15 @@ class signature_emitter:
             self.numbers[key] = (tag, number)
         return self.phys[key]
 
-    def _register_bounds(self) -> dict[tuple, int]:
+    def _register_bounds(self) -> dict[tuple, list[int]]:
         """
-        The highest vector register each virtual register may use, where an
-        operation's signature limits it - SVE's indexed fmla encodes its
-        indexed register in 4 bits for doubles. Found by asking the
-        signature's constraints, so whatever asmgen declares counts.
+        The vector registers each virtual register may use, where an
+        operation's signature limits them - SVE's indexed fmla encodes its
+        indexed register in 4 bits for doubles: the domain of the operand's
+        constraints over the register file, whatever asmgen declares
         """
-        bounds: dict[tuple, int] = {}
-        top = self.gen.max_vregs() - 1
+        bounds: dict[tuple, list[int]] = {}
+        file = range(self.gen.max_vregs())
         for op in self._all_ops():
             if not isinstance(op, lsc_transformation):
                 continue
@@ -591,12 +597,45 @@ class signature_emitter:
                 shape = sig.operands.get(hw)
                 if rgt.VEC != rtype or shape is None or not shape.value_constraints:
                     continue
-                highest = next((i for i in range(top, -1, -1)
-                                if _accepts(sig, hw, self.gen.vreg(i))), -1)
-                if highest < top:
+                try:
+                    allowed = operand_values(sig, hw, universe=file).values
+                except ArgumentDependencyError:
+                    continue
+                if len(allowed) < len(file):
                     key = (idx.component, idx.indices[0], rtype)
-                    bounds[key] = min(bounds.get(key, highest), highest)
+                    bounds[key] = sorted(set(bounds.get(key, allowed)) & set(allowed))
         return bounds
+
+    def _required_priorities(self):
+        """
+        Registers some instruction restricts an operand to - SME's slice index
+        registers, SVE's indexed registers - kept for it: their allocation
+        priority lowered, so general allocation takes others first
+        """
+        files = {rgt.GP: ("greg", self.gen.max_gregs()), rgt.VEC: ("vreg", self.gen.max_vregs()),
+                 rgt.MASK: ("mreg", self.gen.max_mregs())}
+        ops = list(self._all_ops())
+        while ops:
+            op = ops.pop()
+            if isinstance(op, lsc_loop):
+                ops += list(op.block) + [w.anchor for w in op.walks]
+                continue
+            groups = [getattr(getattr(op, "resolution", None), "compute_sg", None), getattr(op, "sigs", None)]
+            for sig in (s for g in groups if g for s in _sigs(g)):
+                for name, shape in sig.operands.items():
+                    if ot.REGISTER != shape.otype or shape.rtype not in files or \
+                            not shape.value_constraints:
+                        continue
+                    tag, count = files[shape.rtype]
+                    if tag not in getattr(self.rt, "registered_types", ()):
+                        continue
+                    try:
+                        allowed = operand_values(sig, name, universe=range(count)).values
+                    except ArgumentDependencyError:
+                        continue
+                    if len(allowed) < count:
+                        for n in allowed:
+                            self.rt.set_priority(tag, n, min(-1, self.rt.priority(tag, n)))
 
     def release(self, key):
         """
@@ -680,17 +719,15 @@ class signature_emitter:
         # the slice index register: one every signature's slice operand takes
         # (SME: w12-w15)
         access = op.block[0]
-        lo, hi = 0, self.gen.max_gregs() - 1
+        allowed = set(range(self.gen.max_gregs()))
         for sig in _sigs(access.sigs):
-            for name, shape in sig.operands.items():
+            for name in sig.operands:
                 if name.endswith(("_rowreg", "_colreg")):
-                    for c in shape.value_constraints:
-                        lo = max(lo, getattr(c, "minval", lo))
-                        hi = min(hi, getattr(c, "maxval", hi))
+                    allowed &= set(operand_values(sig, name, universe=sorted(allowed)).values)
         used = self.rt.get_used_regs("greg")
-        number = next((n for n in range(lo, hi + 1) if n not in used), None)
+        number = next((n for n in sorted(allowed) if n not in used), None)
         if number is None:
-            raise specialization_error(f"{comp}: the slice index registers, {lo} to {hi}, "
+            raise specialization_error(f"{comp}: the slice index registers, {sorted(allowed)}, "
                                        f"are all taken")
         self.rt.reserve_specific_reg("greg", number)
         index = self.gen.greg(number)
@@ -825,11 +862,11 @@ class signature_emitter:
         if "irot" in op.properties:
             return op.properties["irot"]
         for sig in _sigs(op.sigs):
-            for name, shape in sig.operands.items():
+            for name in sig.operands:
                 if name.endswith("_irot"):
-                    c = shape.value_constraints[0]
-                    if c.minval == c.maxval:
-                        return c.minval
+                    single = operand_values(sig, name).single()
+                    if single is not None:
+                        return single
         return 0
 
     def memory(self, op) -> list[str]:
@@ -1209,9 +1246,9 @@ class signature_emitter:
                 if n.endswith("_irot") and "irot" in op.properties:
                     blocks[n] = op.properties["irot"]
                 elif n.endswith("_irot") and shape.value_constraints:
-                    c = shape.value_constraints[0]
-                    if getattr(c, "minval", None) is not None and c.minval == c.maxval:
-                        blocks[n] = c.minval
+                    single = operand_values(sig, n).single()
+                    if single is not None:
+                        blocks[n] = single
             try:
                 return self.gen.move(
                     dregs=[src, dst], dts=[dt, dt], modifiers=set(sig.modifiers),
@@ -1303,7 +1340,7 @@ class signature_emitter:
         # the function's parameters where the calling convention puts them
         self.parameters()
         # registers an operation limits go first, from the bottom
-        for key in sorted(self.bounds, key=self.bounds.get):
+        for key in sorted(self.bounds, key=lambda k: len(self.bounds[k])):
             self.reg(lsc_reg_index(key[0], [key[1]]), key[2])
         setup = lines(isa.setup(rt=self.rt, dt=dt))
         self.isa_setup_lines = len(setup)

@@ -10,6 +10,7 @@ Solving data movement requirements of possible computational solutions.
 
 import itertools
 
+from .domains import operand_values
 from dataclasses import dataclass, field
 
 from asmgen.asmblocks.noarch import asmgen
@@ -166,13 +167,9 @@ def repeat_fits(gen : asmgen, sig, step : dm_step, dt : adt) -> bool:
             blocksize = sig.structural_params.get(base + "_blocksize")
             if blocksize is not None and blocksize != last // (8 * size):
                 return False
-        shape = sig.operands.get(base + suffix)
-        if shape is None:
+        values = operand_values(sig, base + suffix)
+        if values is None or not all(i in values for i in range(count)):
             return False
-        for cons in shape.value_constraints:
-            maxval = getattr(cons, "maxval", None)
-            if maxval is not None and maxval < count - 1:
-                return False
     return True
 
 

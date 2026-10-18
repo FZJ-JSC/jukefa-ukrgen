@@ -88,3 +88,20 @@ class test_sme_run(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class test_required_registers(unittest.TestCase):
+    """
+    Registers an instruction restricts an operand to are kept for it: SME's
+    slice index registers (w12-w15, from the slice operands' constraints)
+    aren't taken by general allocation
+    """
+
+    def test_slice_registers_kept(self):
+        ctx, res = run()
+        code = ctx.emitted[0].instructions()
+        words = {w for l in code for w in l.replace(",", " ").replace("[", " ").replace("]", " ").split()}
+        general = {int(w[1:]) for w in words if w[:1] == "x" and w[1:].isdigit()}
+        slices = {int(l.split("[w")[1].split(",")[0]) for l in code if "za" in l and "[w" in l}
+        self.assertTrue(slices <= set(range(12, 16)))
+        self.assertFalse((general - slices) & set(range(12, 16)), sorted(general))
