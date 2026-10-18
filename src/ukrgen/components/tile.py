@@ -7,7 +7,8 @@
 # annotation for self type
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from fractions import Fraction
 from copy import deepcopy
 
 from enum import Enum,auto
@@ -24,10 +25,57 @@ class dimension_type(Enum):
 
 @dataclass(frozen=True)
 class dimension_properties:
+    """
+    An extent: size elements (fixed), or size vectors of the type (vla) - a
+    Fraction where a count divides a vector: dimp(vla, 1/4) is VL/4.
+
+    Dividing extents gives counts: how many times one fits into another,
+    itself a dimension - vla where it is known at run time only (a loop),
+    fixed otherwise (unrolled)
+    """
     dt      : dimension_type
-    size    : int
+    size    : int | Fraction
     sdt     : dimension_type
-    sd_size : int
+    sd_size : int | Fraction
+
+    def __truediv__(self, other: "dimension_properties") -> "dimension_properties":
+        """
+        How many times other fits into self: vla by fixed is a run-time count
+        (1v / 4: VL/4 times), fixed by fixed and vla by vla fixed ones; a vla
+        extent never fits a fixed one
+        """
+        def quotient(a, ad, b, bd):
+            if dimension_type.fixed == ad and dimension_type.vla == bd:
+                raise ValueError(f"a vector-length agnostic extent doesn't fit {self}")
+            kind = dimension_type.vla if ad != bd else dimension_type.fixed
+            q = Fraction(a) / Fraction(b)
+            return kind, (int(q) if 1 == q.denominator else q)
+        dt, size = quotient(self.size, self.dt, other.size, other.dt)
+        sdt, sd_size = quotient(self.sd_size, self.sdt, other.sd_size, other.sdt)
+        return dimension_properties(dt=dt, size=size, sdt=sdt, sd_size=sd_size)
+
+    @property
+    def runtime(self) -> bool:
+        """
+        Whether this count is known at run time only: a loop, not an unroll
+        """
+        return dimension_type.vla == self.dt
+
+    def count_unrolls(self, granule_elements: int) -> list[int]:
+        """
+        The unroll factors keeping a run-time count of this many vectors'
+        elements whole, a vector holding a multiple of granule_elements (16
+        bytes in elements: SVE's vector length is a multiple of 128 bits,
+        RVV's V extension has VLEN >= 128); every divisor of a fixed count
+        """
+        if not self.runtime:
+            n = int(self.size)
+            return [f for f in range(1, n + 1) if 0 == n % f]
+        per = Fraction(self.size) * granule_elements
+        if 1 != per.denominator:
+            return []
+        n = per.numerator
+        return [f for f in range(1, n + 1) if 0 == n % f]
 
 
     def __str__(self):
@@ -67,6 +115,26 @@ def determine_dreg_tag(dima : dimension_properties, dimb : dimension_properties)
 
     return dreg_tag
 
+@dataclass(frozen=True)
+class subtiling:
+    """
+    A tile's operation decomposed into operations on subtiles - lanes, blocks,
+    elements, slices, members of a group: how many (count, a dimension: fixed
+    unrolls, vla loops), which way (order: +1 forwards, -1 from the last),
+    how many an iteration of a loop takes (unroll, keeping the count whole),
+    and how many registers a subtile's temporaries rotate through
+    """
+    shape : "tile"
+    count : dimension_properties
+    order : int = 1
+    unroll : int = 1
+    registers : int = 1
+
+    @property
+    def loop(self) -> bool:
+        return self.count.runtime
+
+
 class tile:
     def __init__(self, 
                  dima : dimension_properties, # m for c, m for a, k for b
@@ -88,6 +156,9 @@ class tile:
         self.subtile_count_a = subtile_count_a
         self.subtile_count_b = subtile_count_b
         self.bands = bands
+        #: how an operation on this tile decomposes into its subtiles' (None:
+        #: it doesn't)
+        self.nested : subtiling | None = None
 
     def check_zero(self, idx : tuple[int,int]) -> bool:
 
@@ -158,6 +229,14 @@ class tile:
     @property
     def is_tile(self) -> bool:
         return self.is_vla_tile or self.is_fixed_tile
+
+    def count_in(self, other : "tile") -> tuple[dimension_properties, dimension_properties]:
+        """
+        How many times this tile fits into other along each dimension, as
+        dimensions: dimp(vla, 1/4) where a 4-element tile fits a vector VL/4
+        times - the counts of a subtiling of other into this
+        """
+        return (other.dima / self.dima, other.dimb / self.dimb)
 
     def tiling_of(self, other : tile) -> tuple[int|float,int|float]:
         """
