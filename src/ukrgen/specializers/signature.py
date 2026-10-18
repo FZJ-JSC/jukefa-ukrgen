@@ -1457,7 +1457,7 @@ class signature_emitter:
         self.cc = self.gen.create_callconv()
         # the callee's registers last: no save and restore unless needed
         if hasattr(self.cc, "deprioritize_callee_saved"):
-            self.cc.deprioritize_callee_saved(self.rt, self.gen)
+            self.cc.deprioritize_callee_saved(self.rt)
         for name in names:
             self.cc.add_param("greg", name)
         self.fn = fngen(gen=self.gen, rt=self.rt)
