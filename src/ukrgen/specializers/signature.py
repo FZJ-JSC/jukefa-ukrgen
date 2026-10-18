@@ -1013,9 +1013,11 @@ class signature_emitter:
             # zeroing the accumulators goes before anything a loop may skip:
             # with no full iterations only the tail runs
             prologue = list(block.prologue)
-            out.sections["init"] = [line for op in prologue if isinstance(op, lsc_zero)
+            # (and loads the hoist irmod moved out of the loop)
+            first = lambda op: isinstance(op, lsc_zero) or op.properties.get("hoisted")
+            out.sections["init"] = [line for op in prologue if first(op)
                                     for line in self.emit_op(op)]
-            out.sections["prologue"] = [line for op in prologue if not isinstance(op, lsc_zero)
+            out.sections["prologue"] = [line for op in prologue if not first(op)
                                         for line in self.emit_op(op)]
             for section in ("body", "epilogue", "tail", "subtail"):
                 out.sections[section] = [line for op in getattr(block, section)

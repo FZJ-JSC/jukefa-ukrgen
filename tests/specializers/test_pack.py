@@ -12,6 +12,7 @@ import unittest
 
 import specializers.test_signature as t
 from specializers.test_native import cpu_has
+from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PARAMS = {"ukr": "pack", "X-data-type": "FP64", "Y-data-type": "FP64",
@@ -21,10 +22,21 @@ PARAMS = {"ukr": "pack", "X-data-type": "FP64", "Y-data-type": "FP64",
           "kappa-data-regs": "1"}
 
 
+def pack(isa, **extra):
+    # with the irmods before specialization, as the command line runs it
+    stages = list(t.STAGES)
+    i = [x.__name__ for x in stages].index("model_stage") + 1
+    saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
+    try:
+        return t.mm(isa=isa, **PARAMS, **extra)
+    finally:
+        t.STAGES = saved
+
+
 class test_pack(unittest.TestCase):
 
     def run_pack(self, isa, cc=("gcc",), run=(), **extra):
-        ctx, res = t.mm(isa=isa, **PARAMS, **extra)
+        ctx, res = pack(isa, **extra)
         self.assertTrue(res.completed, res.output)
         p = ctx.emitted[0]
         self.assertEqual(["n", "base(X)", "base(Y)", "base(kappa)", "stride(X,n)"], list(p.params))
@@ -39,6 +51,14 @@ class test_pack(unittest.TestCase):
         self.assertEqual(0, r.returncode, r.stdout + r.stderr)
         self.assertIn(", 0 wrong", r.stdout)
         return r.stdout
+
+    def test_kappa_hoisted(self):
+        # kappa's broadcast once, before the check skipping the loop (hoist)
+        ctx, res = pack("neon")
+        code = ctx.emitted[0].code
+        loads = [i for i, l in enumerate(code) if l.startswith("ld1r")]
+        self.assertEqual(1, len(loads))
+        self.assertLess(loads[0], next(i for i, l in enumerate(code) if l.startswith("cbz")))
 
     @unittest.skipUnless(shutil.which("gcc") and cpu_has("avx2"), "needs gcc and AVX2")
     def test_avx2(self):

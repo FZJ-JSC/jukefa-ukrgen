@@ -12,8 +12,9 @@ from .base import lsc_irmod, irmod_param, irmod_placement
 from .lanefuse import lanefuse
 from .ldinc import ldinc
 from .widen import widen
+from .hoist import hoist
 
-IRMODS : list[type[lsc_irmod]] = [widen, lanefuse, ldinc]
+IRMODS : list[type[lsc_irmod]] = [widen, hoist, lanefuse, ldinc]
 
 
 def irmods_at(placement: irmod_placement) -> list[type[lsc_irmod]]:

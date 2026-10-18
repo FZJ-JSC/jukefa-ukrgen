@@ -121,7 +121,7 @@ class test_irmod_metadata(unittest.TestCase):
 
     def test_placement(self):
         from ukrgen.irmod.lsc import irmods_at, irmod_placement
-        self.assertEqual(["widen", "lanefuse"], [m.name for m in irmods_at(irmod_placement.PRE_SPECIALIZE)])
+        self.assertEqual(["widen", "hoist", "lanefuse"], [m.name for m in irmods_at(irmod_placement.PRE_SPECIALIZE)])
         self.assertEqual(["ldinc"], [m.name for m in irmods_at(irmod_placement.POST_SPECIALIZE)])
 
     def test_required_and_tunable(self):
