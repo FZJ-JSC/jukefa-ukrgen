@@ -305,9 +305,10 @@ class program_builder:
         if any(r is not None and r.group for r in repeats):
             return self.move_lane_group(sto, tiling, comp, coord, reg, steps, direction, tag,
                                         memory, dt)
-        if any(r is not None and (r.per_block or r.block_operand) for r in repeats):
-            return self.move_blocks(sto, tiling, comp, coord, reg, steps, direction, tag,
-                                    memory, dt)
+        if any(r is not None and (r.lane_operand or r.per_block or r.block_operand)
+               for r in repeats):
+            return self.move_nest(sto, tiling, comp, coord, reg, steps, direction, tag,
+                                  memory, dt)
         ops: list[lsc_operation] = []
         for rs in steps:
             step = rs.step
@@ -493,67 +494,83 @@ class program_builder:
         ops.append(op)
         return ops
 
-    def move_blocks(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
+    def subtile_path(self, step, dt, top: int) -> list[tuple[str, int, int]]:
         """
-        A vector moved block by block. Per 128-bit block: its lanes loaded into
-        a scratch in increasing order, or stored from one, and the moves of
-        128-bit blocks; per chunk of the largest block size (256 bits on
-        AVX-512), the moves of those chunks
+        The subtile levels a step repeats over, outermost first, each (level,
+        count, elements a subtile has): chunks of top bytes (AVX-512's 256-bit
+        halves), 128-bit blocks, lanes. A step ends at the level its repeat
+        names: lanes within each block, every block of block_bytes, every lane
+        of the register
         """
-        ops: list[lsc_operation] = []
-        block_lanes = 16 // adt_size(dt)
-        vidx = self.vector_index(tiling, comp)
+        size, simd = adt_size(dt), self.gen.simd_size
+        rep = step.repeat
+        if not (rep.per_block or rep.block_operand):
+            return [("lane", simd // size, 1)]
+        levels = [("chunk", simd // top, top // size)] if top > 16 else []
+        levels.append(("block", (top if top > 16 else simd) // 16, 16 // size))
+        if rep.per_block:
+            return levels + [("lane", 16 // size, 1)]
+        return levels if 16 == rep.block_bytes else levels[:1]
+
+    def move_nest(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
+        """
+        A step chain repeating over a register's subtiles - lanes, blocks,
+        chunks - as a loop nest: within a subtile the steps in their order, a
+        run of consecutive steps going a level deeper iterating that level
+        once together. block_lanes_256 so loads per chunk, per block its lanes
+        then its 128-bit insert, then the chunk's 256-bit insert; a block store
+        per block its extract, then its lanes' stores; lanes per lane
+        """
         sizes = {rs.step.repeat.block_bytes for rs in steps
                  if rs.step.repeat is not None and rs.step.repeat.block_operand}
         top = max(sizes | {16})
-        per_chunk = top // 16
-        inner = [rs for rs in steps if rs.step.repeat is None or rs.step.repeat.per_block
-                 or 16 == rs.step.repeat.block_bytes]
-        outer = [rs for rs in steps if not any(rs is r for r in inner)]
+        items = [(rs, self.subtile_path(rs.step, dt, top)) for rs in steps]
+        vidx = self.vector_index(tiling, comp)
 
-        def move(rs, index):
+        def emit(rs, path, idxs):
             step = rs.step
             sigs = getattr(rs, "sg", None) or self.step_sigs(step, dt)
+            if "lane" == path[-1][0]:
+                position = sum(i * level[2] for i, level in zip(idxs, path))
+                elements = self.elements(tiling, comp, coord)
+                elements[vidx] = elements.get(vidx, sym()) + position
+                addr = self.address(sto, memory, direction, coord, elements)
+                if "load" == step.op:
+                    data, cls = self.ref_reg(step.dest, step.dest_rtype, reg), lsc_load
+                else:
+                    data, cls = self.ref_reg(step.src[0], step.src_rtypes[0], reg), lsc_store
+                op = cls(memory, data.index, addr.reg, None, None, self.reg_tile(tiling, data),
+                         {ldst_modifier.lane}, data=_index(data, idxs[-1]), rsln=tag, step=step,
+                         sigs=sigs, offset=addr.offset, rtypes=[None, data.rtype])
+                op.add_property("lane", idxs[-1])
+                op.add_property("stride_index", vidx)
+                return [op]
             src = self.ref_reg(step.src[0], step.src_rtypes[0], reg)
             dest = self.ref_reg(step.dest, step.dest_rtype, reg)
             op = lsc_move(_index(src), _index(dest),
                           [self.reg_tile(tiling, src), self.reg_tile(tiling, dest)],
                           rsln=tag, step=step, sigs=sigs, rtypes=[src.rtype, dest.rtype])
-            op.add_property("block", index)
-            ops.append(op)
+            # a block's number within its chunk, a chunk's among the register's
+            op.add_property("block", idxs[-1])
+            return [op]
 
-        for chunk in range(self.gen.simd_size // top):
-            for sub in range(per_chunk):
-                block = chunk * per_chunk + sub
-                for rs in inner:
-                    step = rs.step
-                    if step.repeat is None or not step.repeat.per_block:
-                        # a 128-bit block: within its chunk where chunks are larger
-                        move(rs, sub if top > 16 else block)
-                        continue
-                    sigs = getattr(rs, "sg", None) or self.step_sigs(step, dt)
-                    for lane in range(block_lanes):
-                        elements = self.elements(tiling, comp, coord)
-                        elements[vidx] = elements.get(vidx, sym()) + block * block_lanes + lane
-                        addr = self.address(sto, memory, direction, coord, elements)
-                        if "load" == step.op:
-                            data = self.ref_reg(step.dest, step.dest_rtype, reg)
-                            cls = lsc_load
-                        else:
-                            data = self.ref_reg(step.src[0], step.src_rtypes[0], reg)
-                            cls = lsc_store
-                        op = cls(memory, data.index, addr.reg, None, None,
-                                 self.reg_tile(tiling, data), {ldst_modifier.lane},
-                                 data=_index(data, lane), rsln=tag, step=step, sigs=sigs,
-                                 offset=addr.offset, rtypes=[None, data.rtype])
-                        op.add_property("lane", lane)
-                        op.add_property("stride_index", vidx)
-                        ops.append(op)
-            for rs in outer:
-                move(rs, chunk)
-        return ops
+        def nest(run, depth, idxs):
+            ops, i = [], 0
+            while i < len(run):
+                rs, path = run[i]
+                if len(path) == depth:
+                    ops += emit(rs, path, idxs)
+                    i += 1
+                    continue
+                j = i
+                while j < len(run) and len(run[j][1]) > depth:
+                    j += 1
+                for k in range(run[i][1][depth][1]):
+                    ops += nest(run[i:j], depth + 1, idxs + [k])
+                i = j
+            return ops
 
-    # --- STOs ----------------------------------------------------------------
+        return nest(items, 0, [])
 
     def emit_compute(self, sto: str, tiling, op, impl=None) -> list:
         """
