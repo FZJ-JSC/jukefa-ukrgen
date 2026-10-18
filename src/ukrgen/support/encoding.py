@@ -176,6 +176,11 @@ def encode_operation(res: operation_resolution,
             continue
         math_name = step.name_mapping.get(hw_name, hw_name)
         rtype = sig.operands[hw_name].rtype
+        # an operand resident in another register type than the operation's
+        # (a tile reached slice by slice through vectors) is that type
+        resident = [getattr(s.rsln, "resident_rtype", None)
+                    for (n, _), s in res.operand_strategies.items() if n == hw_name]
+        rtype = next((r for r in resident if r is not None), rtype)
         rtype_str = rtype.name if rtype is not None else "?"
 
         # in>out, leaving out resident parts. Whether an operand is resident

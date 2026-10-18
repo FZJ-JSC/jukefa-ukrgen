@@ -19,6 +19,8 @@ from ..data_move import (
     orig_ref,
     temp_ref,
     dm_repeat,
+    resident_ref,
+    dm_location as dml,
     resolution_provider
 )
 
@@ -80,6 +82,27 @@ class direct_provider(resolution_provider):
                                     opd_mod_reqs={orig_ref(): {mod}},
                                     forbidden_op_mods=STRIDED_FORMS,
                                     repeat=dm_repeat(levels=("slice",), side="in"))]))
+            if rgt.VEC == rtype:
+                # a vector operation on a tile resident in registers (an
+                # accumulator an outer product left): each slice moved into the
+                # operation's vector and back, as many as the tile has at run
+                # time - the operand stays a tile around the operation
+                for tag, mod in (("slice_vec_col", omod.COL), ("slice_vec_row", omod.ROW)):
+                    for tfs_reg in (frozenset(), frozenset({tf.NONE})):
+                        registry.add_resolution(
+                            key=tfr_key(tfs=tfs_reg, rtype=rgt.VEC, ddir=dmd.IN, loc=dml.REGISTER),
+                            rsln=tr(unique_tag=tag, resident_rtype=rgt.TILE, steps=[
+                                dm_step(op="move", dest=orig_ref(), dest_rtype=rgt.VEC,
+                                        src=[resident_ref()], src_rtypes=[rgt.TILE],
+                                        opd_mod_reqs={resident_ref(): {mod}},
+                                        repeat=dm_repeat(levels=("slice",), side="in"))]))
+                        registry.add_resolution(
+                            key=tfr_key(tfs=tfs_reg, rtype=rgt.VEC, ddir=dmd.OUT, loc=dml.REGISTER),
+                            rsln=tr(unique_tag=tag, resident_rtype=rgt.TILE, steps=[
+                                dm_step(op="move", dest=resident_ref(), dest_rtype=rgt.TILE,
+                                        src=[orig_ref()], src_rtypes=[rgt.VEC],
+                                        opd_mod_reqs={resident_ref(): {mod}},
+                                        repeat=dm_repeat(levels=("slice",), side="out"))]))
             # Exactly the same, but with tf.NONE instead of an empty set
 
             # Direct load

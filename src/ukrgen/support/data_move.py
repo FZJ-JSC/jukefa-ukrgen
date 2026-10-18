@@ -73,6 +73,8 @@ class register_reference:
         :param s: string representating a register reference
         :return: Reference to a register as encoded by the string
         """
+        if "$r" == s:
+            return resident_ref()
         match s.split("_", 1):
 
             case ["$o"]:
@@ -91,6 +93,20 @@ class orig_ref(register_reference):
     Reference to the "original" operand
     """
     is_op_opd : bool = True
+
+@dataclass(kw_only=True,frozen=True)
+class resident_ref(register_reference):
+    """
+    Reference to the register the operand occupies outside the operation,
+    where it differs from the operation's own (the resolution's
+    resident_rtype): a tile an operation reads and writes slice by slice
+    through vectors
+    """
+    is_op_opd : bool = False
+    tag : str | None = "resident"
+
+    def __str__(self):
+        return "$r"
 
 @dataclass(kw_only=True,frozen=True)
 class temp_ref(register_reference):
@@ -144,6 +160,10 @@ class transformation_resolution:
     """
     unique_tag:   str
     steps:        list[dm_step]
+    #: the register type the operand has outside the operation, where it
+    #: differs from the operation's (resident_ref in the steps): a tile the
+    #: operation's vectors reach slice by slice
+    resident_rtype: rgt | None = None
     op_mod_reqs:  set[opmod] = field(default_factory=set)
     forbidden_op_mods: set[opmod] = field(default_factory=set)
     opd_mod_reqs: set[omod] = field(default_factory=set)

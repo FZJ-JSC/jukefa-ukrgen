@@ -22,6 +22,7 @@ from asmgen.registers import adt_size
 
 from ..flow.stages.ukr.ukr import read_access, sto_kind, block_description
 from ..matching.math import get_operand_io
+from ..support.data_move import resident_ref
 from ..support.domains import operand_values
 from ..support.data_move import (
     dm_direction as dmd,
@@ -307,6 +308,10 @@ class program_builder:
         if any(r is not None and r.group for r in repeats):
             return self.move_lane_group(sto, tiling, comp, coord, reg, steps, direction, tag,
                                         memory, dt)
+        if any(isinstance(ref, resident_ref) for rs in steps
+               for ref in list(rs.step.src or []) + [rs.step.dest]):
+            raise model_error(f"{tag}: operations on {comp}'s tile slice by slice are not "
+                              f"built yet")
         if any(r is not None and r.levels for r in repeats):
             return self.move_nest(sto, tiling, comp, coord, reg, steps, direction, tag,
                                   memory, dt)
