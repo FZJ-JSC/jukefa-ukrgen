@@ -26,7 +26,7 @@ from .dm_solver import resolved_operation_chain
 from .data_move import dm_direction as dmd
 from .op import infer_hw_tile
 
-ONE = dimp(dt=dimt.fixed, size=1, sdt=dimt.fixed, sd_size=1)
+ONE = dimp(dt=dimt.fixed, size=1)
 
 
 def widening_ways(sig) -> int:
@@ -112,8 +112,7 @@ def index_extents(gen: asmgen,
                     # of each operand's own type, where a group of wide vectors
                     # already is one narrow vector
                     factor = groups[adt_size(shape.dt)]
-                    extent = dimp(dt=extent.dt, size=extent.size * factor,
-                                  sdt=extent.sdt, sd_size=extent.sd_size * factor)
+                    extent = dimp(dt=extent.dt, size=extent.size * factor)
                 known = extents.setdefault(req_idx, extent)
                 if known != extent:
                     raise ValueError(f"operations disagree about the extent of {req_idx}: "
@@ -200,7 +199,6 @@ def register_tiles(tiles: dict[str, tile], lanes: dict[str, tuple[str, int]],
     regs = dict(tiles)
     for name, (axis, count) in lanes.items():
         dims = [tiles[name].dima, tiles[name].dimb]
-        dims[list(indices[name]).index(axis)] = dimp(dt=dimt.fixed, size=count,
-                                                     sdt=dimt.fixed, sd_size=count)
+        dims[list(indices[name]).index(axis)] = dimp(dt=dimt.fixed, size=count)
         regs[name] = tile(dima=dims[0], dimb=dims[1])
     return regs

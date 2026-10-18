@@ -18,7 +18,7 @@ import itertools
 from ..components.operation import operation
 from ..components.tile import tile, dimension_properties as dimp, dimension_type as dimt
 
-_ONE = dimp(dt=dimt.fixed, size=1, sdt=dimt.fixed, sd_size=1)
+_ONE = dimp(dt=dimt.fixed, size=1)
 
 
 def generate_tiling(*,

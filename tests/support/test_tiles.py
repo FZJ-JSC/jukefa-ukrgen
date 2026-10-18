@@ -15,7 +15,7 @@ from ukrgen.support.encoding import encode_all
 from ukrgen.support.data_move import dm_location as dml
 from ukrgen.support.tiles import index_extents, operand_tiles, ONE
 
-VLA = dimp(dt=dimt.vla, size=1, sdt=dimt.vla, sd_size=1)
+VLA = dimp(dt=dimt.vla, size=1)
 
 
 def candidates(isa, sto_name, dt=adt.FP64):
@@ -45,7 +45,7 @@ class test_tiles(unittest.TestCase):
         # fixed-width vectors: two FP64 elements along m. (Vectors along n need
         # the rank-1 matcher or TRANSPOSE resolutions; neither is in yet.)
         gen, sto, cands = candidates("neon", "mm")
-        two = dimp(dt=dimt.fixed, size=2, sdt=dimt.fixed, sd_size=2)
+        two = dimp(dt=dimt.fixed, size=2)
         impl = cands["fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"]
         self.assertEqual({"m": two}, index_extents(gen, impl))
         tiles = operand_tiles(gen, impl, sto.req)

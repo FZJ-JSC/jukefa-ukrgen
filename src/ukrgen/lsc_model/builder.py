@@ -365,9 +365,9 @@ class program_builder:
         subtiling one element at a time (1v / 1), its walk from the vector's
         first element by the element stride
         """
-        one = dimp(dt=dimt.fixed, size=1, sdt=dimt.fixed, sd_size=1)
+        one = dimp(dt=dimt.fixed, size=1)
         element = tile(one, one)
-        vector = tile(dimp(dt=dimt.vla, size=1, sdt=dimt.vla, sd_size=1), one)
+        vector = tile(dimp(dt=dimt.vla, size=1), one)
         stride = self.strides.get(memory, {}).get(vidx)
         return lsc_loop(block=block,
                         subtiling=subtiling(shape=element, count=element.count_in(vector)[0],

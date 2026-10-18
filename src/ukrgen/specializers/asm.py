@@ -399,7 +399,7 @@ class lsc_specializer:
                 return False
             elif can_lane:
                 # Emulate gregstride with lane loads
-                elements = op.t.dima.sd_size*op.t.dimb.sd_size
+                elements = op.t.dima.size*op.t.dimb.size
                 for i in range(1,elements):
                     append_ops.append(
                         lsc_addr_add(component=op.addr_idx.component,

@@ -35,8 +35,6 @@ class dimension_properties:
     """
     dt      : dimension_type
     size    : int | Fraction
-    sdt     : dimension_type
-    sd_size : int | Fraction
 
     def __truediv__(self, other: "dimension_properties") -> "dimension_properties":
         """
@@ -51,8 +49,7 @@ class dimension_properties:
             q = Fraction(a) / Fraction(b)
             return kind, (int(q) if 1 == q.denominator else q)
         dt, size = quotient(self.size, self.dt, other.size, other.dt)
-        sdt, sd_size = quotient(self.sd_size, self.sdt, other.sd_size, other.sdt)
-        return dimension_properties(dt=dt, size=size, sdt=sdt, sd_size=sd_size)
+        return dimension_properties(dt=dt, size=size)
 
     @property
     def runtime(self) -> bool:
@@ -80,8 +77,7 @@ class dimension_properties:
 
     def __str__(self):
         suf = "v" if self.dt == dimension_type.vla else ""
-        ssuf = "v" if self.sdt == dimension_type.vla else ""
-        return f"{self.size}{suf}.{self.sd_size}{ssuf}"
+        return f"{self.size}{suf}"
 
     def __repr__(self):
         return str(self)
@@ -297,22 +293,18 @@ class tile:
 
 
 
-scalar_dp = dimension_properties(dt=dimension_type.fixed, size=1,
-                                 sdt=dimension_type.fixed, sd_size=1)
+scalar_dp = dimension_properties(dt=dimension_type.fixed, size=1)
 
 scalar_tile = tile(dima=scalar_dp, dimb=scalar_dp)
 
 
-scalar = dimension_properties(dt=dimension_type.fixed, size=1,
-                              sdt=dimension_type.fixed, sd_size=1)
+scalar = dimension_properties(dt=dimension_type.fixed, size=1)
 
-vla_vector = dimension_properties(dt=dimension_type.vla, size=1,
-                                  sdt=dimension_type.fixed, sd_size=4)
+vla_vector = dimension_properties(dt=dimension_type.vla, size=1)
 
 vla_vector_tile = tile(dima=vla_vector, dimb=scalar_dp)
 
-x4_vector = dimension_properties(dt=dimension_type.fixed, size=4,
-                                 sdt=dimension_type.fixed, sd_size=4)
+x4_vector = dimension_properties(dt=dimension_type.fixed, size=4)
 
 class simple_ukr_tile(tile):
     def __init__(self, 
@@ -322,13 +314,9 @@ class simple_ukr_tile(tile):
                  bands : tuple[int,int] = (-1,-1)):
 
         dima = dimension_properties(dt=dimension_type.fixed,
-                                    size=a_size,
-                                    sdt=dimension_type.fixed,
-                                    sd_size=a_size)
+                                    size=a_size)
         dimb = dimension_properties(dt=dimension_type.fixed,
-                                    size=b_size,
-                                    sdt=dimension_type.fixed,
-                                    sd_size=b_size)
+                                    size=b_size)
 
         super().__init__(
                 dima=dima,dimb=dimb,
@@ -347,13 +335,9 @@ class composed_ukr_tile(tile):
         tiles = [simple_ukr_tile(a_size=a, b_size=b, subdims=subdims) for a in a_sizes for b in b_sizes]
 
         dima = dimension_properties(dt=dimension_type.fixed,
-                                    size=len(a_sizes),
-                                    sdt=dimension_type.fixed,
-                                    sd_size=len(a_sizes))
+                                    size=len(a_sizes))
         dimb = dimension_properties(dt=dimension_type.fixed,
-                                    size=len(b_sizes),
-                                    sdt=dimension_type.fixed,
-                                    sd_size=len(b_sizes))
+                                    size=len(b_sizes))
         super().__init__(
                 dima=dima,dimb=dimb,
                 subtiles =tiles,

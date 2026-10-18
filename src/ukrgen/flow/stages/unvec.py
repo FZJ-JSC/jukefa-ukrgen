@@ -41,11 +41,9 @@ class unvec_stage(stage):
         if self.params["unvec-method"].value in ['load_bcast']:
             # Ensure tile is scalar
             modified_tile.dima = dimension_properties(
-                    dt=dimension_type.fixed, size=1,
-                    sdt=dimension_type.fixed, sd_size=1)
+                    dt=dimension_type.fixed, size=1)
             modified_tile.dimb = dimension_properties(
-                    dt=dimension_type.fixed, size=1,
-                    sdt=dimension_type.fixed, sd_size=1)
+                    dt=dimension_type.fixed, size=1)
 
         elif self.params["unvec-method"].value in ['lane_select','lane_bcast']:
             # TODO: needs more involved changes, crash for now
@@ -55,11 +53,9 @@ class unvec_stage(stage):
             mod_dim //= into_size
 
             modified_tile.dima = dimension_properties(
-                    dt=dimension_type.fixed, size=1,
-                    sdt=dimension_type.fixed, sd_size=1)
+                    dt=dimension_type.fixed, size=1)
             modified_tile.dimb = dimension_properties(
-                    dt=dimension_type.fixed, size=into_size,
-                    sdt=dimension_type.fixed, sd_size=into_size)
+                    dt=dimension_type.fixed, size=into_size)
 
         if vecdir == "M":
             self.context.sup.b_tile = modified_tile

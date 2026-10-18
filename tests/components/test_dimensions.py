@@ -10,8 +10,8 @@ from ukrgen.components.tile import (
     dimension_properties as dimp, dimension_type as dimt, tile, subtiling,
 )
 
-V = lambda n: dimp(dt=dimt.vla, size=n, sdt=dimt.vla, sd_size=n)
-F = lambda n: dimp(dt=dimt.fixed, size=n, sdt=dimt.fixed, sd_size=n)
+V = lambda n: dimp(dt=dimt.vla, size=n)
+F = lambda n: dimp(dt=dimt.fixed, size=n)
 
 
 class test_dimensions(unittest.TestCase):

@@ -25,17 +25,17 @@ from ukrgen.models.load_store_operations import lsc_offset
 from ukrgen.models.addr_resolver import addr_resolver
 from ukrgen.schedulers import simple_dependency_scheduler
 
-# i.e SVE FP64 vector           is dima=(dt=vla,size=1,sdt=fixed,sd_size=2), dimb=(dt=fixed,size=1,sdt=fixed,sd_size=1)
-#     SVE FP64 vector group(x4) is dima=(dt=vla,size=1,sdt=fixed,sd_size=2), dimb=(dt=fixed,size=4,sdt=fixed,sd_size=1)
+# i.e SVE FP64 vector           is dima=(dt=vla,size=1), dimb=(dt=fixed,size=1)
+#     SVE FP64 vector group(x4) is dima=(dt=vla,size=1), dimb=(dt=fixed,size=4)
 #     (sd_size=1) for dimb because we can use the individual vectors
-#     AVX FP64 vector           is dima=(dt=fixed,size=4,sdt=fixed,sd_size=4), dimb=(dt=fixed,size=1,sdt=fixed,sd_size=1)
-#     RVV FP64 vector LMUL=4    is dima=(dt=vla,size=1,sdt=vla,sd_size=1), dimb=(dt=fixed,size=4,sdt=fixed,sd_size=1)
+#     AVX FP64 vector           is dima=(dt=fixed,size=4), dimb=(dt=fixed,size=1)
+#     RVV FP64 vector LMUL=4    is dima=(dt=vla,size=1), dimb=(dt=fixed,size=4)
 #     (sd_size=1) for dimb again because we can use the individual vectors (paying the cost for a vsetvl or using 
 #      whole-vector instructions if available for the operation in question)
 #     PTX m16n8k16 fragments:
-#                             A is dima=(dt=fixed,size=16,std=fixed,fd_size=16), dimb=(dt=fixed,size=16,std=fixed,sd_size=16)
-#                             B is dima=(dt=fixed,size=16,std=fixed,fd_size=16), dimb=(dt=fixed,size=8,std=fixed,sd_size=16)
-#                             C is dima=(dt=fixed,size=16,std=fixed,fd_size=16), dimb=(dt=fixed,size=8,std=fixed,sd_size=16)
+#                             A is dima=(dt=fixed,size=16,std=fixed,fd_size=16), dimb=(dt=fixed,size=16,std=fixed)
+#                             B is dima=(dt=fixed,size=16,std=fixed,fd_size=16), dimb=(dt=fixed,size=8,std=fixed)
+#                             C is dima=(dt=fixed,size=16,std=fixed,fd_size=16), dimb=(dt=fixed,size=8,std=fixed)
 #     GPU stuff still needs some thinking because of the cooperative threads and complexity of indexing into the tiles
 
 # Taxonomy of GEMM kernels:
@@ -217,7 +217,7 @@ class test_mm(unittest.TestCase):
         k = unroll_factor
         
         a_tile = simple_ukr_tile(a_size=m, b_size=k, subdims=(x4_vector,scalar_dp))
-        b_tile = simple_ukr_tile(a_size=k, b_size=n//x4_vector.sd_size, subdims=(scalar_dp,x4_vector))
+        b_tile = simple_ukr_tile(a_size=k, b_size=n//x4_vector.size, subdims=(scalar_dp,x4_vector))
         c_tile = simple_ukr_tile(a_size=m, b_size=n, subdims=(x4_vector,scalar_dp))
 
         mmgen = mm(a_tile, b_tile, c_tile, lo=order2D('mkMnNK'),opstr="fma_idxx4")
@@ -318,7 +318,7 @@ class test_mm(unittest.TestCase):
         
         a_tile = simple_ukr_tile(a_size=m, b_size=k, subdims=(scalar_dp,x4_vector))
         b_tile = simple_ukr_tile(a_size=k, b_size=n, subdims=(x4_vector,scalar_dp))
-        c_tile = simple_ukr_tile(a_size=m//x4_vector.sd_size, b_size=n, subdims=(x4_vector,scalar_dp))
+        c_tile = simple_ukr_tile(a_size=m//x4_vector.size, b_size=n, subdims=(x4_vector,scalar_dp))
 
         mmgen = mm(a_tile, b_tile, c_tile, opstr="dota")
 

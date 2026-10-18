@@ -69,8 +69,8 @@ class test_lanes(unittest.TestCase):
     def test_rendering_does_not_move_operations(self):
         from ukrgen.components.operation import operation
         from ukrgen.components.tile import tile, dimension_properties as dimp, dimension_type as dimt
-        one = dimp(dt=dimt.fixed, size=1, sdt=dimt.fixed, sd_size=1)
-        vec = dimp(dt=dimt.fixed, size=2, sdt=dimt.fixed, sd_size=2)
+        one = dimp(dt=dimt.fixed, size=1)
+        vec = dimp(dt=dimt.fixed, size=2)
         # gemm-shaped, B by lane: the old rendering adds the subindex to C's offset
         op = operation(tiles=[tile(vec, one), tile(one, vec), tile(vec, one)],
                        tile_offsets=[[0, 0], [0, 0], [0, 0]], subindices=[0, 1, 0], opstr="fma")

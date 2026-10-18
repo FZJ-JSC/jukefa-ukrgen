@@ -125,7 +125,7 @@ class test_builder(unittest.TestCase):
         import copy
         from ukrgen.components.tile import dimension_properties as dimp, dimension_type as dimt
         ctx, _ = run(k="2")
-        ctx.stos[0]["mm"].extents["k"] = dimp(dt=dimt.vla, size=1, sdt=dimt.vla, sd_size=1)
+        ctx.stos[0]["mm"].extents["k"] = dimp(dt=dimt.vla, size=1)
         mm = program_builder(ctx).build().blocks[0]
         self.assertEqual("VL", str(mm.requires_multiple))
         self.assertIn("k must be a multiple of VL", program_builder(ctx).build().render())

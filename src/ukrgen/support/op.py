@@ -65,10 +65,8 @@ def infer_hw_tile(gen : asmgen,
     """
 
 
-    vla_vec_dp = dimp(dt=dimt.vla, size=1,
-                      sdt=dimt.vla, sd_size=1)
-    fixed_scalar_dp = dimp(dt=dimt.fixed, size=1,
-                           sdt=dimt.fixed, sd_size=1)
+    vla_vec_dp = dimp(dt=dimt.vla, size=1)
+    fixed_scalar_dp = dimp(dt=dimt.fixed, size=1)
 
     # an immediate is a scalar tile
     if otype.IMMEDIATE == shape.otype:
@@ -88,8 +86,7 @@ def infer_hw_tile(gen : asmgen,
         element_count = gen.simd_size//adt_size(dt)
         #TODO: figure out from signatures how many elements are
         #      subindexable (AVX can only do the first 128bits)
-        vec_dp = dimp(dt=dimt.fixed, size=element_count,
-                      sdt=dimt.fixed, sd_size=element_count)
+        vec_dp = dimp(dt=dimt.fixed, size=element_count)
 
     #TODO: figure out how to support BLOCKIDX (SVE), is there a need to
     #      encode more info in 'tile'? Or should that be handled some
@@ -115,10 +112,8 @@ def infer_hw_tile(gen : asmgen,
         #       and columns
         nrows = gen.tile_rows
         ncols = gen.tile_cols
-        tile_tile = tile(dima=dimp(dt=dimt.fixed, size=nrows,
-                                   sdt=dimt.fixed, sd_size=nrows),
-                         dimb=dimp(dt=dimt.fixed, size=ncols,
-                                   sdt=dimt.fixed, sd_size=ncols),
+        tile_tile = tile(dima=dimp(dt=dimt.fixed, size=nrows),
+                         dimb=dimp(dt=dimt.fixed, size=ncols),
                          )
 
     # TODO: One dim being VLA and the other being fixed is also possible,
