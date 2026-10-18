@@ -573,7 +573,12 @@ class program_builder:
                     if read_access.STREAM == self.flow[(sto, c)].read}
         items = self.emit_section([(sto, self.stos[sto].ops, None, None) for sto in block.stos])
 
-        for comp in sorted(streamed):
+        # what the loop stores along its index moves with it too (a packing
+        # kernel's buffer); only what it reads did
+        stored = {c for sto in block.stos
+                  for c in (getattr(self.comp.get_sto(sto), "store_components", None) or ())
+                  if k in self.strides.get(c, {})}
+        for comp in sorted(streamed | stored):
             out.advance[comp] = self.db.add(comp, {k: iteration})
 
         if not (self.preload and block.preload):
