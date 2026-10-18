@@ -36,10 +36,17 @@ class test_sme_run(unittest.TestCase):
         self.assertTrue(any(l.startswith("fmopa za0.d") for l in code))
         self.assertTrue(any(l.startswith("zero {za0.d}") for l in code))
         self.assertTrue(any(l.startswith("st1d {za0v.d[w12, 0]}") for l in code))
-        # streaming mode once in, once out; the caller's d8-d15 kept
+        # streaming mode once in, once out; the caller's d8-d15 kept by the
+        # calling convention - the setup declares them clobbered
         self.assertEqual(1, sum("smstart" == l for l in code))
         self.assertEqual(1, sum("smstop" == l for l in code))
-        self.assertTrue(any(l.startswith("stp d8, d9") for l in code))
+        for n in range(8, 16):
+            self.assertTrue(any(l.startswith(f"str d{n},") for l in code), n)
+            self.assertTrue(any(l.startswith(f"ldr d{n},") for l in code), n)
+        self.assertLess(next(i for i, l in enumerate(code) if l.startswith("str d8,")),
+                        code.index("smstart"))
+        self.assertGreater(next(i for i, l in enumerate(code) if l.startswith("ldr d8,")),
+                           code.index("smstop"))
 
     def test_runs(self):
         cc, qemu = "aarch64-linux-gnu-gcc", "qemu-aarch64-static"
@@ -66,6 +73,17 @@ class test_sme_run(unittest.TestCase):
                 self.assertEqual(0, r.returncode, r.stdout + r.stderr)
                 self.assertIn(tile, r.stdout)
                 self.assertIn(", 0 wrong", r.stdout)
+
+
+    def test_unrolled(self):
+        # two columns an iteration: the slice immediates 0 and 1 off w12
+        ctx, res = run(**{"C-subtiling": "slices_col:unroll=2"})
+        code = ctx.emitted[0].instructions()
+        start = next(i for i, l in enumerate(code) if l.endswith("_slices:"))
+        stores = [l for l in code[start:start + 8] if l.startswith("st1d")]
+        self.assertEqual(["st1d {za0v.d[w12, 0]}", "st1d {za0v.d[w12, 1]}"],
+                         [l.split(",")[0] + "," + l.split(",")[1] for l in stores])
+        self.assertTrue(any(l.endswith(",#2") and "x12" in l for l in code[start:start + 8]))
 
 
 if __name__ == "__main__":

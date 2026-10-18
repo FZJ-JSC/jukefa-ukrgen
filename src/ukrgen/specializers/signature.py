@@ -677,10 +677,21 @@ class signature_emitter:
         dt = self.ctx.component_dts[comp]
         elements = self.program.offsets.elements_offset(anchor.offset, self.program.strides.get(comp, {}))
         start = elements - self.positions[(comp, reg)]
+        # the slice index register: one every signature's slice operand takes
+        # (SME: w12-w15)
+        access = op.block[0]
+        lo, hi = 0, self.gen.max_gregs() - 1
+        for sig in _sigs(access.sigs):
+            for name, shape in sig.operands.items():
+                if name.endswith(("_rowreg", "_colreg")):
+                    for c in shape.value_constraints:
+                        lo = max(lo, getattr(c, "minval", lo))
+                        hi = min(hi, getattr(c, "maxval", hi))
         used = self.rt.get_used_regs("greg")
-        number = next((n for n in range(12, 16) if n not in used), None)
+        number = next((n for n in range(lo, hi + 1) if n not in used), None)
         if number is None:
-            raise specialization_error(f"{comp}: w12-w15, the slice index registers, are all taken")
+            raise specialization_error(f"{comp}: the slice index registers, {lo} to {hi}, "
+                                       f"are all taken")
         self.rt.reserve_specific_reg("greg", number)
         index = self.gen.greg(number)
         walker, counter, delta = self.greg(), self.greg(), self.greg()
@@ -1366,20 +1377,16 @@ class signature_emitter:
         # what the code clobbers is known now: the function's boilerplate,
         # loading stack parameters at entry into the registers they had then
         self.fn.rt.aliased_regs.setdefault("greg", {}).update(self.param_aliases)
+        # what the ISA's setup and teardown clobber beyond the allocation (SME:
+        # changing streaming mode zeroes the vector registers) - the calling
+        # convention keeps what its callee must
+        for tag, regs in getattr(isa, "clobbers", dict)().items():
+            self.cc.add_clobber(tag, regs)
         save, load, restore = self.fn.get_boilerplate(cc=self.cc)
         # what emission found it needs: right after the ISA's setup
         late = [l.strip() for chunk in self.late_setup for l in chunk.splitlines() if l.strip()]
         setup = setup[:self.isa_setup_lines] + late + setup[self.isa_setup_lines:]
         entry, leave = lines(save) + lines(load), lines(restore) + lines(self.gen.ret())
-        if any("smstart" == l.strip() for l in setup):
-            # the ISA's setup enters streaming mode (SME), its teardown leaves
-            # it: changing mode zeroes the vector registers - the caller's
-            # d8-d15 kept around both, after the prologue so the parameters'
-            # stack offsets stand
-            entry = entry + ["stp d8, d9, [sp, #-64]!", "stp d10, d11, [sp, #16]",
-                             "stp d12, d13, [sp, #32]", "stp d14, d15, [sp, #48]"]
-            leave = ["ldp d10, d11, [sp, #16]", "ldp d12, d13, [sp, #32]",
-                     "ldp d14, d15, [sp, #48]", "ldp d8, d9, [sp], #64"] + leave
         return emitted_program(
             setup=setup, blocks=blocks, cases=cases,
             teardown=lines(isa.teardown(rt=self.rt, dt=dt)), data=lines(isa.data()),
