@@ -19,14 +19,31 @@ PARAMS = {"rvv-LMUL": "1", "A-layout": ["m:s", "k:c"],
           "mm-to": ["fma(A.VEC:vla_lanes, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]}
 
 
-def run(**extra):
+def run(isa="rvv", params=None, **extra):
     stages = list(t.STAGES)
     i = [x.__name__ for x in stages].index("model_stage") + 1
     saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
     try:
-        return t.mm(isa="rvv", **PARAMS, **extra)
+        return t.mm(isa=isa, **(PARAMS if params is None else params), **extra)
     finally:
         t.STAGES = saved
+
+
+def emulate(test, ctx, harness, cc, march, qemu, cpus):
+    if not (shutil.which(cc) and shutil.which(qemu)):
+        test.skipTest(f"needs {cc} and {qemu}")
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "ukr.s"), "w") as f:
+            f.write("\n".join(ctx.emitted[0].function("ukr")) + "\n")
+        exe = os.path.join(d, "run")
+        r = subprocess.run([cc, "-static", "-O1", march, os.path.join(HERE, harness),
+                            os.path.join(d, "ukr.s"), "-o", exe, "-lm"], capture_output=True, text=True)
+        test.assertEqual(0, r.returncode, r.stderr)
+        for cpu, tile in cpus:
+            r = subprocess.run([qemu, "-cpu", cpu, exe], capture_output=True, text=True, timeout=120)
+            test.assertEqual(0, r.returncode, r.stdout)
+            test.assertIn(tile, r.stdout)
+            test.assertIn(", 0 wrong", r.stdout)
 
 
 class test_vla_repeat(unittest.TestCase):
@@ -80,6 +97,28 @@ class test_vla_repeat(unittest.TestCase):
                 self.assertEqual(0, r.returncode, r.stdout)
                 self.assertIn(tile, r.stdout)
                 self.assertIn(", 0 wrong", r.stdout)
+
+
+    def test_drain_rvv(self):
+        # C stored element by element: vfmv.f.s, a scalar store, vslidedown
+        ctx, res = run(params={"rvv-LMUL": "1", "C-layout": ["m:s", "n:s"],
+                               "store-to": ["C.VEC:vla_lanes"]})
+        self.assertTrue(res.completed, res.output)
+        store = ctx.emitted[0].blocks[1].sections["body"]
+        self.assertTrue(any(l.startswith("vfmv.f.s") for l in store))
+        self.assertTrue(any(l.startswith("vslidedown.vi") for l in store))
+        emulate(self, ctx, "strided_c_harness.c", "riscv64-linux-gnu-gcc", "-march=rv64gcv",
+                "qemu-riscv64-static", [("rv64,v=true,vlen=128,elen=64", "tile 4 x 2"),
+                                        ("rv64,v=true,vlen=256,elen=64", "tile 8 x 2")])
+
+    def test_fill_sve(self):
+        # insr fills into lane 0, shifting up: the walk runs backwards from
+        # the last element
+        ctx, res = run(isa="sve", params={"A-layout": ["m:s", "k:c"], "mm-to": PARAMS["mm-to"]})
+        self.assertTrue(res.completed, res.output)
+        self.assertTrue(any(l.startswith("insr") for l in ctx.emitted[0].blocks[0].sections["body"]))
+        emulate(self, ctx, "strided_mm_harness.c", "aarch64-linux-gnu-gcc", "-march=armv8-a+sve",
+                "qemu-aarch64-static", [("max,sve256=on", "tile 8 x 2"), ("max,sve512=on", "tile 16 x 2")])
 
 
 if __name__ == "__main__":

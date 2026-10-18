@@ -439,3 +439,20 @@ class lsc_repeat(lsc_load):
         self.body = body
         self.divisor = divisor
         self.fill = fill
+
+
+class lsc_repeat_store(lsc_store):
+    """
+    A loop draining a vector element by element, as many as it has of its
+    type at run time: lane 0 extracted into a scalar, stored, the vector
+    shifted down in place - walking memory by the element stride. To the
+    stages before emission it is a store of the vector from its first
+    element; body, divisor and fill as for lsc_repeat (fill's direction
+    "store")
+    """
+
+    def __init__(self, component, res_idx, addr_idx, t, *, body, divisor, fill, **kwargs):
+        super().__init__(component, res_idx, addr_idx, None, None, t, set(), **kwargs)
+        self.body = body
+        self.divisor = divisor
+        self.fill = fill

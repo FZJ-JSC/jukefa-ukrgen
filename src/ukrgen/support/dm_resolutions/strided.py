@@ -96,6 +96,15 @@ class strided_provider(resolution_provider):
                                 src=[scalar], src_rtypes=[rgt.FP],
                                 opd_mod_reqs={orig_ref(): {omod.ILANESHIFT, omod.FILLOTHERS}},
                                 repeat=dm_repeat(vla=True))]))
+                    # and draining one: lane 0 into a scalar, stored; the loop
+                    # shifts the vector down after (RVV vfmv.f.s, vslidedown)
+                    registry.add_resolution(key_out, tr(unique_tag="vla_lanes", steps=[
+                        dm_step(op="move", dest=scalar, dest_rtype=rgt.FP,
+                                src=[orig_ref()], src_rtypes=[rgt.VEC],
+                                opd_mod_reqs={orig_ref(): {omod.ILANE}},
+                                repeat=dm_repeat(vla=True)),
+                        dm_step(op="store", src=[scalar], src_rtypes=[rgt.FP],
+                                repeat=dm_repeat(vla=True))]))
                 # AVX-512: 128-bit blocks into a 256-bit scratch, then 256-bit
                 # inserts - two on the destination instead of four, the halves
                 # built independently

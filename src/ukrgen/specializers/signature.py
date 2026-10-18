@@ -35,7 +35,7 @@ from ..lsc_model.addressing import sym
 from ..lsc_model.ir import ir_program, ir_block
 from ..components.tile import scalar_tile
 from ..models.load_store_operations import (
-    lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_repeat)
+    lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_repeat, lsc_repeat_store)
 from ..models.lsc.index import lsc_reg_index
 
 
@@ -658,26 +658,65 @@ class signature_emitter:
         dt = self.ctx.component_dts[comp]
         elements = self.program.offsets.elements_offset(op.offset, self.program.strides.get(comp, {}))
         start = elements - self.positions[(comp, reg)]
-        walker, counter = self.greg(), self.greg()
+        # the scratch scalars in the body hold the component's elements
+        for s in op.body:
+            for idx in s.indices:
+                self.dts.setdefault((idx.component, idx.indices[0]), dt)
+        walker, counter, delta = self.greg(), self.greg(), self.greg()
         lines = [self.gen.mov_greg(src=self.aregs[(comp, reg)], dst=walker)]
         lines += self.add_bytes(walker, self.bytes_of(comp, start), comp)
         lines.append(self.gen.mov_greg(src=self.vl_elements(dt), dst=counter))
+        # the walk's step, the element stride in bytes - negative where a fill
+        # shifts up (SVE insr, into lane 0): from the last element backwards
+        stride = op.fill["stride"]
+        terms = dict(stride.terms)
+        up = any(isinstance(s, lsc_move) and self.shift_of(s) > 0 for s in op.body)
+        if set(terms) == {()}:
+            nbytes = terms[()] * adt_size(dt)
+            lines.append(self.gen.mov_greg_imm(reg=delta, imm=-nbytes if up else nbytes))
+        elif 1 == len(terms) and 1 == len(next(iter(terms))) and 1 == next(iter(terms.values())):
+            source = self.stride_reg(next(iter(terms))[0])
+            lines.append(self.gen.mul_greg_imm(src=source, dst=delta, factor=-1) if up
+                         else self.gen.mov_greg(src=source, dst=delta))
+        else:
+            raise specialization_error(f"{op.rsln}: walking {comp} by {stride} elements")
+        if up:
+            # the last element: a vector length of strides on, one back
+            lines += self.add_bytes(walker, self.bytes_of(comp, sym._make(
+                {tuple(sorted(("VL",) + f)): c for f, c in terms.items()})), comp)
+            lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
         loop = f"ukr{next(self.labels)}_elements"
         lines.append(self.gen.label(label=loop))
-        load, fill = op.body
-        line = self._mem(load, self.reg(load.indices[1], load.rtypes[1]), walker, 0)
-        if line is None:
-            raise specialization_error(f"{op.rsln}: no load of one {comp} element takes "
-                                       "a plain address")
-        lines.append(line)
-        lines.append(self.move(fill))
-        lines += self.add_bytes(walker, self.bytes_of(comp, op.fill["stride"]), comp)
+        for step in op.body:
+            if isinstance(step, (lsc_load, lsc_store)):
+                line = self._mem(step, self.reg(step.indices[1], step.rtypes[1]), walker, 0)
+                if line is None:
+                    raise specialization_error(f"{op.rsln}: no {step.step.op} of one {comp} "
+                                               "element takes a plain address")
+                lines.append(line)
+            else:
+                lines.append(self.move(step))
+        lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
         lines.append(self.gen.add_greg_imm(reg=counter, imm=-1))
         lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
-        for r in (walker, counter):
+        for r in (walker, counter, delta):
             self.rt.unuse_reg("greg", r.idx)
         return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
                 if l.strip()]
+
+    def shift_of(self, op) -> int:
+        """
+        How far a move shifts its vector: recorded, or fixed by its signature
+        """
+        if "irot" in op.properties:
+            return op.properties["irot"]
+        for sig in _sigs(op.sigs):
+            for name, shape in sig.operands.items():
+                if name.endswith("_irot"):
+                    c = shape.value_constraints[0]
+                    if c.minval == c.maxval:
+                        return c.minval
+        return 0
 
     def memory(self, op) -> list[str]:
         """
@@ -999,7 +1038,7 @@ class signature_emitter:
         return [l.strip() for chunk in self._emit_op(op) for l in chunk.splitlines() if l.strip()]
 
     def _emit_op(self, op) -> list[str]:
-        if isinstance(op, lsc_repeat):
+        if isinstance(op, (lsc_repeat, lsc_repeat_store)):
             return self.repeat(op)
         if isinstance(op, (lsc_load, lsc_store)):
             return self.memory(op)
@@ -1021,7 +1060,10 @@ class signature_emitter:
         """
         src = self.reg(op.indices[0], op.rtypes[0])
         dst = self.reg(op.indices[1], op.rtypes[1])
-        dt = self.dts[(op.indices[1].component, op.indices[1].indices[0])]
+        # the destination's type, or the source's where the destination is a
+        # scratch (a drain loop's extract into a scalar)
+        dt = self.dts.get((op.indices[1].component, op.indices[1].indices[0])) or \
+            self.dts[(op.indices[0].component, op.indices[0].indices[0])]
         for sig in sorted(_sigs(op.sigs), key=_masked):
             masks = {}
             if not self._predicate(sig, masks):
@@ -1030,9 +1072,12 @@ class signature_emitter:
                       if n.endswith("_block") and "block" in op.properties}
             blocks.update({n: op.properties["lane"] for n in sig.operands
                            if n.endswith("_lane") and "lane" in op.properties})
-            # a shift by a fixed amount (a fill loop's): the one the signature takes
+            # a shift by a fixed amount (a fill loop's): the one the signature
+            # takes, or the one recorded (a drain loop's)
             for n, shape in sig.operands.items():
-                if n.endswith("_irot") and shape.value_constraints:
+                if n.endswith("_irot") and "irot" in op.properties:
+                    blocks[n] = op.properties["irot"]
+                elif n.endswith("_irot") and shape.value_constraints:
                     c = shape.value_constraints[0]
                     if getattr(c, "minval", None) is not None and c.minval == c.maxval:
                         blocks[n] = c.minval

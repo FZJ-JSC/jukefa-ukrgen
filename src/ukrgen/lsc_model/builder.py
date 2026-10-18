@@ -30,6 +30,7 @@ from .addressing import sym, offset_db, layout_strides, addr_pattern
 from ..components.tile import scalar_tile
 from ..models.load_store_operations import (
     lsc_repeat,
+    lsc_repeat_store,
     lsc_operation, lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, ldst_modifier)
 from ..models.lsc.index import lsc_reg_index
 from .ir import vreg, addr_ref, ir_block, ir_case, ir_program
@@ -353,7 +354,7 @@ class program_builder:
         element's steps, its address the vector's first element
         """
         if "load" != steps[0].step.op:
-            raise model_error(f"{tag}: storing element by element is not modelled yet")
+            return self.drain_vla(sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt)
         load, fill = steps[0], steps[1]
         elements = self.elements(tiling, comp, coord)
         addr = self.address(sto, memory, direction, coord, elements)
@@ -377,6 +378,50 @@ class program_builder:
                                  "direction": "load"},
                            data=_index(vector), rsln=tag, step=load.step, sigs=load_sigs,
                            offset=addr.offset, rtypes=[None, vector.rtype])]
+
+    def drain_vla(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
+        """
+        A vector stored element by element (vla_lanes): one lsc_repeat_store,
+        its body lane 0 extracted, stored, and the vector shifted down in place
+        - the loop's own step, by one lane, whatever the vacated lane holds
+        """
+        extract, store = steps[0], steps[1]
+        elements = self.elements(tiling, comp, coord)
+        addr = self.address(sto, memory, direction, coord, elements)
+        vector = self.ref_reg(extract.step.src[0], extract.step.src_rtypes[0], reg)
+        scalar = self.ref_reg(extract.step.dest, extract.step.dest_rtype, reg)
+        extract_sigs = getattr(extract, "sg", None) or self.step_sigs(extract.step, dt)
+        store_sigs = getattr(store, "sg", None) or self.step_sigs(store.step, dt)
+        shift_sigs = [s for s in self.gen.move.get_signatures()
+                      if {"ILANESHIFT", "INVALIDOTHERS"} == {m.name for m in s.operands["adreg"].modifiers}
+                      and dt == s.operands["adreg"].dt
+                      and any(getattr(c, "minval", 0) <= -1 <= getattr(c, "maxval", 0)
+                              for c in s.operands["adreg_irot"].value_constraints)]
+        if not shift_sigs:
+            raise model_error(f"{tag}: no move shifts a {dt.name} vector down by a lane")
+        first = lsc_move(_index(vector), _index(scalar),
+                         [self.reg_tile(tiling, vector), self.reg_tile(tiling, scalar)],
+                         rsln=tag, step=extract.step, sigs=extract_sigs,
+                         rtypes=[vector.rtype, scalar.rtype])
+        first.add_property("lane", 0)
+        shift = lsc_move(_index(vector), _index(vector),
+                         [self.reg_tile(tiling, vector)] * 2, rsln=tag, step=extract.step,
+                         sigs=shift_sigs, rtypes=[vector.rtype, vector.rtype])
+        shift.add_property("irot", -1)
+        body = [first,
+                lsc_store(memory, scalar.index, addr.reg, None, None,
+                          self.reg_tile(tiling, scalar), set(), data=_index(scalar), rsln=tag,
+                          step=store.step, sigs=store_sigs, offset=addr.offset,
+                          rtypes=[None, scalar.rtype]),
+                shift]
+        vidx = self.vector_index(tiling, comp)
+        return [lsc_repeat_store(memory, vector.index, addr.reg, self.reg_tile(tiling, vector),
+                                 body=body, divisor=16 // adt_size(dt),
+                                 fill={"component": memory, "index": vidx,
+                                       "stride": self.strides.get(memory, {}).get(vidx),
+                                       "direction": "store"},
+                                 data=_index(vector), rsln=tag, step=store.step, sigs=store_sigs,
+                                 offset=addr.offset, rtypes=[None, vector.rtype])]
 
     def move_lane_group(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
         """

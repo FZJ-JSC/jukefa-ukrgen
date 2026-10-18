@@ -58,7 +58,7 @@ class test_strided(unittest.TestCase):
 
     def test_row_major_a_is_strided(self):
         # vectors run along m; row-major A is contiguous along k
-        expected = {"sve": {"gather"}, "rvv": {"gather", "strided", "vla_lanes"},
+        expected = {"sve": {"gather", "vla_lanes"}, "rvv": {"gather", "strided", "vla_lanes"},
                     "neon": {"lanes"}, "avx512": {"gather", "block_lanes", "block_lanes_256"}}
         for isa, resolutions in expected.items():
             with self.subTest(isa=isa):
@@ -69,18 +69,18 @@ class test_strided(unittest.TestCase):
         self.assertEqual({"direct"}, tags(out, "A", "mm"))
         # stores from implementations with vectors along m are contiguous; those
         # with vectors along n leave C to be scattered
-        self.assertEqual({"direct", "scatter"}, tags(out, "C", "store"))
+        self.assertEqual({"direct", "scatter", "vla_lanes"}, tags(out, "C", "store"))
 
     def test_row_major_c_stores_strided(self):
         # vectors along m into a row-major C scatter; vectors along n store directly
-        self.assertEqual({"direct", "scatter"}, tags(listing("sve"), "C", "store"))
-        self.assertEqual({"direct", "scatter", "strided"}, tags(listing("rvv"), "C", "store"))
+        self.assertEqual({"direct", "scatter", "vla_lanes"}, tags(listing("sve"), "C", "store"))
+        self.assertEqual({"direct", "scatter", "strided", "vla_lanes"}, tags(listing("rvv"), "C", "store"))
 
     def test_orientation_decides(self):
         # the same row-major A: strided for vectors along m, broadcast elements
         # for vectors along n - which needs no contiguous index at all
         out = listing("sve")
-        self.assertEqual({"gather"}, tags(out, "A", "mm", along="m"))
+        self.assertEqual({"gather", "vla_lanes"}, tags(out, "A", "mm", along="m"))
         self.assertNotIn("gather", tags(out, "A", "mm", along="n"))
         self.assertIn("bc_load", tags(out, "A", "mm", along="n"))
 
@@ -100,8 +100,8 @@ class test_strided(unittest.TestCase):
     def test_general_strides(self):
         # contiguous along neither index: nothing can be loaded directly
         out = listing("sve", a=None, c=None)
-        self.assertEqual({"gather"}, tags(out, "A", "mm"))
-        self.assertEqual({"scatter"}, tags(out, "C", "store"))
+        self.assertEqual({"gather", "vla_lanes"}, tags(out, "A", "mm"))
+        self.assertEqual({"scatter", "vla_lanes"}, tags(out, "C", "store"))
 
     def test_scalar_reduced_any_layout(self):
         # B is broadcast one element at a time: that works for any layout. Only
