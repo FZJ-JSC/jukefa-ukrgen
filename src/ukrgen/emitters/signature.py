@@ -1521,6 +1521,11 @@ class signature_emitter:
         """
         k = self.params[block.loop_index]
         terms = dict(block.step.terms)
+        if set(terms) == {("VL",)}:
+            # vectors along the loop: its parameter counts chunks of a vector
+            # length - the caller divides, and takes what's left of one - the
+            # loop unrolled over as many chunks as a step has
+            terms = {(): terms[("VL",)]}
         if set(terms) != {()}:
             raise specialization_error(f"{block.name}: a step of {block.step} elements is not "
                                        "counted yet")

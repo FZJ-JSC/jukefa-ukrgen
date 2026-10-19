@@ -93,7 +93,7 @@ params:                        # ukrgen parameters for every size
 | 3b | Large tiles: C streamed through the epilogue (MRU renaming), register fitting by liveness | done: the default 8x3v builds |
 | 4 | BLIS patching: configuration and kernel directories, registry, PR 960, `inherit` | done: `patch.py`, `clitools/blisgen.py` |
 | 5 | BLIS build and testsuite: x86 natively, SVE/RVV under qemu | SVE done (gemm ukr + gemm, sd, rcg); x86, RVV (LMUL 1 and 2), NEON next |
-| 6 | packm families: cases, generated dispatch tree, reference fallback | vec cases done; trans cases need VL-stepped loops (RVV) and scatters (SVE) |
+| 6 | packm families: cases, generated dispatch tree, reference fallback | vec and trans cases done (trans: RVV; SVE needs scatters) |
 | 7 | packm in the BLIS configuration; testsuite again | done for SVE (vec cases) |
 | 8 | Old patcher and templates retired (`clitools/blisgen.py` on the new path) | |
 
@@ -268,6 +268,11 @@ void bli_cntx_init_<config>( cntx_t* cntx )
   iteration; what's left goes up to the ceilings, the inputs with most
   tiles first. 8x3v on SVE: A's broadcasts in a ring of 3 fitted, 2 with
   `max-data-regs: {A: 2}`, 1 with `max-preload: {A: 0}`.
-- Next for packm's trans cases (own tileops per case already): the kernel
-  packs n in whole chunks of unroll x VL, counted in chunks by the
-  dispatch, which leaves n % (unroll x VL) to the reference.
+- packm trans cases: a loop whose step is vectors (c x VL elements) counts
+  chunks of a vector length - its parameter is n / VL, the loop unrolled
+  over c chunks with the k loop's tail mechanism for what's left of them;
+  the dispatch passes the chunks and leaves the last n % VL columns to the
+  reference (A and P from the first column it packs). RVV trans cases
+  (cdim 3, unrolled 1 and 2) exact at VLEN 128 and 256 through the stub,
+  with and without columns left over, panels shorter than a vector the
+  reference's. SVE: still no strided store candidate (scatters).

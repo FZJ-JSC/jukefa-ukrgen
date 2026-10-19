@@ -214,6 +214,8 @@ class kernel:
     vl_fn: str = "ukrgen_vl"
     #: packm: the case (vec, trans)
     case: str = ""
+    #: its loop parameter counts chunks of a vector length ("VL"), not elements
+    loop_unit: str = ""
 
 
 def extent_of(ctx, idx: str) -> sym:
@@ -305,8 +307,12 @@ def build_packm(isa: str, config_name: str, fam: family) -> tuple[list[kernel], 
                 cdim = str(extent_of(ctx, "m"))
                 symbol = f"bli_{DT_CHAR[dt]}packm_{config_name}_{fam.name}_{case}{size_name(cdim)}"
                 program = ctx.emitted[0]
+                # a loop stepping by vectors counts chunks of a vector length
+                unit = "VL" if any(("VL",) in dict(getattr(b, "step", None).terms)
+                                   for p in ctx.programs for b in p.blocks
+                                   if getattr(b, "step", None) is not None) else ""
                 built.append(kernel(family=fam.name, dtype=dt, size=(m, 1), mr=cdim, nr="1",
                                     symbol=symbol, params=list(program.params), c_layout="col",
-                                    program=program, case=case,
+                                    program=program, case=case, loop_unit=unit,
                                     simd_size_c=getattr(ctx.gen, "c_simd_size_function", "")))
     return built, skipped

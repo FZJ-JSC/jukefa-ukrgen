@@ -391,9 +391,27 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel]) -> str:
         if unknown:
             raise ValueError(f"{k.symbol}: no BLIS argument for its parameters {unknown}")
         decls.append(f"void {asm_symbol(k)}( {', '.join(PACKM_ARGS[p][0] for p in k.params)} );")
-        args = ", ".join(PACKM_ARGS[p][1].format(ctype=ctype) for p in k.params)
-        branches[k.case].append(
-            f"\t\tif ( cdim == {c_expr(k.mr, ctype, k.vl_fn)} ) {{ {asm_symbol(k)}( {args} ); return; }}")
+        if "VL" == k.loop_unit:
+            # chunks of a vector length along the panel; the reference takes
+            # what's left of one - A and P from the first column it packs
+            vl = f"{k.vl_fn}( sizeof( {ctype} ) )"
+            args = ", ".join("chunks" if "n" == p else PACKM_ARGS[p][1].format(ctype=ctype)
+                             for p in k.params)
+            branches[k.case].append(f"""\
+		if ( cdim == {c_expr(k.mr, ctype, k.vl_fn)} )
+		{{
+			const dim_t chunks = n / {vl}, done = chunks * {vl};
+			if ( chunks ) {asm_symbol(k)}( {args} );
+			if ( done < n )
+				bli_{ch}{ch}packm_{config_name}_ref( conja, schema, cdim, cdim_max, cdim_bcast,
+				    n - done, n_max - done, kappa, ( const {ctype}* )a + done * lda, inca, lda,
+				    ( {ctype}* )p + done * ldp, ldp, params, cntx );
+			return;
+		}}""")
+        else:
+            args = ", ".join(PACKM_ARGS[p][1].format(ctype=ctype) for p in k.params)
+            branches[k.case].append(
+                f"\t\tif ( cdim == {c_expr(k.mr, ctype, k.vl_fn)} ) {{ {asm_symbol(k)}( {args} ); return; }}")
     vec = "\n".join(branches["vec"])
     trans = "\n".join(branches["trans"])
     return f"""\
