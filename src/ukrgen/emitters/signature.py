@@ -423,10 +423,20 @@ class signature_emitter:
                     source = self.vl_bytes(dt)
                 else:
                     source = self.vl_stride(factors[1], dt)
-                negated = self.greg()
-                lines.append(self.gen.mul_greg_imm(src=source, dst=negated, factor=-1))
+                cache = getattr(self, "negated", None)
+                if cache is not None and source.idx in cache:
+                    negated = cache[source.idx]
+                else:
+                    negated = self.greg()
+                    neg = self.gen.mul_greg_imm(src=source, dst=negated, factor=-1)
+                    # in a loop: computed before it, once
+                    setup = getattr(self, "negated_setup", None)
+                    (setup if setup is not None else lines).append(neg)
                 lines += [self.gen.add_greg_greg(dst=areg, reg1=areg, reg2=negated)] * (-coeff // esize)
-                self.rt.unuse_reg("greg", negated.idx)
+                if cache is not None:
+                    cache[source.idx] = negated
+                else:
+                    self.rt.unuse_reg("greg", negated.idx)
             else:
                 raise specialization_error(
                     f"moving {comp}'s address by {amount} bytes needs run-time arithmetic "
@@ -434,6 +444,29 @@ class signature_emitter:
         return lines
 
     # --- operations ----------------------------------------------------------
+
+    def hoist_negations(self, lines, loop) -> list[str]:
+        """
+        A loop's lines, the negations its moves back asked for placed before
+        its label: computed once, not every iteration
+        """
+        flat = [l.strip() for chunk in lines
+                for l in (chunk.splitlines() if isinstance(chunk, str) else chunk) if l.strip()]
+        setup = [l.strip() for chunk in (getattr(self, "negated_setup", None) or [])
+                 for l in (chunk.splitlines() if isinstance(chunk, str) else chunk) if l.strip()]
+        self.negated_setup = None
+        if setup:
+            at = flat.index(f"{loop}:") if f"{loop}:" in flat else 0
+            flat = flat[:at] + setup + flat[at:]
+        return flat
+
+    def release_negated(self):
+        """
+        The negated amounts a loop kept: free again, and none kept after it
+        """
+        for reg in (getattr(self, "negated", None) or {}).values():
+            self.rt.unuse_reg("greg", reg.idx)
+        self.negated = None
 
     def slices(self, op) -> list[str]:
         """
@@ -471,20 +504,40 @@ class signature_emitter:
         explicit = op.info.get("unrolled")
         scale = op.subtiling.unroll if explicit else 1
         plan = getattr(op, "walk_plan", None)
+        # a register's amount negated once a loop, for every move back: the
+        # negations collected and placed before the loop
+        self.negated = {}
+        self.negated_setup = []
         # the plan's registers walk themselves: where each stands, as an offset
         # from its home at this iteration's first slice
         current = {key: sym.const(0) for key in plan} if plan else {}
         walk_of = {w: key for key, p in (plan or {}).items() for w in p["walks"]}
         def place(b):
+            # the access where the register stands, or vector lengths past it
+            # where a signature takes them ([x, #n, MUL VL]): no move; else the
+            # register moved there
             w = b.properties.get("walk", 0)
             key = walk_of[w]
             comp = key[0]
             target = plan[key]["walks"][w]
-            out = []
-            if dict((target - current[key]).terms):
-                out += self.add_bytes(self.aregs[key], self.bytes_of(comp, target - current[key]), comp)
-                current[key] = target
-            return out, self.aregs[key]
+            rest = dict((target - current[key]).terms)
+            if not rest:
+                return [], self.aregs[key], None
+            vectors = rest.get(("VL",))
+            if vectors and any(_vl_form(sig) and _accepts(sig, "voffset", vectors)
+                               for sig in _sigs(b.sigs)):
+                # the register moved by the rest alone (another column), the
+                # vector lengths an immediate
+                others = {f: c for f, c in rest.items() if ("VL",) != f}
+                out = []
+                if others:
+                    move = sym._make(others)
+                    out = self.add_bytes(self.aregs[key], self.bytes_of(comp, move), comp)
+                    current[key] = current[key] + move
+                return out, self.aregs[key], vectors
+            out = self.add_bytes(self.aregs[key], self.bytes_of(comp, target - current[key]), comp)
+            current[key] = target
+            return out, self.aregs[key], None
         def step_on(slices):
             # every register to the next iteration's home, slices on
             out = []
@@ -570,12 +623,14 @@ class signature_emitter:
                 if b in sliced:
                     b.properties.update(slice_reg=index, slice_imm=b.properties.get("copy", 0))
                 if isinstance(b, (lsc_load, lsc_store)):
+                    vectors = None
                     if plan:
-                        moves, walker = place(b)
+                        moves, walker, vectors = place(b)
                         out += moves
                     else:
                         walker = walkers[b.properties.get("walk", 0)]
-                    line = self._mem(b, self.reg(b.indices[1], b.rtypes[1]), walker, 0)
+                    line = self._mem(b, self.reg(b.indices[1], b.rtypes[1]), walker, 0,
+                                     voffset=vectors)
                     if line is None:
                         raise specialization_error(f"{op.info.get('component')}: no {b.step.op} "
                                                    f"of a slice's {b.indices[0].component} takes "
@@ -611,9 +666,9 @@ class signature_emitter:
             lines += emit_ops(rest)
             for r in [counter, index] + list(shared.values()) + list(steps.values()):
                 self.rt.unuse_reg("greg", r.idx)
+            self.release_negated()
             settle()
-            return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
-                    if l.strip()]
+            return self.hoist_negations(lines, loop)
         for u in range(1 if explicit else unroll):
             group = u % rotate
             saved = {}
@@ -631,12 +686,14 @@ class signature_emitter:
                     b.properties.update(slice_reg=index,
                                         slice_imm=b.properties.get("copy", 0) if explicit else u)
                 if isinstance(b, (lsc_load, lsc_store)):
+                    vectors = None
                     if plan:
-                        moves, walker = place(b)
+                        moves, walker, vectors = place(b)
                         lines += moves
                     else:
                         walker = walkers[b.properties.get("walk", 0)]
-                    line = self._mem(b, self.reg(b.indices[1], b.rtypes[1]), walker, 0)
+                    line = self._mem(b, self.reg(b.indices[1], b.rtypes[1]), walker, 0,
+                                     voffset=vectors)
                     if line is None:
                         raise specialization_error(f"{op.info.get('component')}: no {b.step.op} "
                                                    f"of a slice's {b.indices[0].component} takes "
@@ -662,9 +719,9 @@ class signature_emitter:
         lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
         for r in [counter, index] + list(shared.values()) + list(steps.values()):
             self.rt.unuse_reg("greg", r.idx)
+        self.release_negated()
         settle()
-        return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
-                if l.strip()]
+        return self.hoist_negations(lines, loop)
 
     def loop(self, op) -> list[str]:
         """

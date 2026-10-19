@@ -213,7 +213,7 @@ class forward_slices(lsc_irmod):
                 sigs = [s for s in self.ctx.gen.store.get_signatures()
                         if rgt.VEC == s.operands["adreg"].rtype and dt == s.operands["adreg"].dt
                         and not s.operands["adreg"].modifiers
-                        and {m.name for m in s.modifiers} <= {"MASK"}]
+                        and {m.name for m in s.modifiers} <= {"MASK", "VOFFSET"}]
                 if sigs:
                     op.indices[1] = vector
                     op.rtypes = [op.rtypes[0], rgt.VEC]
