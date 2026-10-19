@@ -149,8 +149,9 @@ class program_builder:
                 for name in op.tile_strs:
                     if name in self.components:
                         seen = coords.setdefault(name, [])
-                        if op.coord(name) not in seen:
-                            seen.append(op.coord(name))
+                        g = self.gcoord(tiling, name, op.coord(name))
+                        if g not in seen:
+                            seen.append(g)
         self.coords = coords
         self.data_regs = self.fit_registers(dict(self.data_regs))
 
@@ -304,8 +305,9 @@ class program_builder:
         Start emitting a run of operations - a loop iteration, a tail, a block -
         whose tile accesses decide which registers to reuse
         """
-        self.future = [{c: op.coord(c) for c in op.tile_strs if c in self.components}
-                       for _, ops in stos_ops for op in ops]
+        self.future = [{c: self.gcoord(tiling or self.stos[sto], c, op.coord(c))
+                        for c in op.tile_strs if c in self.components}
+                       for sto, ops, tiling in stos_ops for op in ops]
         self.pos = 0
 
     def _use(self, reg: vreg):
@@ -326,11 +328,30 @@ class program_builder:
 
     # --- addresses ---------------------------------------------------------
 
+    def gcoord(self, tiling, comp: str, coord: tuple) -> tuple:
+        """
+        A tile's coordinate for everything that tells tiles apart - holders,
+        rings, the operations ahead: its first element's offset along each
+        index, a part's offset included, and its register tile's shape. Two
+        parts' tiles holding the same elements alike are the same tile: one
+        register, loaded once (B's vectors beside an m split)
+        """
+        if _is_gcoord(coord):
+            return coord
+        reg = tiling.registers.get(comp) if tiling.registers else None
+        shape = (str(reg.dima), str(reg.dimb)) if reg is not None else ()
+        if comp in (getattr(tiling, "resident", None) or ()):
+            # reached slice by slice through vectors: the whole tile
+            shape = ("1v", "1v")
+        return tuple(sorted(self.elements(tiling, comp, coord).items())) + ((_SHAPE, shape),)
+
     def elements(self, tiling, comp: str, coord: tuple) -> dict[str, sym]:
         """
         Element offsets of a component tile: its register coordinate times the
         register tile's extent along each index
         """
+        if _is_gcoord(coord):
+            return {idx: e for idx, e in coord if _SHAPE != idx}
         indices = tiling.generate_args["operands"][comp]
         reg_tile = tiling.registers[comp]
         dims = (reg_tile.dima, reg_tile.dimb)
@@ -340,7 +361,13 @@ class program_builder:
         loop = getattr(tiling, "slice_loop", None)
         step = lambda pos, idx: sym.extent(tiling.extents[idx]) if loop is not None \
             and idx == loop[0] else sym.extent(dims[pos])
-        return {idx: step(pos, idx) * c for (pos, idx), c in zip(live, coord)}
+        out = {idx: step(pos, idx) * c for (pos, idx), c in zip(live, coord)}
+        # a part of a split microtile starts along the split index where the
+        # one before ends
+        for idx, offset in (getattr(tiling, "part_offset", None) or {}).items():
+            if idx in out:
+                out[idx] = out[idx] + offset
+        return out
 
     def address(self, sto: str, comp: str, direction: str, coord: tuple,
                 elements: dict[str, sym]) -> addr_ref:
@@ -751,7 +778,7 @@ class program_builder:
                     self._use(reg)
                     tile = result_tile
                 else:
-                    coord = op.coord(math)
+                    coord = self.gcoord(tiling, math, op.coord(math))
                     reg = self.reg_of(math, rtype, coord)
                     tile = tiling.registers[math]
                     strat = res.operand_strategies.get((hw, dmd.IN))
@@ -828,7 +855,7 @@ class program_builder:
         items = []
         for cand in choice.stores:
             comp = cand.component
-            coord = op.coord(comp)
+            coord = self.gcoord(tiling, comp, op.coord(comp))
             reg = self.reg_of(comp, cand.rtype, coord)
             if self.holder.get(reg) != (comp, coord):
                 raise model_error(f"{sto} stores {comp}{list(coord)}, which is no longer "
@@ -912,7 +939,7 @@ class program_builder:
         """
         # which group's register a section loaded last starts afresh
         self.lane_groups = {}
-        self.begin_section([(sto, ops) for sto, ops, _, _ in parts])
+        self.begin_section([(sto, ops, tiling) for sto, ops, tiling, _ in parts])
         items = []
         for sto, ops, tiling, impl in parts:
             items += self.emit_sto(sto, ops, tiling, impl)
@@ -1134,3 +1161,12 @@ def _flatten(items: list) -> list[lsc_operation]:
     for item in items:
         ops += item.ops if isinstance(item, access_group) else [item.op]
     return ops
+
+
+#: the key of a global coordinate's shape entry - no index is called so
+_SHAPE = " shape"
+
+
+def _is_gcoord(coord) -> bool:
+    return isinstance(coord, tuple) and bool(coord) and isinstance(coord[-1], tuple) \
+        and 2 == len(coord[-1]) and _SHAPE == coord[-1][0]

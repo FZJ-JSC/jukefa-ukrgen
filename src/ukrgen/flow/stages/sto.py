@@ -198,6 +198,8 @@ class sto_stage(stage):
                                                           lanes=lanes, opstr=opstr))
             if sto_kind.COMPUTE == sto.kind and slice_loop is not None:
                 tilings[name].slice_loop = slice_loop
+                # the components it reaches resident in tiles: whole tiles
+                tilings[name].resident = resident_components(impl)
 
     def tile_part(self, part: dict, subtail: dict | None = None, dims: dict | None = None) \
             -> tuple[dict[str, sto_tiling], dict[str, sto_tiling]]:
