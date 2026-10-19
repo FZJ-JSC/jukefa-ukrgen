@@ -7,7 +7,8 @@ import logging
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
-from ...specializers.signature import signature_emitter, emit_program, specialization_error
+from ...emitters.signature import signature_emitter, emit_program
+from ...specializers.signature import specialization_error
 
 
 class emit_stage(stage):
