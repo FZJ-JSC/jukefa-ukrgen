@@ -382,11 +382,52 @@ class signature_emitter:
         """
         return self.params[factor]
 
+    def add_scaled(self, areg, source, n: int) -> list[str]:
+        """
+        areg moved by n times a register's amount, n negative backwards: an
+        add or sub per set bit of n - shifted where the ISA shifts the operand
+        (AArch64 add x, x, y, LSL #s; x86 lea): 2*VL*VL one instruction off a
+        register holding VL*VL - plain adds or subs repeated where it doesn't
+        """
+        op = "sub" if n < 0 else "add"
+        plain = getattr(self.gen, f"{op}_greg_greg")
+        shifted = getattr(self.gen, f"{op}_greg_greg_shifted")
+        out, k, bit = [], abs(n), 0
+        while k:
+            if k & 1:
+                if not bit:
+                    out.append(plain(dst=areg, reg1=areg, reg2=source))
+                elif self.shifted_available(op, bit):
+                    out.append(shifted(dst=areg, reg1=areg, reg2=source, shift=bit))
+                else:
+                    out += [plain(dst=areg, reg1=areg, reg2=source)] * (1 << bit)
+            k >>= 1
+            bit += 1
+        return out
+
+    def shifted_available(self, op: str, shift: int) -> bool:
+        """
+        Whether the ISA adds or subtracts a register shifted by shift in one
+        instruction: asked once - a generator raises NotImplementedError where
+        it doesn't - and remembered
+        """
+        known = self.__dict__.setdefault("shifted_known", {})
+        if (op, shift) not in known:
+            reg = self.gen.greg(0)
+            try:
+                getattr(self.gen, f"{op}_greg_greg_shifted")(dst=reg, reg1=reg, reg2=reg, shift=shift)
+                known[(op, shift)] = True
+            except NotImplementedError:
+                known[(op, shift)] = False
+        return known[(op, shift)]
+
     def add_bytes(self, areg, amount: sym, comp: str) -> list[str]:
         """
         Move an address register on by a number of bytes: constants as an
-        immediate, multiples of run-time strides as adds of the stride
-        registers, which hold strides in bytes
+        immediate; whole vectors with incb/decb where the ISA counts them so;
+        multiples of a register's amount - strides, the vector length (RVV),
+        vector lengths of strides or of vectors, each held in bytes - as
+        shifted or repeated adds and subs of it (add_scaled)
         """
         dt = self.ctx.component_dts[comp]
         esize = adt_size(dt)
@@ -394,86 +435,34 @@ class signature_emitter:
         for factors, coeff in amount.terms:
             if not factors:
                 lines.append(self.gen.add_greg_imm(reg=areg, imm=coeff))
-            elif 2 == len(factors) and "VL" == factors[0] and factors[1].startswith("stride(") \
-                    and coeff > 0 and 0 == coeff % esize:
-                # a vector length of strided elements: the vector length in
-                # elements times the stride in bytes, multiplied once
-                lines += [self.gen.add_greg_greg(dst=areg, reg1=areg,
-                                                 reg2=self.vl_stride(factors[1], dt))] * (coeff // esize)
-            elif ("VL",) == factors and coeff > 0 and 0 == coeff % esize \
-                    and self.vector_length_kept:
-                # RVV: the vector length is in a register - add it in bytes
-                vlb = self.vl_bytes(dt)
-                lines += [self.gen.add_greg_greg(dst=areg, reg1=areg, reg2=vlb)] * (coeff // esize)
-            elif ("VL",) == factors and coeff and 0 == coeff % esize:
-                # whole vectors, forward or back: incb or decb (the generator
-                # splits what one instruction can't take)
-                lines.append(self.gen.add_greg_voff(reg=areg, offset=coeff // esize, dt=dt))
-            elif 1 == len(factors) and factors[0].startswith("stride(") \
-                    and coeff > 0 and 0 == coeff % esize:
-                sreg = self.stride_reg(factors[0])
-                lines += [self.gen.add_greg_greg(dst=areg, reg1=areg, reg2=sreg)] * (coeff // esize)
-            elif ("VL", "VL") == factors and coeff > 0 and 0 == coeff % esize:
+                continue
+            if 0 != coeff % esize:
+                raise specialization_error(
+                    f"moving {comp}'s address by {amount} bytes: {coeff} isn't whole elements")
+            n = coeff // esize
+            if ("VL",) == factors and not self.vector_length_kept:
+                # whole vectors, forward or back: incb or decb
+                lines.append(self.gen.add_greg_voff(reg=areg, offset=n, dt=dt))
+                continue
+            if ("VL",) == factors:
+                # RVV: the vector length in a register, in bytes
+                source = self.vl_bytes(dt)
+            elif 1 == len(factors) and factors[0].startswith("stride("):
+                source = self.stride_reg(factors[0])
+            elif 2 == len(factors) and "VL" == factors[0] and factors[1].startswith("stride("):
+                # a vector length of strided elements, multiplied once
+                source = self.vl_stride(factors[1], dt)
+            elif ("VL", "VL") == factors:
                 # vector lengths of vectors: a packed layout's next tile
-                vvreg = self.vl_squared(dt)
-                lines += [self.gen.add_greg_greg(dst=areg, reg1=areg, reg2=vvreg)] * (coeff // esize)
-            elif coeff < 0 and 0 == coeff % esize and (
-                    (1 == len(factors) and factors[0].startswith("stride(")) or ("VL",) == factors
-                    or ("VL", "VL") == factors
-                    or (2 == len(factors) and "VL" == factors[0] and factors[1].startswith("stride("))):
-                # backwards: the amount's register negated once, added as often
-                if 1 == len(factors) and factors[0].startswith("stride("):
-                    source = self.stride_reg(factors[0])
-                elif ("VL", "VL") == factors:
-                    source = self.vl_squared(dt)
-                elif ("VL",) == factors:
-                    source = self.vl_bytes(dt)
-                else:
-                    source = self.vl_stride(factors[1], dt)
-                cache = getattr(self, "negated", None)
-                if cache is not None and source.idx in cache:
-                    negated = cache[source.idx]
-                else:
-                    negated = self.greg()
-                    neg = self.gen.mul_greg_imm(src=source, dst=negated, factor=-1)
-                    # in a loop: computed before it, once
-                    setup = getattr(self, "negated_setup", None)
-                    (setup if setup is not None else lines).append(neg)
-                lines += [self.gen.add_greg_greg(dst=areg, reg1=areg, reg2=negated)] * (-coeff // esize)
-                if cache is not None:
-                    cache[source.idx] = negated
-                else:
-                    self.rt.unuse_reg("greg", negated.idx)
+                source = self.vl_squared(dt)
             else:
                 raise specialization_error(
                     f"moving {comp}'s address by {amount} bytes needs run-time arithmetic "
                     f"(vector length), which is not specialized yet")
+            lines += self.add_scaled(areg, source, n)
         return lines
 
     # --- operations ----------------------------------------------------------
-
-    def hoist_negations(self, lines, loop) -> list[str]:
-        """
-        A loop's lines, the negations its moves back asked for placed before
-        its label: computed once, not every iteration
-        """
-        flat = [l.strip() for chunk in lines
-                for l in (chunk.splitlines() if isinstance(chunk, str) else chunk) if l.strip()]
-        setup = [l.strip() for chunk in (getattr(self, "negated_setup", None) or [])
-                 for l in (chunk.splitlines() if isinstance(chunk, str) else chunk) if l.strip()]
-        self.negated_setup = None
-        if setup:
-            at = flat.index(f"{loop}:") if f"{loop}:" in flat else 0
-            flat = flat[:at] + setup + flat[at:]
-        return flat
-
-    def release_negated(self):
-        """
-        The negated amounts a loop kept: free again, and none kept after it
-        """
-        for reg in (getattr(self, "negated", None) or {}).values():
-            self.rt.unuse_reg("greg", reg.idx)
-        self.negated = None
 
     def slices(self, op) -> list[str]:
         """
@@ -511,10 +500,7 @@ class signature_emitter:
         explicit = op.info.get("unrolled")
         scale = op.subtiling.unroll if explicit else 1
         plan = getattr(op, "walk_plan", None)
-        # a register's amount negated once a loop, for every move back: the
-        # negations collected and placed before the loop
-        self.negated = {}
-        self.negated_setup = []
+
         # the plan's registers walk themselves: where each stands, as an offset
         # from its home at this iteration's first slice
         current = {key: sym.const(0) for key in plan} if plan else {}
@@ -723,10 +709,10 @@ class signature_emitter:
             lines += emit_ops(rest)
             for r in [counter, index] + list(shared.values()) + list(steps.values()):
                 self.rt.unuse_reg("greg", r.idx)
-            self.release_negated()
             release_pointers()
             settle()
-            return self.hoist_negations(lines, loop)
+            return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
+                if l.strip()]
         for u in range(1 if explicit else unroll):
             group = u % rotate
             saved = {}
@@ -777,10 +763,10 @@ class signature_emitter:
         lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
         for r in [counter, index] + list(shared.values()) + list(steps.values()):
             self.rt.unuse_reg("greg", r.idx)
-        self.release_negated()
         release_pointers()
         settle()
-        return self.hoist_negations(lines, loop)
+        return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
+                if l.strip()]
 
     def loop(self, op) -> list[str]:
         """
