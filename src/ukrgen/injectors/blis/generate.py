@@ -10,9 +10,9 @@ from __future__ import annotations
 import os
 
 from ...flow.isa_map import make_generator
-from .families import configuration, build_gemm
+from .families import configuration, build_gemm, build_packm
 from .cgen import (asm_source, gemm_wrapper, cntx_init, family_header, stack_buf_size,
-                   vl_helpers)
+                   vl_helpers, packm_dispatch)
 
 
 def generate(cfg: configuration, out_dir: str, stack_size: int | None = None) -> dict:
@@ -25,9 +25,10 @@ def generate(cfg: configuration, out_dir: str, stack_size: int | None = None) ->
     kernels, skipped = [], []
     defaults = {}
     for fam in cfg.families:
-        if "gemm" != fam.kind:
+        build = {"gemm": build_gemm, "packm": build_packm}.get(fam.kind)
+        if build is None:
             continue
-        built, missed = build_gemm(cfg.isa, cfg.name, fam)
+        built, missed = build(cfg.isa, cfg.name, fam)
         kernels += built
         skipped += [(fam.name,) + s for s in missed]
         for dt, size in fam.default.items():
@@ -41,10 +42,16 @@ def generate(cfg: configuration, out_dir: str, stack_size: int | None = None) ->
         written.append(rel)
     kdir = f"kernels/{cfg.name}/3"
     for k in kernels:
-        write(f"{kdir}/{k.symbol}.S", asm_source(k))
+        write(f"{'kernels/' + cfg.name + '/1m' if k.case else kdir}/{k.symbol}.S", asm_source(k))
+    helpers = vl_helpers(kernels, gen)
     write(f"{kdir}/bli_gemm_{cfg.name}.c",
-          "#include \"blis.h\"\n\n" + vl_helpers(kernels, gen) + "\n" +
-          "\n".join(gemm_wrapper(k) for k in kernels))
+          "#include \"blis.h\"\n\n" + helpers + "\n" +
+          "\n".join(gemm_wrapper(k) for k in kernels if not k.case))
+    packs = [dt for dt in ("FP32", "FP64") if any(dt == k.dtype and k.case for k in kernels)]
+    if packs:
+        write(f"kernels/{cfg.name}/1m/bli_packm_{cfg.name}.c",
+              "#include \"blis.h\"\n\n" + helpers + "\n" +
+              "\n".join(packm_dispatch(cfg.name, dt, kernels) for dt in packs))
     write(f"config/{cfg.name}/bli_cntx_init_{cfg.name}.c",
           cntx_init(cfg.name, gen, kernels, defaults, cfg.blocksizes))
     size = stack_buf_size(cfg.isa, gen, kernels, stack_size or cfg.stack_buf_size)

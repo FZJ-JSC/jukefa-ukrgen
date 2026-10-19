@@ -93,8 +93,8 @@ params:                        # ukrgen parameters for every size
 | 3b | Large tiles: C streamed through the epilogue (MRU renaming), register fitting by liveness | done: the default 8x3v builds |
 | 4 | BLIS patching: configuration and kernel directories, registry, PR 960, `inherit` | done: `patch.py`, `clitools/blisgen.py` |
 | 5 | BLIS build and testsuite: x86 natively, SVE/RVV under qemu | SVE done (gemm ukr + gemm, sd, rcg); x86, RVV (LMUL 1 and 2), NEON next |
-| 6 | packm families: cases, generated dispatch tree, reference fallback | |
-| 7 | packm in the BLIS configuration; testsuite again | |
+| 6 | packm families: cases, generated dispatch tree, reference fallback | vec cases done; trans cases need VL-stepped loops (RVV) and scatters (SVE) |
+| 7 | packm in the BLIS configuration; testsuite again | done for SVE (vec cases) |
 | 8 | Old patcher and templates retired (`clitools/blisgen.py` on the new path) | |
 
 ## Notes from the work
@@ -233,3 +233,25 @@ void bli_cntx_init_<config>( cntx_t* cntx )
   2vx12x8, 2vx14x2, 2vx14x4, 2vx4x1, 3vx8x4 and LMUL 2 2vx7x4, 6x2vx4 failed
   BLIS operations beyond gemm (trmm, trsm, syr2k, her2k, gemmt, symm, 1m
   methods) - the same kernels through the full testsuite.
+- Parameters choosing an STO's implementation are `--<sto>-tileop` (were
+  `--<sto>-to`); family files' `params` use the new names.
+- The full testsuite is postponed: it runs on native hardware (AVX-512, SVE,
+  SME, RVV); failing kernels come back here to be tested one by one.
+- Step 6: a packm family file (`--spackm-config`, `--dpackm-config`) lists
+  cases - `kind: vec` (cdim = m vectors, A contiguous along cdim) or
+  `kind: trans` (cdim = m elements, A contiguous along the panel) - each with
+  its sizes and parameters (the flow's `pack` microkernel: Y = kappa X).
+  `build_packm` builds each; `packm_dispatch` writes `bli_<ch>packm_<config>`:
+  a full panel (cdim = cdim_max, n = n_max, no broadcast, P's rows cdim
+  apart) of a size a case packs goes to it - vec when inca is 1, trans when
+  lda is 1 - everything else to the reference `bli_<ch><ch>packm_<config>_ref`
+  (declared by the dispatch), which also fills the edges. The context
+  registers it (`BLIS_PACKM_KER`). Tested through the stub (full panels by
+  the cases, others by the reference, all exact, SVE at 256 and 512 bits),
+  then in BLIS: SVE vec cases 1..8 vectors for singles and doubles beside the
+  gemm families, the reduced testsuite passing (1920 at 256 bits, 3648 at
+  512) - packing A's MR panels (inca 1) by the generated cases.
+- trans cases don't build yet: on SVE a strided vector store isn't a
+  candidate (it needs scatters); on RVV the loop along n stepping by the
+  vector length isn't counted yet (strip-mining). B's NR panels (lda 1) are
+  the reference's until then.

@@ -135,7 +135,7 @@ def gemm_table(dtype: str, kernels: list[kernel], default: tuple | None) -> str:
     else the family's default size, else the first
     """
     ctype, ch = CTYPE[dtype], DT_CHAR[dtype]
-    mine = [k for k in kernels if dtype == k.dtype]
+    mine = [k for k in kernels if dtype == k.dtype and not k.case]
     if not mine:
         return ""
     rows = []
@@ -214,9 +214,10 @@ def cntx_init(config_name: str, gen, kernels: list[kernel], defaults: dict, bloc
     defaults (PR 960 overriding them afterwards); a data type without
     kernels keeps the reference's kernel and blocksizes
     """
-    dts = [dt for dt in ("FP32", "FP64") if any(dt == k.dtype for k in kernels)]
-    tables = "".join(gemm_table(dt, kernels, defaults.get(dt)) for dt in dts)
-    protos = "\n".join(gemm_prototype(k.symbol) for k in kernels)
+    dts = [dt for dt in ("FP32", "FP64") if any(dt == k.dtype and not k.case for k in kernels)]
+    packs = [dt for dt in ("FP32", "FP64") if any(dt == k.dtype and k.case for k in kernels)]
+    protos = "\n".join([gemm_prototype(k.symbol) for k in kernels if not k.case] +
+                       [packm_prototype(config_name, dt) for dt in packs])
     lines = []
     for dt in ("FP32", "FP64"):
         ch, ctype = DT_CHAR[dt], CTYPE[dt]
@@ -236,16 +237,19 @@ def cntx_init(config_name: str, gen, kernels: list[kernel], defaults: dict, bloc
             lines.append("\n".join(
                 f"\tconst dim_t {b}_{ch} = bli_cntx_get_blksz_def_dt( {NUM[dt]}, BLIS_{b.upper()}, cntx );"
                 for b in ("mr", "nr", "mc", "nc", "kc")))
-    ukrs = "".join(f"\t                   BLIS_GEMM_UKR, {NUM[dt]}, k_{DT_CHAR[dt]}->ukr,\n" for dt in dts)
+    ukrs = "".join(f"\t                   BLIS_GEMM_UKR, {NUM[dt]}, k_{DT_CHAR[dt]}->ukr,\n" for dt in dts) + \
+           "".join(f"\t                   BLIS_PACKM_KER, {NUM[dt]}, bli_{DT_CHAR[dt]}packm_{config_name},\n"
+                   for dt in packs)
     prefs = "".join(f"\t                        BLIS_GEMM_UKR_ROW_PREF, {NUM[dt]}, k_{DT_CHAR[dt]}->row_pref,\n"
                     for dt in dts)
     choose = "\n".join(lines)
-    register = f"""\
+    register = (f"""\
 	bli_cntx_set_ukrs( cntx,
 {ukrs}	                   BLIS_VA_END );
+""" if dts or packs else "") + (f"""\
 	bli_cntx_set_ukr_prefs( cntx,
 {prefs}	                        BLIS_VA_END );
-""" if dts else ""
+""" if dts else "")
     helpers = vl_helpers(kernels, gen)
     tables = "".join(gemm_table(dt, kernels, defaults.get(dt)) for dt in dts)
     return f"""\
@@ -336,4 +340,84 @@ def family_header(config_name: str, stack_size: int) -> str:
 #define BLIS_RELAX_MCNR_NCMR_CONSTRAINTS
 
 #endif
+"""
+
+
+#: a packm case's parameters as BLIS passes them: the panel's length, A and
+#: its strides (bytes), P, kappa
+PACKM_ARGS = {
+    "n": ("dim_t", "n"),
+    "base(X)": ("const void*", "a"),
+    "base(Y)": ("void*", "p"),
+    "base(kappa)": ("const void*", "kappa"),
+    "stride(X,n)": ("inc_t", "lda * (inc_t)sizeof({ctype})"),
+    "stride(X,m)": ("inc_t", "inca * (inc_t)sizeof({ctype})"),
+}
+
+PACKM_SIGNATURE = """\
+     (
+             conj_t  conja,
+             pack_t  schema,
+             dim_t   cdim,
+             dim_t   cdim_max,
+             dim_t   cdim_bcast,
+             dim_t   n,
+             dim_t   n_max,
+       const void*   kappa,
+       const void*   a, inc_t inca, inc_t lda,
+             void*   p,             inc_t ldp,
+       const void*   params,
+       const cntx_t* cntx
+     )"""
+
+
+def packm_prototype(config_name: str, dtype: str) -> str:
+    return f"void bli_{DT_CHAR[dtype]}packm_{config_name}\n{PACKM_SIGNATURE};"
+
+
+def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel]) -> str:
+    """
+    The data type's packm: a full panel - cdim of cdim_max rows, n of n_max,
+    no broadcast, P's rows cdim apart - of a size a case packs goes to that
+    case: vec where A is contiguous along cdim (inca 1), trans where along
+    the panel (lda 1); everything else to the reference, which also fills
+    the edges
+    """
+    ctype, ch = CTYPE[dtype], DT_CHAR[dtype]
+    mine = [k for k in kernels if dtype == k.dtype and k.case]
+    decls, branches = [], {"vec": [], "trans": []}
+    for k in mine:
+        unknown = [p for p in k.params if p not in PACKM_ARGS]
+        if unknown:
+            raise ValueError(f"{k.symbol}: no BLIS argument for its parameters {unknown}")
+        decls.append(f"void {asm_symbol(k)}( {', '.join(PACKM_ARGS[p][0] for p in k.params)} );")
+        args = ", ".join(PACKM_ARGS[p][1].format(ctype=ctype) for p in k.params)
+        branches[k.case].append(
+            f"\t\tif ( cdim == {c_expr(k.mr, ctype, k.vl_fn)} ) {{ {asm_symbol(k)}( {args} ); return; }}")
+    vec = "\n".join(branches["vec"])
+    trans = "\n".join(branches["trans"])
+    return f"""\
+{chr(10).join(decls)}
+
+// the reference, for everything the cases don't pack
+void bli_{ch}{ch}packm_{config_name}_ref
+{PACKM_SIGNATURE};
+
+void bli_{ch}packm_{config_name}
+{PACKM_SIGNATURE}
+{{
+	if ( cdim_bcast == 1 && cdim == cdim_max && n == n_max && ldp == cdim )
+	{{
+		if ( inca == 1 )
+		{{
+{vec}
+		}}
+		if ( lda == 1 )
+		{{
+{trans}
+		}}
+	}}
+	bli_{ch}{ch}packm_{config_name}_ref( conja, schema, cdim, cdim_max, cdim_bcast, n, n_max,
+	                              kappa, a, inca, lda, p, ldp, params, cntx );
+}}
 """

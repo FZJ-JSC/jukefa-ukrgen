@@ -77,6 +77,10 @@ class family:
     params: dict
     sizes: dict[str, list[int]]
     default: dict[str, tuple] = field(default_factory=dict)
+    #: packm: the cases accelerated - (kind, sizes, params): vec (cdim m
+    #: vectors, A contiguous along cdim), trans (cdim m elements, A
+    #: contiguous along the panel's length)
+    cases: list[tuple] = field(default_factory=list)
 
     @staticmethod
     def from_yaml(kind: str, entry: dict) -> "family":
@@ -84,8 +88,11 @@ class family:
         default = {}
         for dt, size in (entry.get("default") or {}).items():
             default[dt] = tuple(parse_sizes(v)[0] for v in str(size).split("x"))
+        cases = [(case["kind"], parse_sizes(case["m"]), dict(case.get("params") or {}))
+                 for case in (entry.get("cases") or [])]
         return family(kind=kind, name=entry["family"], dtypes=list(entry.get("dtypes", ["FP64"])),
-                      params=dict(entry.get("params") or {}), sizes=sizes, default=default)
+                      params=dict(entry.get("params") or {}), sizes=sizes, default=default,
+                      cases=cases)
 
 
 @dataclass
@@ -173,6 +180,8 @@ class kernel:
     simd_size_c: str = ""
     #: the C function giving its vector length in elements (cgen assigns it)
     vl_fn: str = "ukrgen_vl"
+    #: packm: the case (vec, trans)
+    case: str = ""
 
 
 def extent_of(ctx, idx: str) -> sym:
@@ -232,5 +241,40 @@ def build_gemm(isa: str, config_name: str, fam: family) -> tuple[list[kernel], l
                 built.append(kernel(family=fam.name, dtype=dt, size=(m, n), mr=mr, nr=nr,
                                     symbol=symbol, params=list(program.params), c_layout=c_layout,
                                     program=program,
+                                    simd_size_c=getattr(ctx.gen, "c_simd_size_function", "")))
+    return built, skipped
+
+
+def build_packm(isa: str, config_name: str, fam: family) -> tuple[list[kernel], list[tuple]]:
+    """
+    Every case and size of a packm family the ISA builds - kernels packing
+    a full panel of cdim (mr) rows, n long, scaled by kappa - and (data type,
+    (case, size), reason) for each it can't
+    """
+    built, skipped = [], []
+    for dt in fam.dtypes:
+        for case, ms, case_params in fam.cases:
+            for m in ms:
+                params = {"isa": isa, "ukr": "pack", "n": "1"}
+                params.update(fam.params)
+                params.update(case_params)
+                for comp in ("X", "Y", "kappa"):
+                    params[f"{comp}-data-type"] = dt
+                params["m"] = str(m)
+                try:
+                    ctx, result = run_flow(params)
+                except Exception as err:
+                    lines = [l.strip() for l in str(err).splitlines() if l.strip()]
+                    skipped.append((dt, (case, m), lines[0] if lines else type(err).__name__))
+                    continue
+                if not getattr(result, "completed", False) or not ctx.emitted:
+                    skipped.append((dt, (case, m), "the flow didn't complete"))
+                    continue
+                cdim = str(extent_of(ctx, "m"))
+                symbol = f"bli_{DT_CHAR[dt]}packm_{config_name}_{fam.name}_{case}{size_name(cdim)}"
+                program = ctx.emitted[0]
+                built.append(kernel(family=fam.name, dtype=dt, size=(m, 1), mr=cdim, nr="1",
+                                    symbol=symbol, params=list(program.params), c_layout="col",
+                                    program=program, case=case,
                                     simd_size_c=getattr(ctx.gen, "c_simd_size_function", "")))
     return built, skipped

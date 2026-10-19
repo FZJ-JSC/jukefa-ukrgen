@@ -167,6 +167,34 @@ int main( void )
             for out, tile in zip(outs, tiles):
                 self.assertIn(f"{tile}: 81 runs, 0 wrong", out, k.symbol)
 
+    @needs_tools
+    def test_packm(self):
+        from ukrgen.injectors.blis.families import build_packm
+        from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+               "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:p"]}
+        fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"],
+                                         "cases": [{"kind": "vec", "m": [1, 2], "params": vec}]})
+        built, skipped = build_packm("sve", "ukrgen_sve", fam)
+        self.assertEqual(["bli_dpackm_ukrgen_sve_p_vec1v", "bli_dpackm_ukrgen_sve_p_vec2v"],
+                         [k.symbol for k in built])
+        src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
+              vl_helpers(built, make_generator("sve")) + \
+              "\n#define bli_ddpackm_ukrgen_sve_ref REF\n" + \
+              "typedef int conj_t;\ntypedef int pack_t;\n" + \
+              "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
+              "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
+              packm_dispatch("ukrgen_sve", "FP64", built) + \
+              "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( double ) ); }\n"
+        harness = open(os.path.join(HERE, "packm_harness.c")).read() \
+            .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
+        outs = self.run_c("sve", src + harness, built,
+                          [[QEMU, "-cpu", f"max,sve{v}=on"] for v in (256, 512)],
+                          ["-DPACKM=bli_dpackm_ukrgen_sve"])
+        for out in outs:
+            # three full panels by the generated cases, three by the reference
+            self.assertIn("6 runs, 3 by generated cases, 0 wrong", out)
+
     def test_stack_and_family_header(self):
         fam, built = build("sve", "FP64", [2], [3])
         # 2 vectors by 3 doubles at 2048 bits: 64 x 3 x 8 bytes; at least BLIS's 2048
