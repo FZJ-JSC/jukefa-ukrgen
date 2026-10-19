@@ -11,7 +11,9 @@ typedef NT h;
 #include KERNEL_H
 #define LDA 37
 #define LDB 41
+#ifndef LDC
 #define LDC 43
+#endif
 #define KMAX 8
 #define GUARD 8
 /* columns of C the buffer holds (rows, row-major) */

@@ -413,12 +413,19 @@ class signature_emitter:
                     and coeff > 0 and 0 == coeff % esize:
                 sreg = self.stride_reg(factors[0])
                 lines += [self.gen.add_greg_greg(dst=areg, reg1=areg, reg2=sreg)] * (coeff // esize)
+            elif ("VL", "VL") == factors and coeff > 0 and 0 == coeff % esize:
+                # vector lengths of vectors: a packed layout's next tile
+                vvreg = self.vl_squared(dt)
+                lines += [self.gen.add_greg_greg(dst=areg, reg1=areg, reg2=vvreg)] * (coeff // esize)
             elif coeff < 0 and 0 == coeff % esize and (
                     (1 == len(factors) and factors[0].startswith("stride(")) or ("VL",) == factors
+                    or ("VL", "VL") == factors
                     or (2 == len(factors) and "VL" == factors[0] and factors[1].startswith("stride("))):
                 # backwards: the amount's register negated once, added as often
                 if 1 == len(factors) and factors[0].startswith("stride("):
                     source = self.stride_reg(factors[0])
+                elif ("VL", "VL") == factors:
+                    source = self.vl_squared(dt)
                 elif ("VL",) == factors:
                     source = self.vl_bytes(dt)
                 else:
@@ -993,6 +1000,23 @@ class signature_emitter:
             reg = self.greg()
             self.strides_in[key] = reg
             self.late_setup.append(self.gen.mov_greg_imm(reg=reg, imm=nbytes))
+        return self.strides_in[key]
+
+    def vl_squared(self, dt):
+        """
+        A register holding the vector length squared, in elements, times the
+        element size in bytes: a vector length of vectors - the next tile
+        along a packed layout's outer index - multiplied once in setup
+        """
+        key = f"VL*VL:{adt_size(dt)}"
+        if key not in self.strides_in:
+            self.recipes.append(("vl_squared", (dt,), self.regions_started))
+            vlreg = self.vl_elements(dt)
+            reg = self.greg()
+            self.strides_in[key] = reg
+            self.late_setup += [self.gen.mul_greg_greg(dst=reg, reg1=vlreg, reg2=vlreg),
+                                self.gen.shift_greg_left(reg=reg,
+                                                         bit_count=adt_size(dt).bit_length() - 1)]
         return self.strides_in[key]
 
     def vl_bytes(self, dt):

@@ -443,3 +443,47 @@ class test_slice_pointers(unittest.TestCase):
         bases = {l.split("[")[1].split(",")[0].split("]")[0] for l in code[start:end]
                  if l.startswith(("ld1w", "st1w")) and "[" in l}
         self.assertLessEqual(len(bases), 2, bases)
+
+
+class test_packed_c(unittest.TestCase):
+    """
+    C packed along n: column slices a microtile's m extent - vector lengths -
+    apart, stepped with incb, the tiles along n vector lengths of vectors
+    apart; under qemu with C's leading dimension the tile's height
+    """
+
+    def test_runs(self):
+        cc, qemu = "aarch64-linux-gnu-gcc", "qemu-aarch64-static"
+        if not (shutil.which(cc) and shutil.which(qemu)):
+            self.skipTest(f"needs {cc} and {qemu}")
+        from specializers.test_native import header
+        stages = list(t.STAGES)
+        i = [x.__name__ for x in stages].index("model_stage") + 1
+        saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
+        try:
+            ctx, res = t.mm(isa="sme", ukr="gemm", **{**GEMM, "C-layout": ["m:c", "n:p"]})
+        finally:
+            t.STAGES = saved
+        p = ctx.emitted[0]
+        self.assertNotIn("stride(C,n)", p.params)
+        code = p.instructions()
+        self.assertTrue(any(l.startswith("incb") and "MUL #2" in l for l in code))
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "ukr.s"), "w") as f:
+                f.write("\n".join(p.function("ukr")) + "\n")
+            with open(os.path.join(d, "ukr.h"), "w") as f:
+                # the harness passes C's leading dimension: unused here
+                f.write(header(p.params).replace(");", ", long unused);"))
+            r = subprocess.run([cc, "-c", "-Wa,-march=armv9-a+sme+sme-f64f64", os.path.join(d, "ukr.s"),
+                                "-o", os.path.join(d, "ukr.o")], capture_output=True, text=True)
+            self.assertEqual(0, r.returncode, r.stderr)
+            for svl, rows in ((256, 8), (512, 16)):
+                exe = os.path.join(d, f"run{svl}")
+                r = subprocess.run([cc, "-static", "-O1", f"-DLDC={rows}", f'-DKERNEL_H="{d}/ukr.h"',
+                                    os.path.join(HERE, "native_harness.c"), os.path.join(d, "ukr.o"),
+                                    "-o", exe, "-lm"], capture_output=True, text=True)
+                self.assertEqual(0, r.returncode, r.stderr)
+                r = subprocess.run([qemu, "-cpu", f"max,sme=on,sme{svl}=on", exe],
+                                   capture_output=True, text=True, timeout=120)
+                self.assertIn(f"tile {rows} x {rows}", r.stdout)
+                self.assertIn(", 0 wrong", r.stdout)
