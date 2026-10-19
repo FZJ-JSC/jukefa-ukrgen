@@ -770,7 +770,33 @@ class signature_emitter:
         loop = f"ukr{next(self.labels)}_slices"
         lines.append(self.gen.label(label=loop))
         unroll = op.subtiling.unroll
+        # the block's own vector temporaries - written before read - rotate
+        # through as many register sets as asked: an unrolled iteration's
+        # slices don't wait on each other's registers
+        rotate = max(1, min(op.subtiling.registers, unroll))
+        def keys(b, positions):
+            types = getattr(b, "rtypes", None) or []
+            return [(b.indices[p].component, b.indices[p].indices[0], types[p] if p < len(types) else None)
+                    for p in positions]
+        local, read = [], set()
+        for b in op.block:
+            read |= set(keys(b, getattr(b, "reads", [])))
+            for k in keys(b, getattr(b, "writes", [])):
+                if rgt.VEC == k[2] and k not in read and k not in local:
+                    local.append(k)
+        sets = [{} for _ in range(rotate)]
         for u in range(unroll):
+            group = u % rotate
+            saved = {}
+            if group:
+                for k in local:
+                    if k not in self.phys:
+                        continue
+                    if k not in sets[group]:
+                        n = self.rt.reserve_any_reg("vreg")
+                        sets[group][k] = (n, self.gen.vreg(n))
+                    saved[k] = self.phys[k]
+                    self.phys[k] = sets[group][k][1]
             for b in op.block:
                 if b in sliced:
                     b.properties.update(slice_reg=index, slice_imm=u)
@@ -788,6 +814,10 @@ class signature_emitter:
                     lines += self._emit_op(b)
             for walker, delta in zip(walkers, deltas):
                 lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
+            self.phys.update(saved)
+        for group in sets:
+            for n, _ in group.values():
+                self.rt.unuse_reg("vreg", n)
         lines.append(self.gen.add_greg_imm(reg=index, imm=unroll))
         lines.append(self.gen.add_greg_imm(reg=counter, imm=-unroll))
         lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))

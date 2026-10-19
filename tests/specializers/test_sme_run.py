@@ -213,3 +213,51 @@ class test_slice_irmods(unittest.TestCase):
                 inside = False
             elif inside:
                 self.assertFalse(l.startswith("ld1rd"), l)
+
+
+class test_slice_unroll(unittest.TestCase):
+    """
+    Loops over slices unrolled - an iteration's slices at the immediates 0
+    and 1 (doubles), their vectors in two register sets - run exactly
+    """
+
+    def test_runs(self):
+        cc, qemu = "aarch64-linux-gnu-gcc", "qemu-aarch64-static"
+        if not (shutil.which(cc) and shutil.which(qemu)):
+            self.skipTest(f"needs {cc} and {qemu}")
+        from specializers.test_native import header
+        stages = list(t.STAGES)
+        i = [x.__name__ for x in stages].index("model_stage") + 1
+        saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
+        try:
+            ctx, res = t.mm(isa="sme", ukr="gemm", **GEMM, **{
+                "pre-specialize-irmods": ["fuse_slices", "forward_slices", "hoist_slices",
+                                          "unroll_loops", "hoist"],
+                "unroll_loops-factor": "2", "unroll_loops-registers": "2"})
+        finally:
+            t.STAGES = saved
+        code = ctx.emitted[0].instructions()
+        start = next(i for i, l in enumerate(code) if l.endswith("_slices:")
+                     and any(x.startswith("mova") for x in code[i:i + 20]))
+        end = next(i for i, l in enumerate(code) if i > start and l.startswith("cbnz"))
+        body = code[start:end]
+        self.assertTrue(any("[w12,1]" in l.replace(" ", "") for l in body))
+        vectors = {w for l in body for w in l.replace(",", " ").split() if w.startswith("z") and "." in w}
+        self.assertGreater(len(vectors), 3)
+        with tempfile.TemporaryDirectory() as d:
+            for name, text in (("ukr.s", "\n".join(ctx.emitted[0].function("ukr")) + "\n"),
+                               ("ukr.h", header(ctx.emitted[0].params))):
+                with open(os.path.join(d, name), "w") as f:
+                    f.write(text)
+            r = subprocess.run([cc, "-c", "-Wa,-march=armv9-a+sme+sme-f64f64",
+                                os.path.join(d, "ukr.s"), "-o", os.path.join(d, "ukr.o")],
+                               capture_output=True, text=True)
+            self.assertEqual(0, r.returncode, r.stderr)
+            r = subprocess.run([cc, "-static", "-O1", f'-DKERNEL_H="{d}/ukr.h"',
+                                os.path.join(HERE, "native_harness.c"), os.path.join(d, "ukr.o"),
+                                "-o", os.path.join(d, "run"), "-lm"], capture_output=True, text=True)
+            self.assertEqual(0, r.returncode, r.stderr)
+            for svl in (256, 512):
+                r = subprocess.run([qemu, "-cpu", f"max,sme=on,sme{svl}=on", os.path.join(d, "run")],
+                                   capture_output=True, text=True, timeout=120)
+                self.assertIn(", 0 wrong", r.stdout)
