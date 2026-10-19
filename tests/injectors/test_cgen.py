@@ -195,47 +195,53 @@ int main( void )
             # three full panels by the generated cases, three by the reference
             self.assertIn("6 runs, 3 by generated cases, 0 wrong", out)
 
-    @unittest.skipUnless(shutil.which("riscv64-linux-gnu-gcc") and shutil.which("qemu-riscv64-static"),
-                         "needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
     def test_packm_trans(self):
         # vectors along the panel, counted in chunks of a vector length,
-        # unrolled with a tail; the last partial chunk the reference's
+        # unrolled with a tail; the last partial chunk the reference's. Each
+        # vector stored into the packed panel a cdim apart: RVV's strided
+        # store, SVE's scatter
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
-        trans = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"],
-                 "store-tileop": ["Y.VEC:strided"], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"]}
         cases = ("{ 3, 3, 2 * vl + 3, 2 * vl + 9, 1, 1 }, { 3, 3, 4 * vl, 4 * vl + 1, 1, 0 }, "
                  "{ 3, 3, 3 * vl + 1, 3 * vl + 2, 1, 1 }, { 3, 3, vl - 1, vl + 2, 1, 1 }, "
                  "{ 3, 4, 2 * vl, 2 * vl + 9, 1, 1 }")
-        cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
-        fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "unroll": 2,
-                                         "cases": [{"kind": "trans", "m": [3], "params": trans}]})
-        built, skipped = build_packm("rvv", "ukrgen_rvv", fam)
-        self.assertEqual(1, len(built), skipped)
-        self.assertEqual("VL", built[0].loop_unit)
-        src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
-              vl_helpers(built, make_generator("rvv")) + \
-              "\n#define bli_ddpackm_ukrgen_rvv_ref REF\ntypedef int conj_t;\ntypedef int pack_t;\n" + \
-              "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
-              "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
-              packm_dispatch("ukrgen_rvv", "FP64", built) + \
-              "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( double ) ); }\n" + \
-              open(os.path.join(HERE, "packm_harness.c")).read() \
-              .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
-        with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "k.s"), "w") as f:
-                f.write(asm_source(built[0]))
-            subprocess.run(cc + ["-c", os.path.join(d, "k.s"), "-o", os.path.join(d, "k.o")], check=True)
-            with open(os.path.join(d, "t.c"), "w") as f:
-                f.write(src)
-            r = subprocess.run(cc + ["-O1", f"-I{HERE}", f"-DCASES={cases}", "-DPACKM=bli_dpackm_ukrgen_rvv",
-                                     os.path.join(d, "t.c"), os.path.join(d, "k.o"), "-o", os.path.join(d, "run")],
-                               capture_output=True, text=True)
-            self.assertEqual(0, r.returncode, r.stderr)
-            for vlen in (128, 256):
-                out = subprocess.run(["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={vlen},elen=64",
-                                      os.path.join(d, "run")], capture_output=True, text=True, timeout=60).stdout
-                self.assertIn("5 runs, 1 by generated cases, 0 wrong", out)
+        isas = {"rvv": ("Y.VEC:strided", ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"],
+                        [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"] for v in (128, 256)]),
+                "sve": ("Y.VEC:scatter", CC, [[QEMU, "-cpu", f"max,sve{v}=on"] for v in (256, 512)])}
+        for isa, (store, cc, runners) in isas.items():
+            if not (shutil.which(cc[0]) and shutil.which(runners[0][0])):
+                continue
+            trans = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"],
+                     "store-tileop": [store], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"]}
+            fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "unroll": 2,
+                                             "cases": [{"kind": "trans", "m": [3], "params": trans}]})
+            built, skipped = build_packm(isa, f"ukrgen_{isa}", fam)
+            self.assertEqual(1, len(built), skipped)
+            self.assertEqual("VL", built[0].loop_unit)
+            src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
+                  vl_helpers(built, make_generator(isa)) + \
+                  f"\n#define bli_ddpackm_ukrgen_{isa}_ref REF\ntypedef int conj_t;\ntypedef int pack_t;\n" + \
+                  "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
+                  "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
+                  packm_dispatch(f"ukrgen_{isa}", "FP64", built) + \
+                  "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( double ) ); }\n" + \
+                  open(os.path.join(HERE, "packm_harness.c")).read() \
+                  .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
+            with tempfile.TemporaryDirectory() as d:
+                with open(os.path.join(d, "k.s"), "w") as f:
+                    f.write(asm_source(built[0]))
+                subprocess.run(cc + ["-c", os.path.join(d, "k.s"), "-o", os.path.join(d, "k.o")], check=True)
+                with open(os.path.join(d, "t.c"), "w") as f:
+                    f.write(src)
+                r = subprocess.run(cc + ["-O1", f"-I{HERE}", f"-DCASES={cases}",
+                                         f"-DPACKM=bli_dpackm_ukrgen_{isa}", os.path.join(d, "t.c"),
+                                         os.path.join(d, "k.o"), "-o", os.path.join(d, "run")],
+                                   capture_output=True, text=True)
+                self.assertEqual(0, r.returncode, r.stderr)
+                for runner in runners:
+                    out = subprocess.run(runner + [os.path.join(d, "run")], capture_output=True,
+                                         text=True, timeout=60).stdout
+                    self.assertIn("5 runs, 1 by generated cases, 0 wrong", out, isa)
 
     def test_stack_and_family_header(self):
         fam, built = build("sve", "FP64", [2], [3])

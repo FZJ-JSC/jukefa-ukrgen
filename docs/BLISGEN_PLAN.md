@@ -93,7 +93,7 @@ params:                        # ukrgen parameters for every size
 | 3b | Large tiles: C streamed through the epilogue (MRU renaming), register fitting by liveness | done: the default 8x3v builds |
 | 4 | BLIS patching: configuration and kernel directories, registry, PR 960, `inherit` | done: `patch.py`, `clitools/blisgen.py` |
 | 5 | BLIS build and testsuite: x86 natively, SVE/RVV under qemu | SVE done (gemm ukr + gemm, sd, rcg); x86, RVV (LMUL 1 and 2), NEON next |
-| 6 | packm families: cases, generated dispatch tree, reference fallback | vec and trans cases done (trans: RVV; SVE needs scatters) |
+| 6 | packm families: cases, generated dispatch tree, reference fallback | done: vec, trans (RVV strided stores, SVE scatters) |
 | 7 | packm in the BLIS configuration; testsuite again | done for SVE (vec cases) |
 | 8 | Old patcher and templates retired (`clitools/blisgen.py` on the new path) | |
 
@@ -275,4 +275,12 @@ void bli_cntx_init_<config>( cntx_t* cntx )
   reference (A and P from the first column it packs). RVV trans cases
   (cdim 3, unrolled 1 and 2) exact at VLEN 128 and 256 through the stub,
   with and without columns left over, panels shorter than a vector the
-  reference's. SVE: still no strided store candidate (scatters).
+  reference's. SVE: the same case with `store-tileop: Y.VEC:scatter` (the
+  matcher's scatter resolution; SVE has no strided store) - exact at 256 and
+  512 bits, unrolled 1 and 2.
+- RVV family files for native runs (LMUL 1 and 2, gemm vn/vm, packm vec and
+  trans): generating them shows RVV's larger gemm tiles skipped - 8x3v,
+  12xNv, 2vx12+, 3vx8+ (LMUL 1) - the epilogue not streaming C through the
+  accumulators' registers as on SVE (the scheduler's budget exceeded by
+  8-9). Next to investigate; the files' defaults are 6x3v and 4x2v until
+  then.
