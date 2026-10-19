@@ -811,6 +811,56 @@ class signature_emitter:
                 if rgt.VEC == k[2] and k not in read and k not in local:
                     local.append(k)
         sets = [{} for _ in range(rotate)]
+        # software pipelined (preload): the first copy's loads - memory loads,
+        # slices moved out of tiles - before the loop and, for the next
+        # iteration, at the end of each; the last iteration without them
+        preload = bool(op.info.get("preload")) and explicit
+        def early(b):
+            return 0 == b.properties.get("copy", 0) and (
+                (isinstance(b, lsc_load) and b in op.block) or
+                (isinstance(b, lsc_move) and "slice" in b.properties and rgt.TILE == b.rtypes[0]))
+        def emit_ops(ops):
+            out = []
+            for b in ops:
+                if b in sliced:
+                    b.properties.update(slice_reg=index, slice_imm=b.properties.get("copy", 0))
+                if isinstance(b, (lsc_load, lsc_store)):
+                    walker = walkers[b.properties.get("walk", 0)]
+                    line = self._mem(b, self.reg(b.indices[1], b.rtypes[1]), walker, 0)
+                    if line is None:
+                        raise specialization_error(f"{op.info.get('component')}: no {b.step.op} "
+                                                   f"of a slice's {b.indices[0].component} takes "
+                                                   f"a plain address")
+                    out.append(line)
+                elif isinstance(b, lsc_move):
+                    out.append(self.move(b))
+                else:
+                    out += self._emit_op(b)
+            return out
+        def advance():
+            out = [self.gen.add_greg_greg(dst=w, reg1=w, reg2=d)
+                   for w, d in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values()]
+            return out + [self.gen.add_greg_imm(reg=index, imm=unroll)]
+        if preload:
+            first = [b for b in op.block if early(b)]
+            rest = [b for b in op.block if not early(b)]
+            last = f"{loop}_last"
+            # the label emitted above starts the steady state; the first
+            # loads go before it, the count is the slices after the last group
+            label_line = lines.pop()
+            lines += emit_ops(first)
+            lines.append(self.gen.add_greg_imm(reg=counter, imm=-unroll))
+            lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.EZ, label=last))
+            lines.append(label_line)
+            lines += emit_ops(rest) + advance() + emit_ops(first)
+            lines.append(self.gen.add_greg_imm(reg=counter, imm=-unroll))
+            lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
+            lines.append(self.gen.label(label=last))
+            lines += emit_ops(rest)
+            for r in [counter, index] + list(shared.values()) + list(steps.values()):
+                self.rt.unuse_reg("greg", r.idx)
+            return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
+                    if l.strip()]
         for u in range(1 if explicit else unroll):
             group = u % rotate
             saved = {}

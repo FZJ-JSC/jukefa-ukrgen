@@ -396,3 +396,25 @@ class test_slice_scheduling(unittest.TestCase):
         body = [l.split()[0] for l in code[start + 1:start + 25]]
         # every slice moved out before the first multiply: tiles and copies
         self.assertEqual(["mova"] * 8, body[:8])
+
+
+class test_slice_preload(unittest.TestCase):
+    """
+    Loops over slices software pipelined: the first copy's slices moved out
+    of the tiles before the loop and, for the next iteration, at the end of
+    each; the last iteration without - exact at both vector lengths
+    """
+
+    def test_runs(self):
+        ctx, outs = run_gemm(self, GEMM, **{
+            "pre-specialize-irmods": ["fuse_slices", "forward_slices", "hoist_slices",
+                                      "unroll_loops", "hoist"],
+            "unroll_loops-factor": "2", "unroll_loops-registers": "2",
+            "unroll_loops-preload": "on"})
+        code = ctx.emitted[0].instructions()
+        start = next(i for i, l in enumerate(code) if l.endswith("_slices:")
+                     and sum(x.startswith("mova") for x in code[i:i + 30]) >= 4)
+        before = [l.split()[0] for l in code[start - 8:start]]
+        self.assertGreaterEqual(before.count("mova"), 4)
+        self.assertEqual("fmul", code[start + 1].split()[0])
+        self.assertTrue(any(l.endswith("_last:") for l in code))

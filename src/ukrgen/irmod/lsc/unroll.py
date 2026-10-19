@@ -33,6 +33,11 @@ class unroll_loops(lsc_irmod):
     params = [irmod_param(name="factor", default=2, parse=int,
                           description="elements a loop iteration takes: the largest dividing "
                                       "the loop's divisor, up to this"),
+              irmod_param(name="preload", default=False,
+                          parse=lambda v: str(v).lower() not in ("0", "false", "no", "off"),
+                          description="loops over slices: the first copy's loads for the next "
+                                      "iteration at the end of this one - software pipelined, "
+                                      "the last iteration without"),
               irmod_param(name="registers", default=1, parse=int,
                           description="registers an iteration's scalars rotate through "
                                       "(up to its elements): scalar loads and stores in "
@@ -59,6 +64,8 @@ class unroll_loops(lsc_irmod):
                                        registers=max(1, min(int(self.values["registers"]), factor)))
                 if "slices" == op.info.get("kind"):
                     expand_copies(program, op)
+                    if self.values["preload"] and op.subtiling.registers > 1:
+                        op.info["preload"] = True
                 changed += 1
         return changed
 
