@@ -108,7 +108,7 @@ class program_builder:
                  data_regs: dict[str, int] | None = None,
                  preload: bool = True,
                  resolve_order: list[str] | None = None,
-                 subtilings: dict | None = None):
+                 subtilings: dict | None = None, max_data_regs: dict | None = None, max_preload: dict | None = None):
         #: per component, [(resolution or None, {unroll, registers, order})]
         self.subtilings = subtilings or {}
         self.lane_groups: dict = {}
@@ -170,6 +170,8 @@ class program_builder:
                         if g not in seen:
                             seen.append(g)
         self.coords = coords
+        self.max_data_regs = dict(max_data_regs or {})
+        self.max_preload = dict(max_preload or {})
         self.data_regs = self.fit_registers(dict(self.data_regs))
 
         # the order an operation's components get their data in: which
@@ -272,12 +274,32 @@ class program_builder:
             raise model_error(
                 f"{held} of {budget} vector registers{' beside ' + str(fixed) + ' given' if fixed else ''}"
                 f": {left} left for {', '.join(free)}, at least one each - a smaller microtile fits")
-        if sum(len(self.coords[c]) for c in free) <= left:
+        # an input's ceiling: the tiles it has, --COMP-max-data-regs, and its
+        # minimal ring plus --COMP-max-preload iterations of its tiles
+        minimal = {c: self.minimal_ring(c) for c in free}
+        caps = {}
+        for c in free:
+            cap = len(self.coords[c])
+            if c in self.max_data_regs:
+                cap = min(cap, int(self.max_data_regs[c]))
+            if c in self.max_preload:
+                cap = min(cap, minimal[c] + int(self.max_preload[c]) * self.tiles_per_step(c))
+            caps[c] = max(1, cap)
+        if sum(caps[c] for c in free) <= left:
+            given.update({c: caps[c] for c in free if caps[c] < len(self.coords[c])})
             return given
+        # first what keeps an input from loading a tile twice an iteration
+        # (its minimal ring), where the registers allow; then the rest up to
+        # the ceilings, the inputs with most tiles first
         shares = {c: 1 for c in free}
         left -= len(free)
+        for c in sorted(free, key=lambda c: -len(self.coords[c])):
+            more = min(minimal[c], caps[c]) - shares[c]
+            if 0 < more <= left:
+                shares[c] += more
+                left -= more
         while left > 0:
-            grow = [c for c in free if shares[c] < len(self.coords[c])]
+            grow = [c for c in free if shares[c] < caps[c]]
             if not grow:
                 break
             for c in sorted(grow, key=lambda c: -len(self.coords[c])):
@@ -287,6 +309,40 @@ class program_builder:
                 left -= 1
         given.update(shares)
         return given
+
+    def loop_ops(self) -> list[tuple]:
+        """
+        The operations of the first loop block, in order, with their tilings
+        """
+        for block in self.comp.all_blocks():
+            if getattr(block, "loop_index", None) is not None:
+                return [(stos[n], op) for n in block.stos for _, stos in self.parts if n in stos
+                        for op in stos[n].ops]
+        return []
+
+    def minimal_ring(self, comp: str) -> int:
+        """
+        The registers an input needs not to load a tile twice in an iteration
+        of the loop: the most of its tiles needed again later at once
+        """
+        uses = [self.gcoord(tiling, comp, op.coord(comp)) for tiling, op in self.loop_ops()
+                if comp in op.tile_strs]
+        if not uses:
+            return 1
+        last = {g: i for i, g in enumerate(uses)}
+        live, most = set(), 1
+        for i, g in enumerate(uses):
+            live.add(g)
+            most = max(most, len(live))
+            live = {h for h in live if last[h] > i}
+        return most
+
+    def tiles_per_step(self, comp: str) -> int:
+        """
+        An input's tiles in an iteration of the loop
+        """
+        return max(1, len({self.gcoord(tiling, comp, op.coord(comp)) for tiling, op in self.loop_ops()
+                           if comp in op.tile_strs}))
 
     def reg_of(self, comp: str, rtype, coord: tuple) -> vreg:
         """

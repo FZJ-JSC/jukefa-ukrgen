@@ -76,6 +76,17 @@ class model_stage(stage):
                                 f"where the register file holds them, else a share of what "
                                 f"the accumulators leave")
 
+        for comp in self.data_components:
+            self.params[f"{comp}-max-data-regs"] = stage_param(
+                    value=None, required=False,
+                    description=f"At most this many data registers for {comp} where they're "
+                                f"fitted (no --{comp}-data-regs): its minimal ring - not loading "
+                                f"a tile twice an iteration - comes first where the registers "
+                                f"allow")
+            self.params[f"{comp}-max-preload"] = stage_param(
+                    value=None, required=False,
+                    description=f"At most this many loop iterations of {comp}'s tiles loaded "
+                                f"ahead: registers beyond its minimal ring, where fitted")
         for comp in self.memory:
             self.params[f"{comp}-subtiling"] = stage_param(
                     value=None, required=False,
@@ -126,6 +137,17 @@ class model_stage(stage):
                 raise stage_error(f"--{comp}-data-regs must be a positive integer, got {value}")
             data_regs[comp] = int(value)
 
+        limits = {}
+        for kind in ("max-data-regs", "max-preload"):
+            limits[kind] = {}
+            for comp in self.data_components:
+                value = self.params[f"{comp}-{kind}"].value
+                if value is None:
+                    continue
+                if not str(value).isdigit():
+                    raise stage_error(f"--{comp}-{kind} must be a whole number, got {value}")
+                limits[kind][comp] = int(value)
+
         subtilings = {}
         for comp in self.memory:
             value = self.params[f"{comp}-subtiling"].value
@@ -158,7 +180,9 @@ class model_stage(stage):
             # a split microtile's parts in one program
             programs = [program_builder(self.context, parts if len(parts) > 1 else 0, addressing,
                                         data_regs, preload=not self.params["no-preload"].value,
-                                        resolve_order=order, subtilings=subtilings).build()]
+                                        resolve_order=order, subtilings=subtilings,
+                                        max_data_regs=limits["max-data-regs"],
+                                        max_preload=limits["max-preload"]).build()]
         except model_error as err:
             raise stage_error(str(err)) from err
         self.context.programs = programs

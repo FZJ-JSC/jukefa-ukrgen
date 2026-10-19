@@ -255,3 +255,19 @@ void bli_cntx_init_<config>( cntx_t* cntx )
   candidate (it needs scatters); on RVV the loop along n stepping by the
   vector length isn't counted yet (strip-mining). B's NR panels (lda 1) are
   the reference's until then.
+- Family keys (gemm and packm; packm cases may set them too, over the
+  family's): `unroll` (along k for gemm, n for packm), `loop-order`,
+  `resolve-order`, `schedule` (scheduler distance specs), and per component
+  `max-data-regs`, `max-preload`, `max-addr-regs`, `addr-pattern` (block,
+  interleave, phase). Explicit `params` win over the keys.
+- Register fitting with limits: an input's ceiling is its tiles,
+  `--COMP-max-data-regs` and - with `--COMP-max-preload` - its minimal ring
+  plus that many iterations of its tiles. The minimal ring (the most of its
+  tiles needed again later in an iteration at once: 8x3v's B 3, A 1) comes
+  first where the registers allow, so a kernel doesn't load a tile twice an
+  iteration; what's left goes up to the ceilings, the inputs with most
+  tiles first. 8x3v on SVE: A's broadcasts in a ring of 3 fitted, 2 with
+  `max-data-regs: {A: 2}`, 1 with `max-preload: {A: 0}`.
+- Next for packm's trans cases (own tileops per case already): the kernel
+  packs n in whole chunks of unroll x VL, counted in chunks by the
+  dispatch, which leaves n % (unroll x VL) to the reference.

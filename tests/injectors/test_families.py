@@ -83,6 +83,33 @@ class test_families(unittest.TestCase):
         self.assertEqual(["vm"], [f.name for f in cfg.families])
         self.assertEqual([1, 2, 3, 4], cfg.families[0].sizes["n"])
 
+    def test_keys(self):
+        fam = family.from_yaml("gemm", {"family": "vn", "unroll": 2, "loop-order": "mnk",
+                                        "schedule": ["d(A,B)=2"], "max-data-regs": {"A": 2},
+                                        "max-preload": {"B": 1}, "max-addr-regs": {"C": 2},
+                                        "addr-pattern": {"C": "phase"},
+                                        "params": {"order": "nmk"}})
+        self.assertEqual({"k": "2", "order": "nmk", "sched-distance-specs": ["d(A,B)=2"],
+                          "A-max-data-regs": "2", "B-max-preload": "1", "C-addr-regs": "2",
+                          "C-addr-pattern": "phase"}, fam.params)
+        pack = family.from_yaml("packm", {"family": "pk", "unroll": 4, "cases": [
+            {"kind": "vec", "m": "1..2", "max-preload": {"X": 1}}]})
+        self.assertEqual({"n": "4"}, pack.params)
+        self.assertEqual(("vec", [1, 2], {"X-max-preload": "1"}), pack.cases[0])
+
+    def test_register_limits(self):
+        import re
+        def loop_registers(**extra):
+            fam = family.from_yaml("gemm", {"family": "vn", "dtypes": ["FP64"], "params": VN,
+                                            "m": [8], "n": [3], **extra})
+            built, skipped = build_gemm("sve", "ukrgen_sve", fam)
+            body = built[0].program.blocks[0].sections["body"]
+            return len({x for l in body if l.startswith("ld1rd") for x in re.findall(r"\{z(\d+)\.", l)})
+        # A's broadcasts: a ring of what's left, at most 2, the minimal 1 without preload
+        self.assertEqual(3, loop_registers())
+        self.assertEqual(2, loop_registers(**{"max-data-regs": {"A": 2}}))
+        self.assertEqual(1, loop_registers(**{"max-preload": {"A": 0}}))
+
 
 if __name__ == "__main__":
     unittest.main()

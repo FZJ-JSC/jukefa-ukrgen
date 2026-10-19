@@ -64,6 +64,35 @@ def parse_sizes(value) -> list[int]:
     return [int(text)]
 
 
+#: family keys and the ukrgen parameters they set
+KEYS = {"loop-order": "order", "resolve-order": "resolve-order",
+        "schedule": "sched-distance-specs"}
+#: per component: {component: value}
+PER_COMPONENT = {"max-data-regs": "{c}-max-data-regs", "max-preload": "{c}-max-preload",
+                 "max-addr-regs": "{c}-addr-regs", "addr-pattern": "{c}-addr-pattern"}
+#: the loop a family's unroll is along
+UNROLL = {"gemm": "k", "packm": "n"}
+
+
+def key_params(kind: str, entry: dict) -> dict:
+    """
+    The ukrgen parameters a family's keys set: unroll (k for gemm, n for
+    packm), loop-order, resolve-order, schedule (scheduler distance specs),
+    and per component max-data-regs, max-preload, max-addr-regs and
+    addr-pattern (block, interleave, phase)
+    """
+    params = {}
+    if "unroll" in entry:
+        params[UNROLL[kind]] = str(entry["unroll"])
+    for key, name in KEYS.items():
+        if key in entry:
+            params[name] = entry[key]
+    for key, name in PER_COMPONENT.items():
+        for comp, value in (entry.get(key) or {}).items():
+            params[name.format(c=comp)] = str(value)
+    return params
+
+
 @dataclass
 class family:
     """
@@ -88,11 +117,14 @@ class family:
         default = {}
         for dt, size in (entry.get("default") or {}).items():
             default[dt] = tuple(parse_sizes(v)[0] for v in str(size).split("x"))
-        cases = [(case["kind"], parse_sizes(case["m"]), dict(case.get("params") or {}))
+        cases = [(case["kind"], parse_sizes(case["m"]),
+                  {**key_params(kind, case), **dict(case.get("params") or {})})
                  for case in (entry.get("cases") or [])]
+        # the keys first, explicit params over them
+        params = key_params(kind, entry)
+        params.update(entry.get("params") or {})
         return family(kind=kind, name=entry["family"], dtypes=list(entry.get("dtypes", ["FP64"])),
-                      params=dict(entry.get("params") or {}), sizes=sizes, default=default,
-                      cases=cases)
+                      params=params, sizes=sizes, default=default, cases=cases)
 
 
 @dataclass
