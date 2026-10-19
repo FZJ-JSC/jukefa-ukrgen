@@ -1,6 +1,9 @@
 #include <stdio.h>
 #include <math.h>
-typedef double w;
+#ifndef WT
+#define WT double
+#endif
+typedef WT w;
 void ukr(long k, const w* A, const w* B, w* C, long sCn);
 #define LDC 71
 static w A[8192], B[8192], Cbuf[LDC * 64 + 128];

@@ -281,7 +281,7 @@ GEMM_ROWS = {
                       "C.TILE:slice_vec_row[0:adreg:ROW]>slice_vec_row[0:bdreg:ROW]){m=1, i=n}"]}
 
 
-def run_gemm(test, params, defines=(), **extra):
+def run_gemm(test, params, defines=(), march="armv9-a+sme+sme-f64f64", ctype="double", **extra):
     """
     An SME gemm against the gemm harness under qemu at SVL 256 and 512
     """
@@ -299,10 +299,11 @@ def run_gemm(test, params, defines=(), **extra):
     test.assertTrue(res.completed, res.output)
     p = ctx.emitted[0]
     with tempfile.TemporaryDirectory() as d:
-        for name, text in (("ukr.s", "\n".join(p.function("ukr")) + "\n"), ("ukr.h", header(p.params))):
+        for name, text in (("ukr.s", "\n".join(p.function("ukr")) + "\n"),
+                           ("ukr.h", header(p.params).replace("double", ctype))):
             with open(os.path.join(d, name), "w") as f:
                 f.write(text)
-        r = subprocess.run([cc, "-c", "-Wa,-march=armv9-a+sme+sme-f64f64",
+        r = subprocess.run([cc, "-c", f"-Wa,-march={march}",
                             os.path.join(d, "ukr.s"), "-o", os.path.join(d, "ukr.o")],
                            capture_output=True, text=True)
         test.assertEqual(0, r.returncode, r.stderr)
@@ -330,3 +331,38 @@ class test_sme_rows(unittest.TestCase):
         self.assertEqual("stride(C,m)", list(ctx.emitted[0].params)[-1])
         code = ctx.emitted[0].instructions()
         self.assertTrue(any("h.d[w12" in l for l in code))
+
+
+GEMM32 = {k: v for k, v in GEMM.items() if "sme-F64F64" != k}
+GEMM32.update({k: "FP32" for k in ("A-data-type", "B-data-type", "C-data-type", "AB-data-type")})
+
+
+class test_sme_fp32(unittest.TestCase):
+    """
+    Single precision: four tiles instead of eight, each twice as many
+    elements a side - gemm's 2x2 tiles of AB take all four, C reached
+    through vectors only once the loops over slices are fused
+    """
+
+    def test_gemm(self):
+        ctx, outs = run_gemm(self, GEMM32, defines=["-DWT=float", "-DNT=float", "-DTOL=1e-4",
+                                                    "-DNCOLS=64"],
+                             march="armv9-a+sme", ctype="float")
+        self.assertIn("tile 16 x 16", outs[0])
+        self.assertIn("tile 32 x 32", outs[1])
+        code = ctx.emitted[0].instructions()
+        tiles = {w.split(".")[0].lstrip("{").rstrip("vh") for l in code
+                 for w in l.replace(",", " ").split() if w.lstrip("{").startswith("za")}
+        self.assertTrue(tiles <= {"za0", "za1", "za2", "za3"}, tiles)
+
+    def test_tiles_run_out(self):
+        # unfused, C's tiles would be four more than single precision has
+        from ukrgen.flow.stages.stage import stage_error
+        stages = list(t.STAGES)
+        i = [x.__name__ for x in stages].index("model_stage") + 1
+        saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
+        try:
+            with self.assertRaisesRegex(stage_error, "no tile left - SINGLE has 4 tiles"):
+                t.mm(isa="sme", ukr="gemm", **GEMM32, **{"pre-specialize-irmods": ["hoist"]})
+        finally:
+            t.STAGES = saved

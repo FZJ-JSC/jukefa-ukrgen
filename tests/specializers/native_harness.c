@@ -14,18 +14,22 @@ typedef NT h;
 #define LDC 43
 #define KMAX 8
 #define GUARD 8
+/* columns of C the buffer holds (rows, row-major) */
+#ifndef NCOLS
+#define NCOLS 16
+#endif
 /* C column-major by default; row-major with C_ROW_MAJOR: C[m*LDC + n] */
 #ifdef C_ROW_MAJOR
 #define CI(m, n) ((m) * LDC + (n))
-#define MMAX 16
+#define MMAX NCOLS
 #define NMAX LDC
 #else
 #define CI(m, n) ((m) + (n) * LDC)
 #define MMAX LDC
-#define NMAX 16
+#define NMAX NCOLS
 #endif
 static h A[LDA * KMAX + 64], B[LDB * KMAX + 64];
-static w Cbuf[LDC * 16 + 2 * GUARD], C0[LDC * 16];
+static w Cbuf[LDC * NCOLS + 2 * GUARD], C0[LDC * NCOLS];
 static w *C = Cbuf + GUARD;
 
 static void call(long k, w alpha, w beta) {
@@ -36,7 +40,7 @@ int main(void) {
     /* footprint: A = B = 1, alpha 1, beta 0, k 1: the tile becomes 1 */
     for (int i = 0; i < LDA * KMAX; i++) A[i] = 1;
     for (int i = 0; i < LDB * KMAX; i++) B[i] = 1;
-    for (int i = 0; i < LDC * 16 + 2 * GUARD; i++) Cbuf[i] = -7;
+    for (int i = 0; i < LDC * NCOLS + 2 * GUARD; i++) Cbuf[i] = -7;
     call(1, 1.0, 0.0);
     int M = 0, N = 0;
     while (M < MMAX && C[CI(M, 0)] == 1) M++;
@@ -49,7 +53,7 @@ int main(void) {
         long K = ks[ki]; w alpha = alphas[ai], beta = betas[bi];
         for (int i = 0; i < LDA * KMAX; i++) A[i] = (h)((i * 7) % 13 - 6);
         for (int i = 0; i < LDB * KMAX; i++) B[i] = (h)((i * 5) % 11 - 5);
-        for (int i = 0; i < LDC * 16 + 2 * GUARD; i++) Cbuf[i] = -7;
+        for (int i = 0; i < LDC * NCOLS + 2 * GUARD; i++) Cbuf[i] = -7;
         for (int n = 0; n < N; n++) for (int m = 0; m < M; m++)
             C[CI(m, n)] = beta == 0 ? NAN : (w)((m * 3 + n * 5) % 7 - 3);
         memcpy(C0, C, sizeof(C0));
@@ -66,7 +70,7 @@ int main(void) {
             }
         }
         for (int g = 0; g < GUARD; g++)
-            if (Cbuf[g] != -7 || C[LDC * 16 + g] != -7) { if (bad < 6) printf("guard written\n"); bad++; }
+            if (Cbuf[g] != -7 || C[LDC * NCOLS + g] != -7) { if (bad < 6) printf("guard written\n"); bad++; }
         for (int n = 0; n < NMAX; n++) for (int m = 0; m < MMAX; m++)
             if ((m >= M || n >= N) && C[CI(m, n)] != -7) { if (bad < 6) printf("outside tile written C[%d,%d]\n", m, n); bad++; }
     }

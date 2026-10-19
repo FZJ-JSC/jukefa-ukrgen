@@ -568,7 +568,13 @@ class signature_emitter:
                 # a tile (SME ZA): from its own file
                 if "treg" not in getattr(self.rt, "registered_types", ()):
                     self.rt.add_type("treg", self.gen.max_tregs(dt))
-                number = self.rt.reserve_any_reg("treg")
+                try:
+                    number = self.rt.reserve_any_reg("treg")
+                except IndexError as err:
+                    raise specialization_error(
+                        f"{key[0]}: no tile left - {dt.name} has {self.gen.max_tregs(dt)} tiles, "
+                        f"all taken; fusing the loops over slices (fuse_slices, forward_slices) "
+                        f"keeps tiles out of use, or a smaller microtile needs fewer") from err
                 tag = "treg"
                 self.phys[key] = self.gen.treg(number, dt)
             else:
