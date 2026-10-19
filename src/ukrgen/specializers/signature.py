@@ -777,7 +777,14 @@ class signature_emitter:
                 walkers.append(shared[start])
                 deltas.append(steps[key])
                 continue
-            walker = self.greg()
+            try:
+                walker = self.greg()
+            except IndexError as err:
+                raise specialization_error(
+                    f"{op.info.get('component')}: a loop over slices needs a walking pointer for "
+                    f"each of {len({(w.anchor.indices[0].component, str(w.anchor.offset)) for w in op.walks})} "
+                    f"tile accesses and copies - more than the general registers left; a smaller "
+                    f"unroll needs fewer") from err
             shared[start] = walker
             lines.append(self.gen.mov_greg(src=self.aregs[(wcomp, wreg)], dst=walker))
             lines += self.add_bytes(walker, self.bytes_of(wcomp, elements - self.positions[(wcomp, wreg)]), wcomp)
@@ -814,9 +821,9 @@ class signature_emitter:
         # software pipelined (preload): the first copy's loads - memory loads,
         # slices moved out of tiles - before the loop and, for the next
         # iteration, at the end of each; the last iteration without them
-        preload = bool(op.info.get("preload")) and explicit
+        preload = int(op.info.get("preload") or 0) if explicit else 0
         def early(b):
-            return 0 == b.properties.get("copy", 0) and (
+            return b.properties.get("copy", 0) < preload and (
                 (isinstance(b, lsc_load) and b in op.block) or
                 (isinstance(b, lsc_move) and "slice" in b.properties and rgt.TILE == b.rtypes[0]))
         def emit_ops(ops):

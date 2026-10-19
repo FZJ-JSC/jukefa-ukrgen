@@ -410,7 +410,7 @@ class test_slice_preload(unittest.TestCase):
             "pre-specialize-irmods": ["fuse_slices", "forward_slices", "hoist_slices",
                                       "unroll_loops", "hoist"],
             "unroll_loops-factor": "2", "unroll_loops-registers": "2",
-            "unroll_loops-preload": "on"})
+            "unroll_loops-preload": "1"})
         code = ctx.emitted[0].instructions()
         start = next(i for i, l in enumerate(code) if l.endswith("_slices:")
                      and sum(x.startswith("mova") for x in code[i:i + 30]) >= 4)

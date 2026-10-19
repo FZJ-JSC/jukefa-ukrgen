@@ -33,11 +33,11 @@ class unroll_loops(lsc_irmod):
     params = [irmod_param(name="factor", default=2, parse=int,
                           description="elements a loop iteration takes: the largest dividing "
                                       "the loop's divisor, up to this"),
-              irmod_param(name="preload", default=False,
-                          parse=lambda v: str(v).lower() not in ("0", "false", "no", "off"),
-                          description="loops over slices: the first copy's loads for the next "
-                                      "iteration at the end of this one - software pipelined, "
-                                      "the last iteration without"),
+              irmod_param(name="preload", default=0, parse=int,
+                          description="loops over slices: how many copies' loads - from the "
+                                      "first - go to the end of the iteration before, software "
+                                      "pipelined (the last iteration without); at most as many "
+                                      "as keep register sets no other copy uses"),
               irmod_param(name="registers", default=1, parse=int,
                           description="registers an iteration's scalars rotate through "
                                       "(up to its elements): scalar loads and stores in "
@@ -64,8 +64,10 @@ class unroll_loops(lsc_irmod):
                                        registers=max(1, min(int(self.values["registers"]), factor)))
                 if "slices" == op.info.get("kind"):
                     expand_copies(program, op)
-                    if self.values["preload"] and op.subtiling.registers > 1:
-                        op.info["preload"] = True
+                    depth = preload_depth(int(self.values["preload"]), op.subtiling.unroll,
+                                          op.subtiling.registers)
+                    if depth:
+                        op.info["preload"] = depth
                 changed += 1
         return changed
 
@@ -170,3 +172,19 @@ def expand_copies(program, loop):
     loop.block, loop.walks = block, walks
     loop.info["unrolled"] = unroll
     loop.refresh()
+
+
+def preload_depth(asked: int, unroll: int, registers: int) -> int:
+    """
+    How many copies' loads can go to the iteration before: copy u's vectors
+    in register set u mod registers, so the first P copies' sets must be
+    used by no other copy - its own work would overwrite the preloaded
+    values before they are consumed. The deepest such P up to the one asked,
+    fewer than the copies
+    """
+    for depth in range(min(max(0, asked), unroll - 1), 0, -1):
+        preloaded = {u % registers for u in range(depth)}
+        if len(preloaded) == depth and \
+                not any(u % registers in preloaded for u in range(depth, unroll)):
+            return depth
+    return 0
