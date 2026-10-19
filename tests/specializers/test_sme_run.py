@@ -261,3 +261,72 @@ class test_slice_unroll(unittest.TestCase):
                 r = subprocess.run([qemu, "-cpu", f"max,sme=on,sme{svl}=on", os.path.join(d, "run")],
                                    capture_output=True, text=True, timeout=120)
                 self.assertIn(", 0 wrong", r.stdout)
+
+
+GEMM_ROWS = {
+    "sme-F64F64": "on", "AB-data-type": "FP64", "C-data-regs": "4",
+    "A-layout": ["m:c", "k:s"], "B-layout": ["n:c", "k:s"], "C-layout": ["n:c", "m:s"],
+    "mm-to": ["fopa(A.VEC:direct, B.VEC:direct, AB.TILE){i=m, j=n, k*=1}"],
+    "store_ab-to": ["AB.TILE:slices_row"], "store-to": ["C.TILE:slices_row"],
+    "alphamul-to": ["fmul(AB.TILE:slice_vec_row[0:adreg:ROW], alpha.VEC:bc_load, "
+                    "C.TILE:>slice_vec_row[0:bdreg:ROW]){m=1, i=n}"],
+    "add-to": ["fadd(AB.TILE:slice_vec_row[0:adreg:ROW], C.VEC:direct, "
+               "C.TILE:>slice_vec_row[0:bdreg:ROW]){m=1, i=n}"],
+    "alphaadd-to": ["fma(AB.TILE:slice_vec_row[0:adreg:ROW], alpha.VEC:bc_load, "
+                    "C.TILE:direct>slice_vec_row[0:bdreg:ROW]){m=1, i=n}"],
+    "betaadd-to": ["fma(C.VEC:direct, beta.VEC:bc_load, "
+                   "AB.TILE:slice_vec_row[0:adreg:ROW]>slice_vec_row[0:bdreg:ROW]){m=1, i=n}"],
+    "betascale-to": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.TILE:>slice_vec_row){m=1, i=n}"],
+    "alphascale-to": ["fma(AB.TILE:slice_vec_row[0:adreg:ROW], alpha.VEC:bc_load, "
+                      "C.TILE:slice_vec_row[0:adreg:ROW]>slice_vec_row[0:bdreg:ROW]){m=1, i=n}"]}
+
+
+def run_gemm(test, params, defines=(), **extra):
+    """
+    An SME gemm against the gemm harness under qemu at SVL 256 and 512
+    """
+    cc, qemu = "aarch64-linux-gnu-gcc", "qemu-aarch64-static"
+    if not (shutil.which(cc) and shutil.which(qemu)):
+        test.skipTest(f"needs {cc} and {qemu}")
+    from specializers.test_native import header
+    stages = list(t.STAGES)
+    i = [x.__name__ for x in stages].index("model_stage") + 1
+    saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
+    try:
+        ctx, res = t.mm(isa="sme", ukr="gemm", **params, **extra)
+    finally:
+        t.STAGES = saved
+    test.assertTrue(res.completed, res.output)
+    p = ctx.emitted[0]
+    with tempfile.TemporaryDirectory() as d:
+        for name, text in (("ukr.s", "\n".join(p.function("ukr")) + "\n"), ("ukr.h", header(p.params))):
+            with open(os.path.join(d, name), "w") as f:
+                f.write(text)
+        r = subprocess.run([cc, "-c", "-Wa,-march=armv9-a+sme+sme-f64f64",
+                            os.path.join(d, "ukr.s"), "-o", os.path.join(d, "ukr.o")],
+                           capture_output=True, text=True)
+        test.assertEqual(0, r.returncode, r.stderr)
+        r = subprocess.run([cc, "-static", "-O1", *defines, f'-DKERNEL_H="{d}/ukr.h"',
+                            os.path.join(HERE, "native_harness.c"), os.path.join(d, "ukr.o"),
+                            "-o", os.path.join(d, "run"), "-lm"], capture_output=True, text=True)
+        test.assertEqual(0, r.returncode, r.stderr)
+        outs = []
+        for svl in (256, 512):
+            r = subprocess.run([qemu, "-cpu", f"max,sme=on,sme{svl}=on", os.path.join(d, "run")],
+                               capture_output=True, text=True, timeout=120)
+            test.assertIn(", 0 wrong", r.stdout, r.stdout[:400])
+            outs.append(r.stdout)
+    return ctx, outs
+
+
+class test_sme_rows(unittest.TestCase):
+    """
+    Row-major C: AB's and C's tiles reached and stored by rows, the
+    operations' vectors along n, the loops walking m
+    """
+
+    def test_runs(self):
+        ctx, outs = run_gemm(self, GEMM_ROWS, defines=["-DC_ROW_MAJOR"])
+        self.assertEqual("stride(C,m)", list(ctx.emitted[0].params)[-1])
+        code = ctx.emitted[0].instructions()
+        self.assertTrue(any("h.d[w12" in l for l in code))
