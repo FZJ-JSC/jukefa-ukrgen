@@ -11,12 +11,9 @@ import sys
 import tempfile
 
 import yaml
-from git import Repo
 
 from argparse import ArgumentParser
 
-from ukrgen.codegen.isa_compiler_support import isa_flags
-from ukrgen.injectors.blis.patcher import blis_patcher
 from ukrgen.logging import setup_loggers
 
 def main():
@@ -31,10 +28,18 @@ def main():
     kernels = ["sgemm","dgemm"]
     for k in kernels:
         parser.add_argument(f"--{k}-config",
-                            help=f"file containing the configuration for {k}",
-                            type=str,
-                            required=True)
+                            help=f"file containing the configuration for {k} "
+                                 f"(without --family-config)",
+                            type=str)
 
+    parser.add_argument("--family-config",
+                        help="A kernel family configuration (YAML): every size its families "
+                             "build, chosen at run time (BLIS_MR_<dt>, BLIS_NR_<dt>); its files "
+                             "are written under --out-dir")
+    parser.add_argument("--stack-buf-size", type=int,
+                        help="BLIS_STACK_BUF_MAX_SIZE in bytes - the temporary microtile of "
+                             "partial tiles; default: the configuration's, else the largest "
+                             "kernel's tile at the ISA's longest vector")
     parser.add_argument("--config-name",
                         help="name of the blis config (default: ukrgen_<isa>)",
                         type=str,
@@ -51,7 +56,7 @@ def main():
                 required=False
                 )
 
-    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group = parser.add_mutually_exclusive_group()
     source_group.add_argument("--from-dir",
                               help="generate blis using the source in the specified directory",
                               type=str)
@@ -95,6 +100,27 @@ def main():
 
     setup_loggers(debugall=debugall, debug_systems=debug_systems)
 
+
+    if args.family_config is not None:
+        from ukrgen.injectors.blis.families import configuration
+        from ukrgen.injectors.blis.generate import generate
+        cfg = configuration.load(args.family_config)
+        if args.config_name is not None:
+            cfg.name = args.config_name
+        made = generate(cfg, args.out_dir, stack_size=args.stack_buf_size)
+        print(f"{len(made['kernels'])} kernels, {len(made['skipped'])} sizes skipped, "
+              f"{len(made['files'])} files under {args.out_dir}")
+        return 0
+
+    # the old path: one kernel per data type, on the old flow
+    from git import Repo
+    from ukrgen.codegen.isa_compiler_support import isa_flags
+    from ukrgen.injectors.blis.patcher import blis_patcher
+
+    if args.sgemm_config is None or args.dgemm_config is None:
+        parser.error("--sgemm-config and --dgemm-config are needed without --family-config")
+    if args.from_git is None and args.from_dir is None:
+        parser.error("one of --from-dir and --from-git is needed")
 
     with open(args.sgemm_config, "r") as sf:
         sgemm_config = yaml.safe_load(sf)

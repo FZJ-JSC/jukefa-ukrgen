@@ -97,6 +97,11 @@ class configuration:
     isa: str
     name: str
     families: list[family]
+    #: BLIS_STACK_BUF_MAX_SIZE in bytes: given (stack-buf-size, or blisgen's
+    #: --stack-buf-size), else from the largest kernel
+    stack_buf_size: int | None = None
+    #: per data type, the cache blocksizes' defaults (mr-in-mc, nr-in-nc, kc)
+    blocksizes: dict = field(default_factory=dict)
 
     @staticmethod
     def load(path: str) -> "configuration":
@@ -106,7 +111,8 @@ class configuration:
         families = [family.from_yaml(kind, entry)
                     for kind in ("gemm", "packm") for entry in (data.get(kind) or [])]
         return configuration(isa=data["isa"], name=data.get("config-name", f"ukrgen_{data['isa']}"),
-                             families=families)
+                             families=families, stack_buf_size=data.get("stack-buf-size"),
+                             blocksizes=dict(data.get("blocksizes") or {}))
 
 
 @dataclass

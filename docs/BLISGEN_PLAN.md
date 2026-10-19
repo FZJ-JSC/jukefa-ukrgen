@@ -94,7 +94,8 @@ packm:
 |---|------|--------|
 | 1 | Family configuration: loading, size enumeration, a flow run per size; kernel metadata (symbol, mr/nr, parameters, C layout) | done for gemm: `injectors/blis/families.py`, `tests/injectors/test_families.py` |
 | 2 | gemm wrappers (BLIS signature, edge-case macros) and the kernel table | done: `injectors/blis/cgen.py`, `tests/injectors/test_cgen.py` |
-| 3 | Context initialization: run-time kernel choice from `BLIS_{MR,NR}_{S,D}`, default and fallback; cache blocksize defaults | next |
+| 3 | Context initialization: run-time kernel choice from `BLIS_{MR,NR}_{S,D}`, default and fallback; cache blocksize defaults | done: `cgen.cntx_init`, `family_header`, `generate.py`; `--family-config`, `--stack-buf-size` |
+| 3b | Epilogue STOs interleaved tile by tile, so C streams through a ring: the default 8x3v (24 AB accumulators) needs it | next |
 | 4 | BLIS patching: configuration and kernel directories, registry, PR 960, `inherit` | |
 | 5 | BLIS build and testsuite: x86 natively, SVE/RVV under qemu | |
 | 6 | packm families: cases, generated dispatch tree, reference fallback | |
@@ -169,3 +170,29 @@ void bli_cntx_init_<config>( cntx_t* cntx )
   configuration YAML, defaulting to the old templates' 16, 200, 256.
 - Tested without BLIS first: the generated file compiled against a stub recording
   `bli_cntx_set_*` calls, with `BLIS_MR_*`/`BLIS_NR_*` set, unset and absent sizes.
+- Step 3: `cgen.cntx_init` writes the context initialization - the reference's
+  first, then per data type with kernels the one `BLIS_MR_<dt>` x
+  `BLIS_NR_<dt>` names (default where unset or not made), registered with its
+  orientation; MR/NR from it, MC/NC as multiples of them and KC from the
+  configuration's `blocksizes` (defaults 16, 200, 256), PR 960 overriding
+  them afterwards; a data type without kernels keeps the reference's kernel
+  and blocksizes. Tested against a stub recording the `bli_cntx_set_*` calls
+  (`tests/injectors/cntx_stub.h`) under qemu: unset (default), an existing
+  size, an absent size (default). `bli_family_<config>.h` defines
+  `BLIS_STACK_BUF_MAX_SIZE` and `BLIS_RELAX_MCNR_NCMR_CONSTRAINTS` (nearly
+  every configuration does). The stack size is a parameter: `--stack-buf-size`
+  (blisgen), `stack-buf-size` (YAML), else the largest kernel's tile at the
+  ISA's longest vector (SVE/SME/RVV: 2048 bits), at least 2048.
+- `generate.py` writes a configuration's files under `--out-dir`
+  (`blisgen --family-config FILE --out-dir DIR --author NAME`): the kernels'
+  `.S`, their wrappers, the context initialization, the family header, a
+  report of the sizes skipped. The old path's imports (old patcher, old flow -
+  broken with today's asmgen: `asmgen.asmblocks.operations` is gone) are
+  loaded only on that path; its per-data-type configurations and BLIS source
+  are required only there.
+- Found: gemm's epilogue emits STO after STO over all tiles, so C is held in
+  a register per tile beside AB's accumulators: 2vx8 (16 + 16 of 32) is
+  skipped, and the default 8x3v (24 AB accumulators) can't build. Step 3b:
+  the builder interleaves a block's STOs tile by tile where their tilings
+  line up - scale, update and store one tile before the next - so C needs a
+  ring of a few registers, as hand-written kernels do.

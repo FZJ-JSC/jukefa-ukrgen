@@ -166,3 +166,149 @@ static inline dim_t ukrgen_size( dim_t count, int vectors, dim_t vl )
 	return vectors ? count * vl : count;
 }
 """
+
+
+#: the cache blocksizes' defaults: MC and NC as multiples of MR and NR, KC -
+#: BLIS_MR_IN_MC_<dt>, BLIS_NR_IN_NC_<dt>, BLIS_KC_<dt> override them
+BLOCKSIZE_DEFAULTS = {"mr-in-mc": 16, "nr-in-nc": 200, "kc": 256}
+
+#: BLIS's names of a data type
+NUM = {"FP32": "BLIS_FLOAT", "FP64": "BLIS_DOUBLE"}
+
+
+def gemm_prototype(symbol: str) -> str:
+    return f"void {symbol}( dim_t m, dim_t n, dim_t k, const void* alpha, const void* a, " \
+           f"const void* b, const void* beta, void* c, inc_t rs_c, inc_t cs_c, " \
+           f"auxinfo_t* data, const cntx_t* cntx );"
+
+
+def cntx_init(config_name: str, gen, kernels: list[kernel], defaults: dict, blocksizes: dict) -> str:
+    """
+    The configuration's context initialization: the reference first, then
+    per data type with kernels the one BLIS_MR_<dt> x BLIS_NR_<dt> names -
+    the family's default where unset or not made - registered with its
+    orientation, MR and NR from it, MC, NC and KC from the configuration's
+    defaults (PR 960 overriding them afterwards); a data type without
+    kernels keeps the reference's kernel and blocksizes
+    """
+    dts = [dt for dt in ("FP32", "FP64") if any(dt == k.dtype for k in kernels)]
+    tables = "".join(gemm_table(dt, kernels, defaults.get(dt)) for dt in dts)
+    protos = "\n".join(gemm_prototype(k.symbol) for k in kernels)
+    lines = []
+    for dt in ("FP32", "FP64"):
+        ch, ctype = DT_CHAR[dt], CTYPE[dt]
+        bs = dict(BLOCKSIZE_DEFAULTS)
+        bs.update(blocksizes.get(dt, {}))
+        if dt in dts:
+            lines.append(f"""\
+	const ukrgen_gemm_entry* k_{ch} = ukrgen_{ch}gemm_choose( ukrgen_env( "BLIS_MR_{ch.upper()}" ),
+	                                                    ukrgen_env( "BLIS_NR_{ch.upper()}" ) );
+	const dim_t vl_{ch} = ukrgen_vl( sizeof( {ctype} ) );
+	const dim_t mr_{ch} = ukrgen_size( k_{ch}->mr_count, k_{ch}->mr_vectors, vl_{ch} );
+	const dim_t nr_{ch} = ukrgen_size( k_{ch}->nr_count, k_{ch}->nr_vectors, vl_{ch} );
+	const dim_t mc_{ch} = {int(bs["mr-in-mc"])} * mr_{ch};
+	const dim_t nc_{ch} = {int(bs["nr-in-nc"])} * nr_{ch};
+	const dim_t kc_{ch} = {int(bs["kc"])};""")
+        else:
+            lines.append("\n".join(
+                f"\tconst dim_t {b}_{ch} = bli_cntx_get_blksz_def_dt( {NUM[dt]}, BLIS_{b.upper()}, cntx );"
+                for b in ("mr", "nr", "mc", "nc", "kc")))
+    ukrs = "".join(f"\t                   BLIS_GEMM_UKR, {NUM[dt]}, k_{DT_CHAR[dt]}->ukr,\n" for dt in dts)
+    prefs = "".join(f"\t                        BLIS_GEMM_UKR_ROW_PREF, {NUM[dt]}, k_{DT_CHAR[dt]}->row_pref,\n"
+                    for dt in dts)
+    choose = "\n".join(lines)
+    register = f"""\
+	bli_cntx_set_ukrs( cntx,
+{ukrs}	                   BLIS_VA_END );
+	bli_cntx_set_ukr_prefs( cntx,
+{prefs}	                        BLIS_VA_END );
+""" if dts else ""
+    return f"""\
+#include "blis.h"
+
+{vl_helper(gen)}
+{protos}
+
+{GEMM_TABLE_PRELUDE}
+{tables}
+static dim_t ukrgen_env( const char* name )
+{{
+	return ( dim_t )bli_env_get_var( name, 0 );
+}}
+
+void bli_cntx_init_{config_name}( cntx_t* cntx )
+{{
+	blksz_t blkszs[ BLIS_NUM_BLKSZS ];
+
+	bli_cntx_init_{config_name}_ref( cntx );
+
+	// the microkernels: BLIS_MR_<dt> x BLIS_NR_<dt> (elements) where such a
+	// kernel was made, the default otherwise
+{choose}
+
+{register}
+	// MC, NC and KC are defaults: BLIS_MR_IN_MC_<dt>, BLIS_NR_IN_NC_<dt> and
+	// BLIS_KC_<dt> override them once the context is made (bli_gks.c)
+	bli_blksz_init_easy( &blkszs[ BLIS_MR ], mr_s, mr_d, -1, -1 );
+	bli_blksz_init_easy( &blkszs[ BLIS_NR ], nr_s, nr_d, -1, -1 );
+	bli_blksz_init_easy( &blkszs[ BLIS_MC ], mc_s, mc_d, -1, -1 );
+	bli_blksz_init_easy( &blkszs[ BLIS_KC ], kc_s, kc_d, -1, -1 );
+	bli_blksz_init_easy( &blkszs[ BLIS_NC ], nc_s, nc_d, -1, -1 );
+
+	bli_cntx_set_blkszs
+	(
+	  cntx,
+	  BLIS_NC, &blkszs[ BLIS_NC ], BLIS_NR,
+	  BLIS_KC, &blkszs[ BLIS_KC ], BLIS_KR,
+	  BLIS_MC, &blkszs[ BLIS_MC ], BLIS_MR,
+	  BLIS_NR, &blkszs[ BLIS_NR ], BLIS_NR,
+	  BLIS_MR, &blkszs[ BLIS_MR ], BLIS_MR,
+	  BLIS_VA_END
+	);
+}}
+"""
+
+
+#: the longest vector, in bytes, a VLA ISA allows - for sizing BLIS's stack
+#: temporary tile when the configuration doesn't give it
+LONGEST_VECTOR = {"sve": 256, "sme": 256, "rvv": 256, "rvv071": 256}
+
+
+def stack_buf_size(isa: str, gen, kernels: list[kernel], given: int | None = None) -> int:
+    """
+    BLIS_STACK_BUF_MAX_SIZE: given, or the largest kernel's tile (MR x NR x
+    the element size) at the ISA's longest vector, at least BLIS's 2048,
+    rounded up to 64 bytes
+    """
+    if given:
+        return int(given)
+    largest = 2048
+    for k in kernels:
+        esize = 4 if "FP32" == k.dtype else 8
+        vl = LONGEST_VECTOR.get(isa, 0) // esize
+        mc, mv = split_size(k.mr)
+        nc, nv = split_size(k.nr)
+        mr = mc * (vl if mv else 1)
+        nr = nc * (vl if nv else 1)
+        largest = max(largest, mr * nr * esize)
+    return (largest + 63) // 64 * 64
+
+
+def family_header(config_name: str, stack_size: int) -> str:
+    """
+    bli_family_<config>.h: the stack temporary tile sized for the
+    configuration's kernels, BLIS's MC/NR and NC/MR constraints relaxed (as
+    nearly every configuration does) - MR x NR pairs are any the families make
+    """
+    guard = f"BLIS_FAMILY_{config_name.upper()}_H"
+    return f"""\
+#ifndef {guard}
+#define {guard}
+
+// the temporary microtile of partial tiles and storage a kernel doesn't take
+#define BLIS_STACK_BUF_MAX_SIZE {int(stack_size)}
+
+#define BLIS_RELAX_MCNR_NCMR_CONSTRAINTS
+
+#endif
+"""
