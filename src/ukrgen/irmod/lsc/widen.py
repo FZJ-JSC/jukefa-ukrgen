@@ -134,7 +134,7 @@ class widen(lsc_irmod):
                     for move in ("load", "store"):
                         if not struct_sigs(ctx.gen, move, dt, ways):
                             unmet.add(f"{comp}: no {move} interleaving {ways} {dt.name} registers")
-                if "VEC_GROUP" == method and not hasattr(ctx.gen, "vsetvli_keep_vl"):
+                if "VEC_GROUP" == method and not ctx.gen.isa_setup().element_type_is_state():
                     unmet.add(f"{comp}: no way to switch to the group's element type")
         return sorted(unmet)
 

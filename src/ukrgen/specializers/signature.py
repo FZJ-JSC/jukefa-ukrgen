@@ -1316,23 +1316,21 @@ class signature_emitter:
         a widening one the narrow type, arithmetic on a group the group's type
         and grouping. Empty where nothing changes
         """
-        if self.vtype is None or not hasattr(self.gen, "vsetvli_keep_vl"):
+        if self.vtype is None:
             return ""
         sizes = [adt_size(o.dt) for o in sig.operands.values()
                  if rgt.VEC == o.rtype and getattr(o, "dt", None) is not None]
         if not sizes:
             return ""
+        # the registers this operation sees as one: a wide accumulator's group
         ways = op.properties.get("group", 1)
-        if widening_ways(sig) > 1:
-            want = (min(sizes), self.lmul)
-        else:
-            want = (max(sizes), self.lmul * ways)
+        want = (min(sizes), 1) if widening_ways(sig) > 1 else (max(sizes), ways)
         if want == self.vtype:
             return ""
         self.vtype = want
         dt = next(o.dt for o in sig.operands.values()
                   if rgt.VEC == o.rtype and adt_size(o.dt) == want[0])
-        return self.gen.vsetvli_keep_vl(dt=dt, lmul=want[1])
+        return self.gen.isa_setup().setup_dt(dt=dt, group=want[1])
 
     def compute(self, op: lsc_transformation) -> str:
         """
@@ -1526,10 +1524,9 @@ class signature_emitter:
             self.reg(lsc_reg_index(key[0], [key[1]]), key[2])
         setup = lines(isa.setup(rt=self.rt, dt=dt))
         self.isa_setup_lines = len(setup)
-        # the element type the ISA's setup leaves in place, where it travels
-        # in a register: the narrowest, with the chosen grouping
-        self.lmul = getattr(self.gen, "lmul", 1)
-        self.vtype = (adt_size(dt), self.lmul) if hasattr(self.gen, "vsetvli_keep_vl") else None
+        # the element type the ISA's setup leaves in place, where it is state
+        # the instructions run under: the narrowest, its registers ungrouped
+        self.vtype = (adt_size(dt), 1) if isa.element_type_is_state() else None
         # setup-time values found needed by a previous emission: allocated
         # here, before any region, so every region knows their registers
         for name, args in self.preallocate:
