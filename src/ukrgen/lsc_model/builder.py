@@ -220,94 +220,119 @@ class program_builder:
                       resident = next((getattr(st.rsln, "resident_rtype", None) for st in strat
                                        if getattr(st.rsln, "resident_rtype", None)), None)
                       rtype = resident or (shape.rtype if shape is not None else None)
+                      # brought as a scalar (bc_scalar: an FP register the
+                      # instruction takes, vfmacc.vf), whatever the group's
+                      # representative signature says
+                      if any("bc_scalar" == getattr(st.rsln, "unique_tag", None) for st in strat):
+                          rtype = rgt.FP
                       if rtype is not None:
                           rtypes.setdefault(math, set()).add(rtype)
         shared = getattr(self.gen, "are_fregs_in_vregs", False)
         def on_vregs(comp):
             kinds = rtypes.get(comp, set())
             return rgt.VEC in kinds or (shared and rgt.FP in kinds)
-        try:
-            budget = len(self.gen.get_reg_tracker().available_regs.get("vreg", []))
-        except Exception:
-            budget = self.gen.max_vregs()
-        on_file = {c for c in self.coords if on_vregs(c)}
-        # what each block of the composition holds at once: the accumulators
-        # its STOs touch - a register per tile - and its inputs
-        blocks = []
-        uses: dict[str, int] = {}
-        for block in self.comp.all_blocks():
-            comps, wrote = set(), set()
-            for name in getattr(block, "stos", []):
-                wrote |= written_by.get(name, set())
-                for _, stos in self.parts:
-                    if name in stos:
-                        for op in stos[name].ops:
-                            comps |= {n for n in op.tile_strs if n in on_file}
-            if comps:
-                blocks.append((comps, wrote, getattr(block, "loop_index", None) is not None))
-                for c in comps:
-                    uses[c] = uses.get(c, 0) + 1
-        accumulated = set().union(*[wrote for _, wrote, looped in blocks if looped])
-        # all of a component's tiles live at once: accumulated in a loop - in
-        # it, and carried after it (AB into the epilogue). One written in
-        # straight-line code only (C in each epilogue case) streams: a model
-        # register per tile, which scheduling renames into the accumulators'
-        # registers as they are consumed - none kept for it here. An input's
-        # registers stay its own to the end: every block's inputs share what
-        # the most accumulators any block holds leave
-        live = [sorted(c for c in comps if c in accumulated) for comps, _, _ in blocks]
-        streamed = sorted({c for comps, _, _ in blocks for c in comps
-                           if c in written and c not in accumulated})
-        inputs = sorted({c for comps, _, _ in blocks for c in comps if c not in written})
-        accumulators = max(live, key=lambda cs: sum(len(self.coords[c]) for c in cs), default=[])
-        need = sum(len(self.coords[c]) for c in accumulators)
-        fixed = sum(int(given[c]) for c in inputs if c in given)
-        free = [c for c in inputs if c not in given]
-        left = budget - need - fixed
-        held = f"the accumulators ({', '.join(accumulators)}) take {need}"
-        if left < 0:
-            raise model_error(
-                f"{held} vector registers and the data registers given {fixed}: "
-                f"{need + fixed} of {budget} - fewer data registers "
-                f"(--COMP-data-regs) or a smaller microtile fit")
-        if left < len(free):
-            raise model_error(
-                f"{held} of {budget} vector registers{' beside ' + str(fixed) + ' given' if fixed else ''}"
-                f": {left} left for {', '.join(free)}, at least one each - a smaller microtile fits")
-        # an input's ceiling: the tiles it has, --COMP-max-data-regs, and its
-        # minimal ring plus --COMP-max-preload iterations of its tiles
-        minimal = {c: self.minimal_ring(c) for c in free}
-        caps = {}
-        for c in free:
-            cap = len(self.coords[c])
-            if c in self.max_data_regs:
-                cap = min(cap, int(self.max_data_regs[c]))
-            if c in self.max_preload:
-                cap = min(cap, minimal[c] + int(self.max_preload[c]) * self.tiles_per_step(c))
-            caps[c] = max(1, cap)
-        if sum(caps[c] for c in free) <= left:
-            given.update({c: caps[c] for c in free if caps[c] < len(self.coords[c])})
-            return given
-        # first what keeps an input from loading a tile twice an iteration
-        # (its minimal ring), where the registers allow; then the rest up to
-        # the ceilings, the inputs with most tiles first
-        shares = {c: 1 for c in free}
-        left -= len(free)
-        for c in sorted(free, key=lambda c: -len(self.coords[c])):
-            more = min(minimal[c], caps[c]) - shares[c]
-            if 0 < more <= left:
-                shares[c] += more
-                left -= more
-        while left > 0:
-            grow = [c for c in free if shares[c] < caps[c]]
-            if not grow:
-                break
-            for c in sorted(grow, key=lambda c: -len(self.coords[c])):
-                if left <= 0:
+        def budget_of(tag, fallback):
+            try:
+                return len(self.gen.get_reg_tracker().available_regs.get(tag, []))
+            except Exception:
+                return fallback()
+        # each register file fitted on its own: vectors (and FP where they
+        # share the file), FP scalars where they have their own - RVV's
+        # vfmacc.vf takes its scalar from one
+        files = [("vreg", {c for c in self.coords if on_vregs(c)},
+                  budget_of("vreg", self.gen.max_vregs))]
+        if not shared:
+            files.append(("freg", {c for c in self.coords if rgt.FP in rtypes.get(c, set())
+                                   and rgt.VEC not in rtypes.get(c, set())},
+                          budget_of("freg", lambda: 32)))
+        for tag, members, budget in files:
+            if not members:
+                continue
+            on_file = {c for c in self.coords if c in members}
+            # what each block of the composition holds at once: the accumulators
+            # its STOs touch - a register per tile - and its inputs
+            blocks = []
+            uses: dict[str, int] = {}
+            for block in self.comp.all_blocks():
+                comps, wrote = set(), set()
+                for name in getattr(block, "stos", []):
+                    wrote |= written_by.get(name, set())
+                    for _, stos in self.parts:
+                        if name in stos:
+                            for op in stos[name].ops:
+                                comps |= {n for n in op.tile_strs if n in on_file}
+                if comps:
+                    blocks.append((comps, wrote, getattr(block, "loop_index", None) is not None))
+                    for c in comps:
+                        uses[c] = uses.get(c, 0) + 1
+            accumulated = set().union(*[wrote for _, wrote, looped in blocks if looped])
+            # all of a component's tiles live at once: accumulated in a loop - in
+            # it, and carried after it (AB into the epilogue). One written in
+            # straight-line code only (C in each epilogue case) streams: a model
+            # register per tile, which scheduling renames into the accumulators'
+            # registers as they are consumed - none kept for it here. An input's
+            # registers stay its own to the end: every block's inputs share what
+            # the most accumulators any block holds leave
+            live = [sorted(c for c in comps if c in accumulated) for comps, _, _ in blocks]
+            streamed = sorted({c for comps, _, _ in blocks for c in comps
+                               if c in written and c not in accumulated})
+            inputs = sorted({c for comps, _, _ in blocks for c in comps if c not in written})
+            accumulators = max(live, key=lambda cs: sum(len(self.coords[c]) for c in cs), default=[])
+            need = sum(len(self.coords[c]) for c in accumulators)
+            fixed = sum(int(given[c]) for c in inputs if c in given)
+            free = [c for c in inputs if c not in given]
+            # a streamed tile is loaded before the accumulator it's combined with
+            # is consumed - into a register of its own, where vector instructions
+            # can't take it from memory (all but x86): one kept per streamed
+            # component there
+            folds = "avx" in type(self.gen).__module__
+            kept = 0 if folds else len(streamed)
+            left = budget - need - fixed - kept
+            held = f"the accumulators ({', '.join(accumulators)}) take {need}" + \
+                   (f" and the streamed ({', '.join(streamed)}) {kept}" if kept else "")
+            if left < 0:
+                raise model_error(
+                    f"{held} vector registers and the data registers given {fixed}: "
+                    f"{need + kept + fixed} of {budget} - fewer data registers "
+                    f"(--COMP-data-regs) or a smaller microtile fit")
+            if left < len(free):
+                raise model_error(
+                    f"{held} of {budget} vector registers{' beside ' + str(fixed) + ' given' if fixed else ''}"
+                    f": {left} left for {', '.join(free)}, at least one each - a smaller microtile fits")
+            # an input's ceiling: the tiles it has, --COMP-max-data-regs, and its
+            # minimal ring plus --COMP-max-preload iterations of its tiles
+            minimal = {c: self.minimal_ring(c) for c in free}
+            caps = {}
+            for c in free:
+                cap = len(self.coords[c])
+                if c in self.max_data_regs:
+                    cap = min(cap, int(self.max_data_regs[c]))
+                if c in self.max_preload:
+                    cap = min(cap, minimal[c] + int(self.max_preload[c]) * self.tiles_per_step(c))
+                caps[c] = max(1, cap)
+            if sum(caps[c] for c in free) <= left:
+                given.update({c: caps[c] for c in free if caps[c] < len(self.coords[c])})
+                continue
+            # first what keeps an input from loading a tile twice an iteration
+            # (its minimal ring), where the registers allow; then the rest up to
+            # the ceilings, the inputs with most tiles first
+            shares = {c: 1 for c in free}
+            left -= len(free)
+            for c in sorted(free, key=lambda c: -len(self.coords[c])):
+                more = min(minimal[c], caps[c]) - shares[c]
+                if 0 < more <= left:
+                    shares[c] += more
+                    left -= more
+            while left > 0:
+                grow = [c for c in free if shares[c] < caps[c]]
+                if not grow:
                     break
-                shares[c] += 1
-                left -= 1
-        given.update(shares)
+                for c in sorted(grow, key=lambda c: -len(self.coords[c])):
+                    if left <= 0:
+                        break
+                    shares[c] += 1
+                    left -= 1
+            given.update(shares)
         return given
 
     def loop_ops(self) -> list[tuple]:

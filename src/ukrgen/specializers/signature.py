@@ -155,6 +155,11 @@ def _takes(sig, immediate: int) -> bool:
     return False
 
 
+#: column pointers kept per component and base; columns beyond them share
+#: one walking pointer
+MAX_COLUMN_POINTERS = 4
+
+
 class signature_specializer:
     """
     Adapts one part's IR program to the ISA, in place: after it, every
@@ -232,9 +237,29 @@ class signature_specializer:
                     lane_factor = singles[0]
             lane_count = strided.pop((lane_factor,)) if lane_factor is not None else None
             key = (comp, reg, tuple(sorted(strided.items())))
-            if strided and key not in self.pointer_regs:
-                self.pointer_regs[key] = self.new_reg(comp)
-            ptr = self.pointer_regs[key] if strided else reg
+            columns = [k for k in self.pointer_regs if k[:2] == (comp, reg) and "walk" != k[2]]
+            if strided and key not in self.pointer_regs and len(columns) >= MAX_COLUMN_POINTERS:
+                # more columns than pointers kept for them (general registers
+                # are few - RISC-V's C of 14 columns): one pointer walks
+                # between the rest, moved by the difference, computed from
+                # the base where this section hasn't placed it
+                key = (comp, reg, "walk")
+                if key not in self.pointer_regs:
+                    self.pointer_regs[key] = self.new_reg(comp)
+                ptr = self.pointer_regs[key]
+                target = self.positions[(comp, reg)] + sym._make(strided)
+                if key in self.pointers:
+                    move = target - self.positions[(comp, ptr)]
+                    if dict(move.terms):
+                        inserted.append(lsc_addr_compute(comp, ptr, ptr, move, scalar_tile))
+                else:
+                    inserted.append(lsc_addr_compute(comp, reg, ptr, sym._make(strided), scalar_tile))
+                    self.pointers.add(key)
+                self.positions[(comp, ptr)] = target
+            else:
+                if strided and key not in self.pointer_regs:
+                    self.pointer_regs[key] = self.new_reg(comp)
+                ptr = self.pointer_regs[key] if strided else reg
             if strided and key not in self.pointers:
                 delta = sym._make(strided)
                 inserted.append(lsc_addr_compute(comp, reg, ptr, delta, scalar_tile))

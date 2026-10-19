@@ -33,6 +33,25 @@ VN = {"mm-tileop": ["fma(A.VEC:bc_load, B.VEC:direct, AB.VEC){m=1, i=n, k*=1}"],
       "mru": True}
 
 
+# RVV: the broadcast operand an FP scalar the vector-scalar form takes
+# (vfmacc.vf), alpha and beta too - the FP registers a file of their own
+def _epilogue(tiling):
+    return {"betascale-tileop": [f"fmul[bdreg:VF](C.VEC:direct, beta.FP:use_scalar, C.VEC){{{tiling}}}"],
+            "alphascale-tileop": [f"fma[bdreg:VF](AB.VEC, alpha.FP:use_scalar, C.VEC){{{tiling}}}"],
+            "store-tileop": ["C.VEC:direct"],
+            "alphamul-tileop": [f"fmul[bdreg:VF](AB.VEC, alpha.FP:use_scalar, C.VEC){{{tiling}}}"],
+            "add-tileop": [f"fadd(AB.VEC, C.VEC:direct, C.VEC){{{tiling}}}"],
+            "alphaadd-tileop": [f"fma[bdreg:VF](AB.VEC, alpha.FP:use_scalar, C.VEC:direct){{{tiling}}}"],
+            "betaadd-tileop": [f"fma[bdreg:VF](C.VEC:direct, beta.FP:use_scalar, AB.VEC){{{tiling}}}"],
+            "store_ab-tileop": ["AB.VEC:direct"], "A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"]}
+
+
+VNF = dict(_epilogue("m=1, i=n"), **{"C-layout": ["n:c", "m:s"], "mm-tileop": [
+    "fma[bdreg:VF](B.VEC:direct, A.FP:use_scalar, AB.VEC){m=1, i=n, k*=1}"]})
+VMF = dict(_epilogue("i=m, n=1"), **{"C-layout": ["m:c", "n:s"], "mm-tileop": [
+    "fma[bdreg:VF](A.VEC:direct, B.FP:use_scalar, AB.VEC){i=m, n=1, k*=1}"]})
+
+
 class test_families(unittest.TestCase):
 
     def test_sizes(self):
@@ -105,9 +124,10 @@ class test_families(unittest.TestCase):
             built, skipped = build_gemm("sve", "ukrgen_sve", fam)
             body = built[0].program.blocks[0].sections["body"]
             return len({x for l in body if l.startswith("ld1rd") for x in re.findall(r"\{z(\d+)\.", l)})
-        # A's broadcasts: a ring of what's left, at most 2, the minimal 1 without preload
-        self.assertEqual(3, loop_registers())
-        self.assertEqual(2, loop_registers(**{"max-data-regs": {"A": 2}}))
+        # A's broadcasts: a ring of what's left (one kept for C streamed
+        # through the epilogue), at most 1 asked, the minimal 1 without preload
+        self.assertEqual(2, loop_registers())
+        self.assertEqual(1, loop_registers(**{"max-data-regs": {"A": 1}}))
         self.assertEqual(1, loop_registers(**{"max-preload": {"A": 0}}))
 
 

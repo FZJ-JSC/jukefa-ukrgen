@@ -13,10 +13,10 @@ import unittest
 
 from ukrgen.flow.isa_map import make_generator
 from ukrgen.injectors.blis.families import family, build_gemm
-from ukrgen.injectors.blis.cgen import (gemm_wrapper, asm_source, vl_helper, c_expr, gemm_table,
+from ukrgen.injectors.blis.cgen import (gemm_wrapper, asm_source, vl_helper, vl_helpers, c_expr, gemm_table,
                                         GEMM_TABLE_PRELUDE, CTYPE, cntx_init, stack_buf_size,
                                         family_header)
-from injectors.test_families import VM, VN
+from injectors.test_families import VM, VN, VNF, VMF
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CC = ["aarch64-linux-gnu-gcc", "-static", "-march=armv8-a+sve"]
@@ -242,6 +242,40 @@ int main( void )
                     out = subprocess.run(runner + [os.path.join(d, "run")], capture_output=True,
                                          text=True, timeout=60).stdout
                     self.assertIn("5 runs, 1 by generated cases, 0 wrong", out, isa)
+
+    @unittest.skipUnless(shutil.which("riscv64-linux-gnu-gcc") and shutil.which("qemu-riscv64-static"),
+                         "needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
+    def test_rvv_scalar_forms(self):
+        # 8x3v and 2vx14 unrolled 4: the broadcast operand in FP registers
+        # (vfmacc.vf), fitted in their own file; C's 14 columns walked by
+        # one pointer beyond the few kept
+        cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
+        for params, m, n, tiles in ((VNF, 8, 3, ("mr 8 nr 6", "mr 8 nr 12")),
+                                    (VMF, 2, 14, ("mr 4 nr 14", "mr 8 nr 14"))):
+            fam = family.from_yaml("gemm", {"family": "f", "dtypes": ["FP64"], "params": params,
+                                            "m": [m], "n": [n], "unroll": 4})
+            built, skipped = build_gemm("rvv", "ukrgen_rvv", fam)
+            self.assertEqual(1, len(built), skipped)
+            k = built[0]
+            src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator("rvv")) + gemm_wrapper(k) + \
+                  f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, 'double', k.vl_fn)}; }}\n" \
+                  f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, 'double', k.vl_fn)}; }}\n" + \
+                  open(os.path.join(HERE, "wrapper_harness.c")).read()
+            with tempfile.TemporaryDirectory() as d:
+                with open(os.path.join(d, "k.s"), "w") as f:
+                    f.write(asm_source(k))
+                subprocess.run(cc + ["-c", os.path.join(d, "k.s"), "-o", os.path.join(d, "k.o")], check=True)
+                with open(os.path.join(d, "w.c"), "w") as f:
+                    f.write(src)
+                r = subprocess.run(cc + ["-O1", f"-I{HERE}", f"-DUKR={k.symbol}", "-DWT=double",
+                                         os.path.join(d, "w.c"), os.path.join(d, "k.o"), "-o",
+                                         os.path.join(d, "run")], capture_output=True, text=True)
+                self.assertEqual(0, r.returncode, r.stderr)
+                for vlen, tile in zip((128, 256), tiles):
+                    out = subprocess.run(["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={vlen},elen=64",
+                                          os.path.join(d, "run")], capture_output=True, text=True,
+                                         timeout=120).stdout
+                    self.assertIn(f"{tile}: 81 runs, 0 wrong", out, k.symbol)
 
     def test_stack_and_family_header(self):
         fam, built = build("sve", "FP64", [2], [3])

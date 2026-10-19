@@ -278,9 +278,15 @@ void bli_cntx_init_<config>( cntx_t* cntx )
   reference's. SVE: the same case with `store-tileop: Y.VEC:scatter` (the
   matcher's scatter resolution; SVE has no strided store) - exact at 256 and
   512 bits, unrolled 1 and 2.
-- RVV family files for native runs (LMUL 1 and 2, gemm vn/vm, packm vec and
-  trans): generating them shows RVV's larger gemm tiles skipped - 8x3v,
-  12xNv, 2vx12+, 3vx8+ (LMUL 1) - the epilogue not streaming C through the
-  accumulators' registers as on SVE (the scheduler's budget exceeded by
-  8-9). Next to investigate; the files' defaults are 6x3v and 4x2v until
-  then.
+- RVV gemm: the broadcast operand as an FP scalar (`fma[bdreg:VF](B.VEC:direct,
+  A.FP:use_scalar, AB.VEC)`, vfmacc.vf), alpha and beta too - `bc_scalar`
+  loads a scalar and broadcasts it into a vector register (vfmv.v.f), which
+  costs vector registers the old kernels never used. Register fitting per
+  register file (vectors, FP scalars where they're a file of their own), the
+  scalar's file by its resolution (use_scalar/bc_scalar: FP) where the
+  signature group's representative says VEC; one vector register kept per
+  streamed component where instructions take no memory operand (all but
+  x86) - C is loaded before its accumulator is consumed. The specializer
+  keeps four column pointers per component and base, one more walking the
+  rest (C's 14 columns). 8x3v and 2vx14 unrolled 4 exact at VLEN 128 and
+  256; the RVV configurations build every size of the old failures' list.
