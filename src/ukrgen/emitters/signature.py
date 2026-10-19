@@ -519,6 +519,34 @@ class signature_emitter:
         # from its home at this iteration's first slice
         current = {key: sym.const(0) for key in plan} if plan else {}
         walk_of = {w: key for key, p in (plan or {}).items() for w in p["walks"]}
+        # within the general registers allowed (--loop-gregs), a pointer per
+        # access column - an offset's part beside vector lengths; tiles a
+        # vector length apart share one, the rest an immediate - set before
+        # the loop, stepped once an iteration: no moves between tiles. The
+        # first column of a plan register is that register
+        columns, pointers, column_of = {}, {}, {}
+        if plan:
+            accesses = {}
+            for b in op.block:
+                if isinstance(b, (lsc_load, lsc_store)):
+                    accesses.setdefault(b.properties.get("walk", 0), []).append(b)
+            for key, p in plan.items():
+                for w, offset in p["walks"].items():
+                    vectors = dict(offset.terms).get(("VL",))
+                    # the vector lengths an immediate only where every access
+                    # of the walk takes them
+                    folds = vectors and all(any(_vl_form(sig) and _accepts(sig, "voffset", vectors)
+                                                for sig in _sigs(b.sigs))
+                                            for b in accesses.get(w, []))
+                    column = sym._make({f: c for f, c in dict(offset.terms).items()
+                                        if not (folds and ("VL",) == f)})
+                    column_of[w] = (key, str(column), dict(offset.terms).get(("VL",)) if folds else None)
+                    columns.setdefault((key, str(column)), (key, column))
+            extra = len(columns) - len(plan)
+            budget = getattr(self.ctx, "loop_gregs", None)
+            if budget is None or 2 + extra <= budget:
+                for (key, name), (_, column) in columns.items():
+                    pointers[(key, name)] = None if not dict(column.terms) else column
         def place(b):
             # the access where the register stands, or vector lengths past it
             # where a signature takes them ([x, #n, MUL VL]): no move; else the
@@ -527,6 +555,10 @@ class signature_emitter:
             key = walk_of[w]
             comp = key[0]
             target = plan[key]["walks"][w]
+            if pointers:
+                # its column's own pointer, the vector lengths an immediate
+                _, name, vectors = column_of[w]
+                return [], pointer_regs[(key, name)], vectors
             rest = dict((target - current[key]).terms)
             if not rest:
                 return [], self.aregs[key], None
@@ -548,12 +580,21 @@ class signature_emitter:
         def step_on(slices):
             # every register to the next iteration's home, slices on
             out = []
+            if pointers:
+                for (key, name), ptr in pointer_regs.items():
+                    step = sym._make({f: c * slices for f, c in dict(plan[key]["step"].terms).items()})
+                    out += self.add_bytes(ptr, self.bytes_of(key[0], step), key[0])
+                return out
             for key, p in (plan or {}).items():
                 move = sym._make({f: c * slices for f, c in dict(p["step"].terms).items()}) - current[key]
                 if dict(move.terms):
                     out += self.add_bytes(self.aregs[key], self.bytes_of(key[0], move), key[0])
                 current[key] = sym.const(0)
             return out
+        def release_pointers():
+            for (key, name), ptr in pointer_regs.items():
+                if ptr is not self.aregs[key]:
+                    self.rt.unuse_reg("greg", ptr.idx)
         def settle():
             # where the loop leaves them: as the specializer has it
             for key, p in (plan or {}).items():
@@ -598,6 +639,15 @@ class signature_emitter:
                 steps[key] = delta
             walkers.append(walker)
             deltas.append(steps[key])
+        pointer_regs = {}
+        for (key, name), column in pointers.items():
+            if column is None:
+                pointer_regs[(key, name)] = self.aregs[key]
+                continue
+            ptr = self.greg()
+            lines.append(self.gen.mov_greg(src=self.aregs[key], dst=ptr))
+            lines += self.add_bytes(ptr, self.bytes_of(key[0], column), key[0])
+            pointer_regs[(key, name)] = ptr
         loop = f"ukr{next(self.labels)}_slices"
         lines.append(self.gen.label(label=loop))
         unroll = op.subtiling.unroll
@@ -674,6 +724,7 @@ class signature_emitter:
             for r in [counter, index] + list(shared.values()) + list(steps.values()):
                 self.rt.unuse_reg("greg", r.idx)
             self.release_negated()
+            release_pointers()
             settle()
             return self.hoist_negations(lines, loop)
         for u in range(1 if explicit else unroll):
@@ -727,6 +778,7 @@ class signature_emitter:
         for r in [counter, index] + list(shared.values()) + list(steps.values()):
             self.rt.unuse_reg("greg", r.idx)
         self.release_negated()
+        release_pointers()
         settle()
         return self.hoist_negations(lines, loop)
 

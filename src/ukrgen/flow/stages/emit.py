@@ -30,8 +30,21 @@ class emit_stage(stage):
         self.params["print-asm"] = stage_param(
                 value=False, default=False, flag=True, required=False,
                 description="Print the emitted assembly and exit")
+        self.params["loop-gregs"] = stage_param(
+                value=None, required=False,
+                description="General registers a loop over tiles' slices may take beyond what "
+                            "lives around it - counter, slice index, pointers: within it, an "
+                            "access column (tiles a vector length apart sharing one) gets a "
+                            "pointer of its own, stepped once an iteration; beyond, the "
+                            "plan's address registers walk from tile to tile. Not given: no "
+                            "limit")
 
     def progress(self):
+        value = self.params["loop-gregs"].value
+        if value is not None and (not str(value).isdigit() or int(value) < 2):
+            raise stage_error(f"--loop-gregs takes at least 2 (a counter and a slice index), "
+                              f"got {value}")
+        self.context.loop_gregs = int(value) if value is not None else None
         try:
             self.context.emitted = [emit_program(self.context, p)
                                     for p in self.context.programs]

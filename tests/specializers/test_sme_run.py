@@ -434,7 +434,8 @@ class test_slice_pointers(unittest.TestCase):
                              march="armv9-a+sme", ctype="float", **{
                                  "pre-specialize-irmods": ["fuse_slices", "forward_slices",
                                                            "hoist_slices", "unroll_loops", "hoist"],
-                                 "unroll_loops-factor": "4", "unroll_loops-registers": "2"})
+                                 "unroll_loops-factor": "4", "unroll_loops-registers": "2",
+                                 "loop-gregs": "2"})
         code = ctx.emitted[0].instructions()
         start = next(i for i, l in enumerate(code) if l.endswith("_slices:")
                      and any(x.startswith("mova") for x in code[i:i + 40]))
@@ -487,3 +488,26 @@ class test_packed_c(unittest.TestCase):
                                    capture_output=True, text=True, timeout=120)
                 self.assertIn(f"tile {rows} x {rows}", r.stdout)
                 self.assertIn(", 0 wrong", r.stdout)
+
+
+class test_loop_gregs(unittest.TestCase):
+    """
+    The general registers a loop over slices may take (--loop-gregs): within
+    them, a pointer per access column, no moves between tiles; beyond, the
+    plan's registers walk from tile to tile - exact either way
+    """
+
+    def loop_lines(self, ctx):
+        code = ctx.emitted[0].instructions()
+        start = next(i for i, l in enumerate(code) if l.endswith("_slices:")
+                     and sum(x.startswith("ld1d") for x in code[i:i + 30]) >= 2)
+        end = next(i for i, l in enumerate(code) if i > start and l.startswith("cbnz"))
+        return code[start + 1:end]
+
+    def test_budgets(self):
+        roomy, _ = run_gemm(self, GEMM)
+        tight, _ = run_gemm(self, GEMM, **{"loop-gregs": "2"})
+        self.assertLess(len(self.loop_lines(roomy)), len(self.loop_lines(tight)))
+        # within the budget the loop moves no pointer between its tiles' accesses
+        moves = [l for l in self.loop_lines(roomy) if l.startswith("add x") and "x12" not in l]
+        self.assertLessEqual(len(moves), 6)
