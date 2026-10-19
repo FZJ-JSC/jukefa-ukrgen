@@ -365,9 +365,31 @@ class signature_specializer:
             if comp not in self.scratch:
                 self.scratch[comp] = self.new_reg(comp)
             scratch = self.scratch[comp]
-            delta = sym.const(const) + sym.factor("VL", vl)
-            inserted.append(lsc_addr_compute(comp, reg, scratch, delta, scalar_tile))
-            self.positions[(comp, scratch)] = self.positions[(comp, reg)] + delta
+            target = self.positions[(comp, reg)] + sym.const(const) + sym.factor("VL", vl)
+            vl_taken = lambda n: any(_vl_form(s) and _accepts(s, "voffset", n) for s in usable)
+            # the scratch where this section placed it: what is left, if a
+            # signature takes it - vector lengths, or a constant
+            if (comp, scratch) in getattr(self, "placed", set()):
+                rest = dict((target - self.positions[(comp, scratch)]).terms)
+                rvl, rconst = rest.pop(("VL",), 0), rest.pop((), 0)
+                if not rest and ((not rconst and (not rvl or vl_taken(rvl))) or
+                                 (not rvl and any(_takes(s, rconst * adt_size(
+                                     self.ctx.component_dts[comp])) for s in usable))):
+                    op.indices[0] = lsc_reg_index(comp, [scratch])
+                    return inserted + [op]
+            # placed at the constant only where a signature takes the vector
+            # lengths: the next vectors past it need nothing more
+            delta = sym.const(const) if vl_taken(vl) else sym.const(const) + sym.factor("VL", vl)
+            here = self.positions[(comp, reg)] + delta
+            if (comp, scratch) in getattr(self, "placed", set()) and \
+                    not [f for f in dict((here - self.positions[(comp, scratch)]).terms) if f and ("VL",) != f]:
+                # already placed this section: moved by the difference alone
+                move = here - self.positions[(comp, scratch)]
+                inserted.append(lsc_addr_compute(comp, scratch, scratch, move, scalar_tile))
+            else:
+                inserted.append(lsc_addr_compute(comp, reg, scratch, delta, scalar_tile))
+            self.positions[(comp, scratch)] = here
+            self.placed = getattr(self, "placed", set()) | {(comp, scratch)}
             op.indices[0] = lsc_reg_index(comp, [scratch])
             return inserted + [op]
 
@@ -419,9 +441,11 @@ class signature_specializer:
             for op in getattr(block, section):
                 ops += self.adapt(op)
             setattr(block, section, ops)
-            # column pointers are computed per section, in the same registers
+            # column pointers are computed per section, in the same registers;
+            # a scratch address placed in one section isn't relied on in the next
             self.pointers = set()
             self.walking = {}
+            self.placed = set()
 
     def specialize(self) -> ir_program:
         for block in self.program.blocks:
@@ -1339,8 +1363,8 @@ class signature_emitter:
         if all(any(orl.MASK == o.orole for o in sig.operands.values())
                for sig in _sigs(op.resolution.compute_sg)):
             raise specialization_error(
-                f"every {op.op} signature needs a governing predicate: masked signatures "
-                f"(SVE, RVV) are not specialized yet")
+                f"every {op.op} signature needs a governing predicate, and the ISA's setup "
+                f"sets up no all-true one")
         raise specialization_error(f"no signature of {op.op} takes {regs}: {failures[:2]}")
 
     def emit_op(self, op) -> list[str]:
