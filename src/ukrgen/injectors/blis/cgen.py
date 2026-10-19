@@ -25,22 +25,44 @@ GEMM_ARGS = {
 }
 
 
-def vl_helper(gen) -> str:
+def vl_helper(gen, name: str = "ukrgen_vl") -> str:
     """
     The vector length in elements of a size, as the ISA reads it: the
     generator's SIMD size in bytes, divided
     """
-    size = gen.c_simd_size_function.replace("inline size_t get_simd_size()",
-                                            "static inline size_t ukrgen_simd_size( void )")
-    return f"{size}\n\nstatic inline dim_t ukrgen_vl( size_t esize )\n" \
-           f"{{\n\treturn ( dim_t )( ukrgen_simd_size() / esize );\n}}\n"
+    return vl_function(gen.c_simd_size_function, name)
 
 
-def c_expr(expr: str, ctype: str) -> str:
+def vl_function(simd_size_c: str, name: str) -> str:
+    size = simd_size_c.replace("inline size_t get_simd_size()",
+                               f"static inline size_t {name}_bytes( void )")
+    return f"{size}\n\nstatic inline dim_t {name}( size_t esize )\n" \
+           f"{{\n\treturn ( dim_t )( {name}_bytes() / esize );\n}}\n"
+
+
+def vl_helpers(kernels: list, gen) -> str:
+    """
+    One vector-length function per way the kernels' generators read their
+    vectors' size - RVV's grouped registers (LMUL) read otherwise than
+    single ones - each kernel given its own (vl_fn); the first is
+    ukrgen_vl
+    """
+    names = {}
+    for k in kernels:
+        text = k.simd_size_c or gen.c_simd_size_function
+        if text not in names:
+            names[text] = "ukrgen_vl" if not names else f"ukrgen_vl_{len(names)}"
+        k.vl_fn = names[text]
+    if not names:
+        names[gen.c_simd_size_function] = "ukrgen_vl"
+    return "\n".join(vl_function(text, name) for text, name in names.items())
+
+
+def c_expr(expr: str, ctype: str, vl_fn: str = "ukrgen_vl") -> str:
     """
     A blocksize - 8, 2*VL, VL - in C: VL read at run time
     """
-    return str(expr).replace(" ", "").replace("VL", f"ukrgen_vl( sizeof( {ctype} ) )")
+    return str(expr).replace(" ", "").replace("VL", f"{vl_fn}( sizeof( {ctype} ) )")
 
 
 def asm_symbol(k: kernel) -> str:
@@ -80,13 +102,13 @@ void {k.symbol}
        const void*      b,
        const void*      beta,
              void*      c, inc_t rs_c, inc_t cs_c,
-             auxinfo_t* data,
+       const auxinfo_t* data,
        const cntx_t*    cntx
      )
 {{
 	( void )data; ( void )cntx;
-	const dim_t mr = {c_expr(k.mr, ctype)};
-	const dim_t nr = {c_expr(k.nr, ctype)};
+	const dim_t mr = {c_expr(k.mr, ctype, k.vl_fn)};
+	const dim_t nr = {c_expr(k.nr, ctype, k.vl_fn)};
 	GEMM_UKR_SETUP_CT( {ch}, mr, nr, {row} );
 	{asm_symbol(k)}( {args} );
 	GEMM_UKR_FLUSH_CT( {ch} );
@@ -122,7 +144,7 @@ def gemm_table(dtype: str, kernels: list[kernel], default: tuple | None) -> str:
         mc, mv = split_size(k.mr)
         nc, nv = split_size(k.nr)
         rows.append(f"\t{{ {mc}, {mv}, {nc}, {nv}, {k.symbol}, {'true' if 'row' == k.c_layout else 'false'}, "
-                    f"\"{k.family}_{k.symbol.rsplit('_', 1)[-1]}\" }},")
+                    f"\"{k.family}_{k.symbol.rsplit('_', 1)[-1]}\", {k.vl_fn} }},")
         if default is not None and tuple(default) == tuple(k.size):
             fallback = i
     body = "\n".join(rows)
@@ -135,11 +157,11 @@ static const ukrgen_gemm_entry ukrgen_{ch}gemm_kernels[] =
 // the {ctype} kernel of MR x NR elements, or the default ({mine[fallback].symbol})
 static const ukrgen_gemm_entry* ukrgen_{ch}gemm_choose( dim_t mr, dim_t nr )
 {{
-	const dim_t vl = ukrgen_vl( sizeof( {ctype} ) );
 	const dim_t count = sizeof( ukrgen_{ch}gemm_kernels ) / sizeof( ukrgen_{ch}gemm_kernels[ 0 ] );
 	for ( dim_t i = 0; i < count; ++i )
 	{{
 		const ukrgen_gemm_entry* e = &ukrgen_{ch}gemm_kernels[ i ];
+		const dim_t vl = e->vl( sizeof( {ctype} ) );
 		if ( ukrgen_size( e->mr_count, e->mr_vectors, vl ) == mr &&
 		     ukrgen_size( e->nr_count, e->nr_vectors, vl ) == nr ) return e;
 	}}
@@ -159,6 +181,7 @@ typedef struct
 	gemm_ukr_ft ukr;
 	bool        row_pref;
 	const char* name;
+	dim_t       ( *vl )( size_t esize );
 } ukrgen_gemm_entry;
 
 static inline dim_t ukrgen_size( dim_t count, int vectors, dim_t vl )
@@ -179,7 +202,7 @@ NUM = {"FP32": "BLIS_FLOAT", "FP64": "BLIS_DOUBLE"}
 def gemm_prototype(symbol: str) -> str:
     return f"void {symbol}( dim_t m, dim_t n, dim_t k, const void* alpha, const void* a, " \
            f"const void* b, const void* beta, void* c, inc_t rs_c, inc_t cs_c, " \
-           f"auxinfo_t* data, const cntx_t* cntx );"
+           f"const auxinfo_t* data, const cntx_t* cntx );"
 
 
 def cntx_init(config_name: str, gen, kernels: list[kernel], defaults: dict, blocksizes: dict) -> str:
@@ -203,7 +226,7 @@ def cntx_init(config_name: str, gen, kernels: list[kernel], defaults: dict, bloc
             lines.append(f"""\
 	const ukrgen_gemm_entry* k_{ch} = ukrgen_{ch}gemm_choose( ukrgen_env( "BLIS_MR_{ch.upper()}" ),
 	                                                    ukrgen_env( "BLIS_NR_{ch.upper()}" ) );
-	const dim_t vl_{ch} = ukrgen_vl( sizeof( {ctype} ) );
+	const dim_t vl_{ch} = k_{ch}->vl( sizeof( {ctype} ) );
 	const dim_t mr_{ch} = ukrgen_size( k_{ch}->mr_count, k_{ch}->mr_vectors, vl_{ch} );
 	const dim_t nr_{ch} = ukrgen_size( k_{ch}->nr_count, k_{ch}->nr_vectors, vl_{ch} );
 	const dim_t mc_{ch} = {int(bs["mr-in-mc"])} * mr_{ch};
@@ -223,10 +246,12 @@ def cntx_init(config_name: str, gen, kernels: list[kernel], defaults: dict, bloc
 	bli_cntx_set_ukr_prefs( cntx,
 {prefs}	                        BLIS_VA_END );
 """ if dts else ""
+    helpers = vl_helpers(kernels, gen)
+    tables = "".join(gemm_table(dt, kernels, defaults.get(dt)) for dt in dts)
     return f"""\
 #include "blis.h"
 
-{vl_helper(gen)}
+{helpers}
 {protos}
 
 {GEMM_TABLE_PRELUDE}

@@ -4,192 +4,83 @@
 # Copyright (C) 2021 Stepan Nassyr <s.nassyr@xcpp.org>
 # ------------------------------------------------------------------------------
 
-import datetime
 import logging
 import os
 import sys
 import tempfile
 
-import yaml
-
 from argparse import ArgumentParser
 
 from ukrgen.logging import setup_loggers
 
+
 def main():
-
-    parser = ArgumentParser()
-
-    parser.add_argument("--debug",
-                        help="Enables debug output for a specific subsystem; without any arguments, all debug output is enabled",
-                        nargs="*",
-                        type=str)
-
-    kernels = ["sgemm","dgemm"]
-    for k in kernels:
-        parser.add_argument(f"--{k}-config",
-                            help=f"file containing the configuration for {k} "
-                                 f"(without --family-config)",
-                            type=str)
-
-    parser.add_argument("--family-config",
-                        help="A kernel family configuration (YAML): every size its families "
-                             "build, chosen at run time (BLIS_MR_<dt>, BLIS_NR_<dt>); its files "
-                             "are written under --out-dir")
+    parser = ArgumentParser(
+            description="Generate a BLIS configuration from ukrgen kernel families: every "
+                        "microtile size a family builds, the microkernel chosen at run time "
+                        "(BLIS_MR_<dt>, BLIS_NR_<dt>), the family's default otherwise")
+    parser.add_argument("--debug", nargs="*", help="debug output of these systems")
+    for kind in ("gemm", "packm"):
+        for ch, dt in (("s", "FP32"), ("d", "FP64")):
+            parser.add_argument(f"--{ch}{kind}-config",
+                                help=f"the {dt} {kind} kernel family (YAML): its ukrgen "
+                                     f"parameters, the sizes to try, its default size")
+    parser.add_argument("--config-name",
+                        help="the BLIS configuration's name (default: ukrgen_<isa>)")
+    parser.add_argument("--parent-config-name",
+                        help="a configuration whose kernels this one inherits")
     parser.add_argument("--stack-buf-size", type=int,
                         help="BLIS_STACK_BUF_MAX_SIZE in bytes - the temporary microtile of "
-                             "partial tiles; default: the configuration's, else the largest "
-                             "kernel's tile at the ISA's longest vector")
-    parser.add_argument("--config-name",
-                        help="name of the blis config (default: ukrgen_<isa>)",
-                        type=str,
-                        required=False)
+                             "partial tiles; default: the largest kernel's tile at the ISA's "
+                             "longest vector")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--from-dir", help="patch the BLIS source in this directory")
+    source.add_argument("--from-git", action="store_true",
+                        help="patch BLIS cloned from github.com/flame/blis")
+    parser.add_argument("--temp-dir", help="where --from-git clones to")
+    parser.add_argument("--out-dir", required=True,
+                        help="the patched BLIS tree; without a BLIS source, the configuration's "
+                             "files alone")
+    parser.add_argument("--overwrite", action="store_true", help="replace --out-dir")
+    parser.add_argument("--author", required=True,
+                        help="Author to insert in the copyright string")
+    args = parser.parse_args()
 
-    parser.add_argument("--parent-config-name",
-                help="Make the generated BLIS config a child of this config",
-                type=str,
-                required=False
-                )
-    parser.add_argument("--kernel-reuse-file",
-                help="Path to a yaml file containing a list of microkernels to reuse from the parent configuration",
-                type=str,
-                required=False
-                )
+    if args.debug is None:
+        setup_loggers()
+    elif args.debug:
+        setup_loggers(debug_systems=set(args.debug))
+    else:
+        setup_loggers(debugall=True)
 
-    source_group = parser.add_mutually_exclusive_group()
-    source_group.add_argument("--from-dir",
-                              help="generate blis using the source in the specified directory",
-                              type=str)
-    source_group.add_argument("--from-git",
-                              help="generate blis using the source in the specified git repository URL",
-                              type=str)
+    from ukrgen.injectors.blis.families import configuration
+    files = {(kind, dt): getattr(args, f"{ch}{kind}_config")
+             for kind in ("gemm", "packm") for ch, dt in (("s", "FP32"), ("d", "FP64"))}
+    if not any(files.values()):
+        parser.error("no family files: give at least --sgemm-config or --dgemm-config")
+    cfg = configuration.from_files(files, name=args.config_name,
+                                   stack_buf_size=args.stack_buf_size)
 
-    parser.add_argument("--temp-dir",
-                        help="Directory to put temporary files in (default: autogenerated)",
-                        type=str,
-                        required=False)
-
-    parser.add_argument("--out-dir",
-                        help="directory to output the generated source to",
-                        type=str,
-                        required=True)
-
-    parser.add_argument("--overwrite",
-                        help="overwrite the output directory if it exists",
-                        action="store_true",
-                        required=False)
-
-    parser.add_argument("--author",
-                        help="Author to insert in the copyright string",
-                        type=str,
-                        required=True)
-
-
-
-
-    args,rest = parser.parse_known_args()
-
-    debugall = False
-    debug_systems = list()
-
-    if args.debug is not None:
-        if len(args.debug) > 0:
-            debug_systems = set(args.debug)
-        else:
-            debugall = True
-
-    setup_loggers(debugall=debugall, debug_systems=debug_systems)
-
-
-    if args.family_config is not None:
-        from ukrgen.injectors.blis.families import configuration
+    if not args.from_dir and not args.from_git:
         from ukrgen.injectors.blis.generate import generate
-        cfg = configuration.load(args.family_config)
-        if args.config_name is not None:
-            cfg.name = args.config_name
         made = generate(cfg, args.out_dir, stack_size=args.stack_buf_size)
-        print(f"{len(made['kernels'])} kernels, {len(made['skipped'])} sizes skipped, "
-              f"{len(made['files'])} files under {args.out_dir}")
-        return 0
-
-    # the old path: one kernel per data type, on the old flow
-    from git import Repo
-    from ukrgen.codegen.isa_compiler_support import isa_flags
-    from ukrgen.injectors.blis.patcher import blis_patcher
-
-    if args.sgemm_config is None or args.dgemm_config is None:
-        parser.error("--sgemm-config and --dgemm-config are needed without --family-config")
-    if args.from_git is None and args.from_dir is None:
-        parser.error("one of --from-dir and --from-git is needed")
-
-    with open(args.sgemm_config, "r") as sf:
-        sgemm_config = yaml.safe_load(sf)
-    with open(args.dgemm_config, "r") as df:
-        dgemm_config = yaml.safe_load(df)
-
-    # TODO: compatible ISAs (sme<->sve<->neon, avx512<->avx2, etc...)
-    assert(sgemm_config["isa"] == dgemm_config["isa"])
-
-    isa = sgemm_config["isa"]
-
-    blis_dir = ""
-    if args.from_git is not None:
-        temp_dir = ""
-        if args.temp_dir:
-            temp_dir = args.temp_dir
-        else:
-            temp_dir = tempfile.TemporaryDirectory().name
-        blis_dir = os.path.join(temp_dir,"vanillablis")
-        Repo.clone_from("https://github.com/flame/blis", blis_dir)
     else:
+        from ukrgen.injectors.blis.patch import patch_blis
         blis_dir = args.from_dir
-
-    configname=f"ukrgen_{isa}"
-    if args.config_name is not None:
-        configname = args.config_name
-
-
-    if args.parent_config_name is not None:
-        bp = blis_patcher(parent_configname=args.parent_config_name)
-    else:
-        bp = blis_patcher()
-
-    if args.kernel_reuse_file is not None and args.parent_config_name is None:
-            raise ValueError("--kernel-reuse-file must be used together with --parent-config-name")
-
-    existing_kernels = []
-    if args.kernel_reuse_file:
-        with open(args.kernel_reuse_file, "r") as krf:
-            krf_data = yaml.safe_load(krf)
-        
-        if krf_data:
-            existing_kernels=[tuple(item) for item in krf_data]
-
-    for blis_kernel_type,blis_data_type,function_name in existing_kernels:
-        bp.add_existing_kernel(
-                blis_ukr_type=blis_kernel_type,
-                blis_data_type=blis_data_type,
-                function_name=function_name)
-
-
-    blis_params = {
-        "year" : datetime.datetime.today().strftime("%Y"),
-        "author" : args.author,
-        "configname" : configname,
-        "cntx_extra_defs" : "",
-        "cntx_init_extra" : "",
-        "simd_size" : "get_simd_size()",
-        "archflags" : isa_flags[isa],
-    }
-
-    bp.make_kernels([sgemm_config,dgemm_config],
-                    blis_params)
-
-
-    bp.prepare_code(blis_params)
-
-    bp.patch(blis_dir, args.out_dir, overwrite=args.overwrite)
+        if args.from_git:
+            from git import Repo
+            temp_dir = args.temp_dir or tempfile.mkdtemp()
+            blis_dir = os.path.join(temp_dir, "vanillablis")
+            Repo.clone_from("https://github.com/flame/blis", blis_dir)
+        made = patch_blis(blis_dir, args.out_dir, cfg, args.author,
+                          parent=args.parent_config_name, overwrite=args.overwrite,
+                          stack_size=args.stack_buf_size)
+    print(f"{cfg.name}: {len(made['kernels'])} kernels, {len(made['skipped'])} sizes skipped, "
+          f"{len(made['files'])} files under {args.out_dir}")
+    for fam, dt, (m, n), why in made["skipped"]:
+        logging.getLogger("BLISGEN").info(f"skipped {fam} {dt} {m}x{n}: {why}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

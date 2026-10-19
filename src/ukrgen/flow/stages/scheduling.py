@@ -55,7 +55,13 @@ class schedule_stage(stage):
                 description="Dependency distances, dep:regt:rtag:op1:op2:dist")
         self.params["mru"] = stage_param(
                 value=False, default=False, flag=True, required=False,
-                description="Schedule straight-line blocks within the registers there are")
+                description="Schedule straight-line blocks within the registers there are - "
+                            "the default; kept for older command lines")
+        self.params["no-mru"] = stage_param(
+                value=False, default=False, flag=True, required=False,
+                description="Don't schedule straight-line blocks within the registers there "
+                            "are: a gemm whose accumulators fill the register file then can't "
+                            "stream C through its epilogue")
         self.params["mru-inflight"] = stage_param(
                 value=None, required=False,
                 description="With --mru: values loaded ahead of their use at most at once")
@@ -72,7 +78,9 @@ class schedule_stage(stage):
                      for s in self.params["distances"].value or []]
         except (ValueError, KeyError) as err:
             raise stage_error(f"--distances: {err}") from err
-        mru = bool(self.params["mru"].value)
+        # on unless turned off: the epilogue's C streams through the registers
+        # the accumulators free only when scheduled so
+        mru = not bool(self.params["no-mru"].value)
         if not specs and not mru:
             self.context.params.update(self.params)
             return []

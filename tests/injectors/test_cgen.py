@@ -76,7 +76,7 @@ class test_cgen(unittest.TestCase):
         self.assertEqual(4, len(built))
         src = "#include \"blis_stub.h\"\n#include <stdio.h>\n" \
               "typedef void (*gemm_ukr_ft)( dim_t, dim_t, dim_t, const void*, const void*, const void*, " \
-              "const void*, void*, inc_t, inc_t, auxinfo_t*, const cntx_t* );\n" + \
+              "const void*, void*, inc_t, inc_t, const auxinfo_t*, const cntx_t* );\n" + \
               vl_helper(make_generator("sve")) + "".join(gemm_wrapper(k) for k in built) + \
               GEMM_TABLE_PRELUDE + gemm_table("FP64", built, fam.default["FP64"]) + """
 int main( void )
@@ -146,8 +146,8 @@ int main( void )
     def test_large_tiles(self):
         # the accumulators fill the register file: C streams through the
         # epilogue, scheduled into their registers as they are consumed
-        plain = family.from_yaml("gemm", {"family": "vm", "dtypes": ["FP64"], "params": VM,
-                                          "m": [2], "n": [8]})
+        plain = family.from_yaml("gemm", {"family": "vm", "dtypes": ["FP64"],
+                                          "params": dict(VM, **{"no-mru": True}), "m": [2], "n": [8]})
         built, skipped = build_gemm("sve", "ukrgen_sve", plain)
         self.assertEqual([], built)
         self.assertIn("--mru", skipped[0][2])

@@ -11,7 +11,8 @@ import os
 
 from ...flow.isa_map import make_generator
 from .families import configuration, build_gemm
-from .cgen import (asm_source, gemm_wrapper, cntx_init, family_header, stack_buf_size)
+from .cgen import (asm_source, gemm_wrapper, cntx_init, family_header, stack_buf_size,
+                   vl_helpers)
 
 
 def generate(cfg: configuration, out_dir: str, stack_size: int | None = None) -> dict:
@@ -42,7 +43,8 @@ def generate(cfg: configuration, out_dir: str, stack_size: int | None = None) ->
     for k in kernels:
         write(f"{kdir}/{k.symbol}.S", asm_source(k))
     write(f"{kdir}/bli_gemm_{cfg.name}.c",
-          "#include \"blis.h\"\n\n" + "\n".join(gemm_wrapper(k) for k in kernels))
+          "#include \"blis.h\"\n\n" + vl_helpers(kernels, gen) + "\n" +
+          "\n".join(gemm_wrapper(k) for k in kernels))
     write(f"config/{cfg.name}/bli_cntx_init_{cfg.name}.c",
           cntx_init(cfg.name, gen, kernels, defaults, cfg.blocksizes))
     size = stack_buf_size(cfg.isa, gen, kernels, stack_size or cfg.stack_buf_size)

@@ -10,7 +10,7 @@ enum { BLIS_KR = 0, BLIS_MR, BLIS_NR, BLIS_KC, BLIS_MC, BLIS_NC, BLIS_NUM_BLKSZS
 enum { BLIS_GEMM_UKR = 100, BLIS_GEMM_UKR_ROW_PREF = 200, BLIS_VA_END = -1 };
 typedef struct { dim_t v[ 2 ]; } blksz_t;
 typedef void ( *gemm_ukr_ft )( dim_t, dim_t, dim_t, const void*, const void*, const void*, const void*,
-                               void*, inc_t, inc_t, auxinfo_t*, const cntx_t* );
+                               void*, inc_t, inc_t, const auxinfo_t*, const cntx_t* );
 static gemm_ukr_ft stub_ukr[ 2 ];
 static int stub_pref[ 2 ] = { -1, -1 };
 static dim_t stub_bs[ BLIS_NUM_BLKSZS ][ 2 ];

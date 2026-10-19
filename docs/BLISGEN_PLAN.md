@@ -34,23 +34,18 @@ is updated as the work lands; each step names its status.
 ### Family configuration (YAML)
 
 ```yaml
+# one file per data type and kernel type: --sgemm-config, --dgemm-config,
+# --spackm-config, --dpackm-config (this one: --dgemm-config)
 isa: sve
-config-name: ukrgen_sve        # the BLIS configuration made
-gemm:
-  - family: fma_bcast_b        # a name for the kernels' symbols
-    dtypes: [FP32, FP64]
-    params:                    # ukrgen parameters for every size
-      mm-to: ["fma(A.VEC:direct, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]
-      store-to: ["C.VEC:direct"]
-      ...                      # preload, data registers, irmods, schedule
-    m: 1..4                    # the sizes tried: m in vectors here
-    n: 1..16
-    default: {FP32: 2vx8, FP64: 2vx8}
-packm:
-  - family: vec_cdim
-    dtypes: [FP32, FP64]
-    params: {...}
-    cases: [{cdim: "n*VL", n: 1..8}, {cdim: "1..16", transposed: true}]
+family: vn                     # a name for the kernels' symbols
+m: [4, 8]                      # the sizes tried: m in elements here
+n: 1..3                        # n in vectors
+default: 8x3                   # the kernel when BLIS_MR_D/BLIS_NR_D name none made
+blocksizes: {mr-in-mc: 16, nr-in-nc: 64, kc: 256}
+params:                        # ukrgen parameters for every size
+  mm-to: ["fma(A.VEC:bc_load, B.VEC:direct, AB.VEC){m=1, i=n, k*=1}"]
+  ...                          # the epilogue's choices, layouts, preload, irmods
+# several families: a list under families:
 ```
 
 ### Generation
@@ -96,8 +91,8 @@ packm:
 | 2 | gemm wrappers (BLIS signature, edge-case macros) and the kernel table | done: `injectors/blis/cgen.py`, `tests/injectors/test_cgen.py` |
 | 3 | Context initialization: run-time kernel choice from `BLIS_{MR,NR}_{S,D}`, default and fallback; cache blocksize defaults | done: `cgen.cntx_init`, `family_header`, `generate.py`; `--family-config`, `--stack-buf-size` |
 | 3b | Large tiles: C streamed through the epilogue (MRU renaming), register fitting by liveness | done: the default 8x3v builds |
-| 4 | BLIS patching: configuration and kernel directories, registry, PR 960, `inherit` | next |
-| 5 | BLIS build and testsuite: x86 natively, SVE/RVV under qemu | |
+| 4 | BLIS patching: configuration and kernel directories, registry, PR 960, `inherit` | done: `patch.py`, `clitools/blisgen.py` |
+| 5 | BLIS build and testsuite: x86 natively, SVE/RVV under qemu | SVE done (gemm ukr + gemm, sd, rcg); x86, RVV (LMUL 1 and 2), NEON next |
 | 6 | packm families: cases, generated dispatch tree, reference fallback | |
 | 7 | packm in the BLIS configuration; testsuite again | |
 | 8 | Old patcher and templates retired (`clitools/blisgen.py` on the new path) | |
@@ -204,3 +199,37 @@ void bli_cntx_init_<config>( cntx_t* cntx )
   Without --mru such a kernel runs out of registers in the emitter, which
   says to schedule. Families with large tiles set `mru: true`. SVE 8x3v (C
   row-major), NEON 8x3v, SVE 2vx8 exact through the wrapper harness.
+- MRU scheduling is on by default (`--no-mru` turns it off): large tiles need
+  it, the epilogue's C streamed into the accumulators' registers.
+- Family files are per data type and kernel type (`--sgemm-config`,
+  `--dgemm-config`, `--spackm-config`, `--dpackm-config`; packm in step 6);
+  `configuration.from_files` checks their ISAs agree. The configuration's
+  settings stay on the command line: `--config-name`, `--parent-config-name`
+  (inherit), `--stack-buf-size`. `clitools/blisgen.py` is the new path only;
+  the old one (old flow, broken with today's asmgen) is gone from it.
+- Step 4: `patch.py` copies the BLIS tree to `--out-dir`, registers the
+  configuration (the old templates' insertions; INSERT_GENTCONF anchored on
+  its definition, which doesn't change between BLIS versions), writes the
+  generated files, the kernel definitions, `make_defs.mk` and the kernels'
+  prototypes (`GEMM_UKR_PROT`), and applies PR 960 (stored as
+  `injectors/blis/patches/pr960-dynamic-blocksizes.diff`, from the fork's
+  `dynamic-blocksizes` branch; BLIS master a8037cf is its base). The
+  wrappers' `data` is `const auxinfo_t*`, as BLIS declares it.
+- Step 5, SVE: BLIS master patched with an SVE configuration (8 / 4 rows x
+  1..3 vectors, singles and doubles, 8x3v default), cross-built, the
+  testsuite reduced: `gemm` microkernel and level-3 `gemm` only (2 in
+  `input.operations`), data types `sd`, storage `rcg`, sizes 43 and 96 (96 a
+  multiple of every MR and NR at both vector lengths, 43 tails). Under qemu,
+  all pass: default at 256 bits (1920), `BLIS_MR_D=4 BLIS_NR_D=8
+  BLIS_MR_S=8 BLIS_NR_S=8` (768; the testsuite reports MR s 8, d 4), 512
+  bits (3648), an absent size falling back to the default (1920). A run takes
+  about three minutes.
+- LMUL: asmgen's `get_simd_size()` reads the vector size with the
+  generator's LMUL already; each kernel now carries its generator's
+  function and blisgen writes one vector-length function per distinct one,
+  each kernel and table entry using its own - families may differ. An RVV
+  kernel with LMUL 2 exact through the wrapper harness at VLEN 128 and 256.
+- For a detailed run later (the old generator's failures): RVV 12x2vx4,
+  2vx12x8, 2vx14x2, 2vx14x4, 2vx4x1, 3vx8x4 and LMUL 2 2vx7x4, 6x2vx4 failed
+  BLIS operations beyond gemm (trmm, trsm, syr2k, her2k, gemmt, symm, 1m
+  methods) - the same kernels through the full testsuite.

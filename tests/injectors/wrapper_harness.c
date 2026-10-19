@@ -7,7 +7,7 @@
 #define WT double
 #endif
 void UKR( dim_t m, dim_t n, dim_t k, const void* alpha, const void* a, const void* b,
-          const void* beta, void* c, inc_t rs_c, inc_t cs_c, auxinfo_t* data, const cntx_t* cntx );
+          const void* beta, void* c, inc_t rs_c, inc_t cs_c, const auxinfo_t* data, const cntx_t* cntx );
 dim_t MR_OF( void );
 dim_t NR_OF( void );
 #define LD 97

@@ -104,6 +104,42 @@ class configuration:
     blocksizes: dict = field(default_factory=dict)
 
     @staticmethod
+    def from_files(files: dict, name: str | None = None, stack_buf_size: int | None = None,
+                   isa: str | None = None) -> "configuration":
+        """
+        A configuration from a family file per kernel type and data type -
+        files maps (kind, data type), e.g. ("gemm", "FP64"), to a path. A
+        file names the ISA and holds one family (or a list under families):
+        its params, sizes (m, n), default size, and - gemm - the data type's
+        cache blocksizes (mr-in-mc, nr-in-nc, kc). The ISAs must agree
+        """
+        import yaml
+        families, blocksizes = [], {}
+        for (kind, dt), path in files.items():
+            if path is None:
+                continue
+            with open(path) as f:
+                data = yaml.safe_load(f) or {}
+            file_isa = data.get("isa")
+            if file_isa is not None:
+                if isa is not None and file_isa != isa:
+                    raise ValueError(f"{path} is for {file_isa}, the other files for {isa}")
+                isa = file_isa
+            for entry in data.get("families", [data]):
+                entry = dict(entry)
+                entry["dtypes"] = [dt]
+                if "default" in entry and not isinstance(entry["default"], dict):
+                    entry["default"] = {dt: entry["default"]}
+                entry.setdefault("family", kind)
+                families.append(family.from_yaml(kind, entry))
+            if "blocksizes" in data:
+                blocksizes[dt] = dict(data["blocksizes"])
+        if isa is None:
+            raise ValueError("no ISA: a family file names it (isa: ...)")
+        return configuration(isa=isa, name=name or f"ukrgen_{isa}", families=families,
+                             stack_buf_size=stack_buf_size, blocksizes=blocksizes)
+
+    @staticmethod
     def load(path: str) -> "configuration":
         import yaml
         with open(path) as f:
@@ -132,6 +168,11 @@ class kernel:
     params: list[str]
     c_layout: str
     program: object
+    #: the C reading the size of the vectors it uses, as its generator - and
+    #: whatever it groups registers by - writes it
+    simd_size_c: str = ""
+    #: the C function giving its vector length in elements (cgen assigns it)
+    vl_fn: str = "ukrgen_vl"
 
 
 def extent_of(ctx, idx: str) -> sym:
@@ -190,5 +231,6 @@ def build_gemm(isa: str, config_name: str, fam: family) -> tuple[list[kernel], l
                 program = ctx.emitted[0]
                 built.append(kernel(family=fam.name, dtype=dt, size=(m, n), mr=mr, nr=nr,
                                     symbol=symbol, params=list(program.params), c_layout=c_layout,
-                                    program=program))
+                                    program=program,
+                                    simd_size_c=getattr(ctx.gen, "c_simd_size_function", "")))
     return built, skipped
