@@ -313,7 +313,53 @@ class signature_specializer:
         op.indices[0] = lsc_reg_index(comp, [reg])
         return inserted + [op]
 
+    def adapt_slices(self, op) -> list:
+        """
+        A loop over a tile's slices walks the address registers the model's
+        plan gave its accesses - C's loads one, its stores another - not
+        pointers of its own: each register starts at the first slice of the
+        first walk on it in the block (its home), every walk on it an offset
+        from there - another tile's first slice - and the loop leaves it a
+        vector length of steps further. The plan is the emitter's too
+        """
+        db = self.program.offsets
+        order = []
+        for b in op.block:
+            if isinstance(b, (lsc_load, lsc_store)):
+                w = b.properties.get("walk", 0)
+                if w not in order:
+                    order.append(w)
+        order += [w for w in range(len(op.walks)) if w not in order]
+        plan = {}
+        for w in order:
+            walk = op.walks[w]
+            comp, reg = walk.anchor.indices[0].component, walk.anchor.indices[0].indices[0]
+            start = db.elements_offset(walk.anchor.offset, self.program.strides.get(comp, {}))
+            key = (comp, reg)
+            if key not in plan:
+                plan[key] = {"step": walk.step, "home": start, "walks": {}}
+            elif str(plan[key]["step"]) != str(walk.step):
+                raise specialization_error(
+                    f"a loop over slices walks {comp}'s address register by {plan[key]['step']} "
+                    f"and by {walk.step}")
+            plan[key]["walks"][w] = start - plan[key]["home"]
+        inserted = []
+        for (comp, reg), p in plan.items():
+            to_home = p["home"] - self.positions[(comp, reg)]
+            if dict(to_home.terms):
+                inserted.append(lsc_addr_compute(comp, reg, reg, to_home, scalar_tile))
+            # every slice walked: a vector length of steps on
+            self.positions[(comp, reg)] = p["home"] + sym._make(
+                {tuple(sorted(("VL",) + f)): c for f, c in dict(p["step"].terms).items()})
+        op.walk_plan = plan
+        # it moves them: the scheduler keeps what addresses through them after
+        # it, after it
+        op.refresh()
+        return inserted + [op]
+
     def adapt(self, op) -> list:
+        if isinstance(op, lsc_loop) and "slices" == op.info.get("kind"):
+            return self.adapt_slices(op)
         if isinstance(op, lsc_loop):
             # each walk's anchor addressed like any access, its address
             # computations before the loop

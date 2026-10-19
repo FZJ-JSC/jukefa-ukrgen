@@ -418,3 +418,28 @@ class test_slice_preload(unittest.TestCase):
         self.assertGreaterEqual(before.count("mova"), 4)
         self.assertEqual("fmul", code[start + 1].split()[0])
         self.assertTrue(any(l.endswith("_last:") for l in code))
+
+
+class test_slice_pointers(unittest.TestCase):
+    """
+    Loops over slices walk the address registers the model's plan gave their
+    accesses - C's loads one, its stores another - from tile to tile: not a
+    pointer per tile and copy. Unrolled by 4 (singles) with two register
+    sets it fits, and runs
+    """
+
+    def test_unroll4(self):
+        ctx, outs = run_gemm(self, GEMM32, defines=["-DWT=float", "-DNT=float", "-DTOL=1e-4",
+                                                    "-DNCOLS=64"],
+                             march="armv9-a+sme", ctype="float", **{
+                                 "pre-specialize-irmods": ["fuse_slices", "forward_slices",
+                                                           "hoist_slices", "unroll_loops", "hoist"],
+                                 "unroll_loops-factor": "4", "unroll_loops-registers": "2"})
+        code = ctx.emitted[0].instructions()
+        start = next(i for i, l in enumerate(code) if l.endswith("_slices:")
+                     and any(x.startswith("mova") for x in code[i:i + 40]))
+        end = next(i for i, l in enumerate(code) if i > start and l.startswith("cbnz"))
+        # the registers walked are among those the loop's memory accesses use
+        bases = {l.split("[")[1].split(",")[0].split("]")[0] for l in code[start:end]
+                 if l.startswith(("ld1w", "st1w")) and "[" in l}
+        self.assertLessEqual(len(bases), 2, bases)

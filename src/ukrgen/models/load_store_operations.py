@@ -474,3 +474,11 @@ class lsc_loop(lsc_operation):
                     self.reads.append(len(self.indices) - 1)
                 if p in op.writes:
                     self.writes.append(len(self.indices) - 1)
+        # the address registers it walks (its walk plan): moved by it - read
+        # and written
+        for comp, reg in (getattr(self, "walk_plan", None) or {}):
+            self.indices.append(lsc_reg_index(comp, [reg]))
+            self.rtypes.append(None)
+            self.reg_types.append(lsc_reg_type.address)
+            self.reads.append(len(self.indices) - 1)
+            self.writes.append(len(self.indices) - 1)

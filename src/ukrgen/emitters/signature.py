@@ -242,7 +242,14 @@ class signature_emitter:
             if rgt.VEC == rtype:
                 bound = self.bounds.get(key)
                 if bound is None:
-                    number = self.rt.reserve_any_reg("vreg")
+                    try:
+                        number = self.rt.reserve_any_reg("vreg")
+                    except IndexError as err:
+                        raise specialization_error(
+                            f"{key[0]}: no vector register left - the accumulators, the data "
+                            f"registers and a loop's unrolled copies (unroll_loops' factor and "
+                            f"registers) take them all; fewer register sets or data registers "
+                            f"fit") from err
                 else:
                     used = self.rt.get_used_regs("vreg")
                     free = [i for i in bound if i not in used]
@@ -398,13 +405,10 @@ class signature_emitter:
                 # RVV: the vector length is in a register - add it in bytes
                 vlb = self.vl_bytes(dt)
                 lines += [self.gen.add_greg_greg(dst=areg, reg1=areg, reg2=vlb)] * (coeff // esize)
-            elif ("VL",) == factors and coeff > 0 and 0 == coeff % esize:
-                # whole vectors: incb x, ALL, MUL #n, n at most 16 a time
-                vectors = coeff // esize
-                while vectors:
-                    step = min(vectors, 16)
-                    lines.append(self.gen.add_greg_voff(reg=areg, offset=step, dt=dt))
-                    vectors -= step
+            elif ("VL",) == factors and coeff and 0 == coeff % esize:
+                # whole vectors, forward or back: incb or decb (the generator
+                # splits what one instruction can't take)
+                lines.append(self.gen.add_greg_voff(reg=areg, offset=coeff // esize, dt=dt))
             elif 1 == len(factors) and factors[0].startswith("stride(") \
                     and coeff > 0 and 0 == coeff % esize:
                 sreg = self.stride_reg(factors[0])
@@ -466,8 +470,37 @@ class signature_emitter:
         # shared by walks of the same step
         explicit = op.info.get("unrolled")
         scale = op.subtiling.unroll if explicit else 1
+        plan = getattr(op, "walk_plan", None)
+        # the plan's registers walk themselves: where each stands, as an offset
+        # from its home at this iteration's first slice
+        current = {key: sym.const(0) for key in plan} if plan else {}
+        walk_of = {w: key for key, p in (plan or {}).items() for w in p["walks"]}
+        def place(b):
+            w = b.properties.get("walk", 0)
+            key = walk_of[w]
+            comp = key[0]
+            target = plan[key]["walks"][w]
+            out = []
+            if dict((target - current[key]).terms):
+                out += self.add_bytes(self.aregs[key], self.bytes_of(comp, target - current[key]), comp)
+                current[key] = target
+            return out, self.aregs[key]
+        def step_on(slices):
+            # every register to the next iteration's home, slices on
+            out = []
+            for key, p in (plan or {}).items():
+                move = sym._make({f: c * slices for f, c in dict(p["step"].terms).items()}) - current[key]
+                if dict(move.terms):
+                    out += self.add_bytes(self.aregs[key], self.bytes_of(key[0], move), key[0])
+                current[key] = sym.const(0)
+            return out
+        def settle():
+            # where the loop leaves them: as the specializer has it
+            for key, p in (plan or {}).items():
+                self.positions[key] = p["home"] + sym._make(
+                    {tuple(sorted(("VL",) + f)): c for f, c in dict(p["step"].terms).items()})
         walkers, deltas, steps, shared = [], [], {}, {}
-        for walk in op.walks:
+        for walk in ([] if plan else op.walks):
             anchor = walk.anchor
             wcomp, wreg = anchor.indices[0].component, anchor.indices[0].indices[0]
             elements = self.program.offsets.elements_offset(
@@ -537,7 +570,11 @@ class signature_emitter:
                 if b in sliced:
                     b.properties.update(slice_reg=index, slice_imm=b.properties.get("copy", 0))
                 if isinstance(b, (lsc_load, lsc_store)):
-                    walker = walkers[b.properties.get("walk", 0)]
+                    if plan:
+                        moves, walker = place(b)
+                        out += moves
+                    else:
+                        walker = walkers[b.properties.get("walk", 0)]
                     line = self._mem(b, self.reg(b.indices[1], b.rtypes[1]), walker, 0)
                     if line is None:
                         raise specialization_error(f"{op.info.get('component')}: no {b.step.op} "
@@ -550,8 +587,11 @@ class signature_emitter:
                     out += self._emit_op(b)
             return out
         def advance():
-            out = [self.gen.add_greg_greg(dst=w, reg1=w, reg2=d)
-                   for w, d in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values()]
+            if plan:
+                out = step_on(unroll)
+            else:
+                out = [self.gen.add_greg_greg(dst=w, reg1=w, reg2=d)
+                       for w, d in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values()]
             return out + [self.gen.add_greg_imm(reg=index, imm=unroll)]
         if preload:
             first = [b for b in op.block if early(b)]
@@ -571,6 +611,7 @@ class signature_emitter:
             lines += emit_ops(rest)
             for r in [counter, index] + list(shared.values()) + list(steps.values()):
                 self.rt.unuse_reg("greg", r.idx)
+            settle()
             return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
                     if l.strip()]
         for u in range(1 if explicit else unroll):
@@ -590,7 +631,11 @@ class signature_emitter:
                     b.properties.update(slice_reg=index,
                                         slice_imm=b.properties.get("copy", 0) if explicit else u)
                 if isinstance(b, (lsc_load, lsc_store)):
-                    walker = walkers[b.properties.get("walk", 0)]
+                    if plan:
+                        moves, walker = place(b)
+                        lines += moves
+                    else:
+                        walker = walkers[b.properties.get("walk", 0)]
                     line = self._mem(b, self.reg(b.indices[1], b.rtypes[1]), walker, 0)
                     if line is None:
                         raise specialization_error(f"{op.info.get('component')}: no {b.step.op} "
@@ -601,8 +646,13 @@ class signature_emitter:
                     lines.append(self.move(b))
                 else:
                     lines += self._emit_op(b)
-            for walker, delta in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values():
-                lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
+            if plan:
+                # explicit copies are in the block: an iteration takes unroll
+                # slices; otherwise each copy one
+                lines += step_on(unroll if explicit else 1)
+            else:
+                for walker, delta in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values():
+                    lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
             self.phys.update(saved)
         for group in sets:
             for n, _ in group.values():
@@ -612,6 +662,7 @@ class signature_emitter:
         lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
         for r in [counter, index] + list(shared.values()) + list(steps.values()):
             self.rt.unuse_reg("greg", r.idx)
+        settle()
         return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
                 if l.strip()]
 
