@@ -116,8 +116,11 @@ class program_builder:
         self.ctx = ctx
         self.gen = ctx.gen
         self.comp = ctx.composition
-        self.part = ctx.to_parts[part]
-        self.stos = ctx.stos[part]
+        # the parts of a split microtile, built into one program: their STOs
+        # one after another in each section; part and stos are the current one
+        ids = list(part) if isinstance(part, (list, tuple)) else [part]
+        self.parts = [(ctx.to_parts[p], ctx.stos[p]) for p in ids]
+        self.part, self.stos = self.parts[0]
         self.flow = self.comp.dataflow()
         self.addressing = addressing or {}
         self.data_regs = data_regs or {}
@@ -126,15 +129,28 @@ class program_builder:
 
         self.db = offset_db()
         self.extents: dict[str, sym] = {}
-        for tiling in self.stos.values():
-            for idx, ext in tiling.extents.items():
-                self.extents.setdefault(idx, sym.extent(ext) * ctx.dims[idx])
+        part_dims = getattr(ctx, "part_dims", None) or [ctx.dims] * len(ctx.to_parts)
+        split = getattr(ctx, "split_index", None)
+        for n, (pid, (_, stos)) in enumerate(zip(ids, self.parts)):
+            seen = set()
+            for tiling in stos.values():
+                for idx, ext in tiling.extents.items():
+                    if idx in seen:
+                        continue
+                    seen.add(idx)
+                    here = sym.extent(ext) * part_dims[pid][idx]
+                    if 0 == n:
+                        self.extents[idx] = here
+                    elif idx == split:
+                        # along the split index the microtile is every part's
+                        self.extents[idx] = self.extents[idx] + here
         self.strides = {
             comp: layout_strides(comp, kinds, ctx.component_packing.get(comp, []), self.extents)
             for comp, kinds in ctx.component_strides.items()}
 
-        self.subtails = ctx.subtail_stos[part] if len(ctx.subtail_stos) > part else {}
-        self.subtail_impls = ctx.subtail_parts[part] if len(ctx.subtail_parts) > part else {}
+        first = ids[0]
+        self.subtails = ctx.subtail_stos[first] if len(ctx.subtail_stos) > first else {}
+        self.subtail_impls = ctx.subtail_parts[first] if len(ctx.subtail_parts) > first else {}
 
         # Register coordinates of each component in the order the STOs first
         # use them: the rank names the register and picks the address
@@ -144,7 +160,8 @@ class program_builder:
         # would interleave the loop index.
         coords: dict[str, list] = {}
         order = [n for n in self.comp.sto_order() if n in self.stos]
-        for tiling in [self.stos[n] for n in order] + list(self.subtails.values()):
+        for tiling in [stos[n] for n in order for _, stos in self.parts if n in stos] + \
+                list(self.subtails.values()):
             for op in tiling.ops:
                 for name in op.tile_strs:
                     if name in self.components:
@@ -184,21 +201,22 @@ class program_builder:
         """
         rtypes: dict[str, set] = {}
         written: set[str] = set()
-        for sto in self.stos:
-            impl = self.part[sto].impl if sto in self.part else None
-            if not hasattr(impl, "resolved_chain"):
-                # a store's choice: no operation
-                continue
-            for res, step in zip(impl.resolved_chain, impl.math_chain):
-                written.add(step.name_mapping.get(step.hw_ast.left.name, step.hw_ast.left.name))
-                for hw, math in step.name_mapping.items():
-                    shape = res.compute_sg.representative.operands.get(hw)
-                    strat = [st for (n, _), st in res.operand_strategies.items() if n == hw]
-                    resident = next((getattr(st.rsln, "resident_rtype", None) for st in strat
-                                     if getattr(st.rsln, "resident_rtype", None)), None)
-                    rtype = resident or (shape.rtype if shape is not None else None)
-                    if rtype is not None:
-                        rtypes.setdefault(math, set()).add(rtype)
+        for part, stos in self.parts:
+            for sto in stos:
+              impl = part[sto].impl if sto in part else None
+              if not hasattr(impl, "resolved_chain"):
+                  # a store's choice: no operation
+                  continue
+              for res, step in zip(impl.resolved_chain, impl.math_chain):
+                  written.add(step.name_mapping.get(step.hw_ast.left.name, step.hw_ast.left.name))
+                  for hw, math in step.name_mapping.items():
+                      shape = res.compute_sg.representative.operands.get(hw)
+                      strat = [st for (n, _), st in res.operand_strategies.items() if n == hw]
+                      resident = next((getattr(st.rsln, "resident_rtype", None) for st in strat
+                                       if getattr(st.rsln, "resident_rtype", None)), None)
+                      rtype = resident or (shape.rtype if shape is not None else None)
+                      if rtype is not None:
+                          rtypes.setdefault(math, set()).add(rtype)
         shared = getattr(self.gen, "are_fregs_in_vregs", False)
         def on_vregs(comp):
             kinds = rtypes.get(comp, set())
@@ -214,9 +232,10 @@ class program_builder:
         for block in self.comp.all_blocks():
             comps = set()
             for name in getattr(block, "stos", []):
-                if name in self.stos:
-                    for op in self.stos[name].ops:
-                        comps |= {n for n in op.tile_strs if n in on_file}
+                for _, stos in self.parts:
+                    if name in stos:
+                        for op in stos[name].ops:
+                            comps |= {n for n in op.tile_strs if n in on_file}
             if comps:
                 blocks.append(comps)
         shares: dict[str, int] = {}
@@ -939,11 +958,21 @@ class program_builder:
         """
         # which group's register a section loaded last starts afresh
         self.lane_groups = {}
-        self.begin_section([(sto, ops, tiling) for sto, ops, tiling, _ in parts])
+        self.begin_section([(sto, ops, tiling) for sto, ops, tiling, *_ in parts])
         items = []
-        for sto, ops, tiling, impl in parts:
+        for sto, ops, tiling, impl, *which in parts:
+            if which:
+                self.part, self.stos = self.parts[which[0]]
             items += self.emit_sto(sto, ops, tiling, impl)
+        self.part, self.stos = self.parts[0]
         return items
+
+    def items(self, names, ops_of=lambda tiling: tiling.ops) -> list[tuple]:
+        """
+        A section's STOs for every part: (sto, operations, tiling, None, part)
+        """
+        return [(sto, ops_of(stos[sto]), stos[sto], None, n)
+                for sto in names for n, (_, stos) in enumerate(self.parts) if sto in stos]
 
     def forget(self, components):
         """
@@ -964,14 +993,24 @@ class program_builder:
             for acc in sorted(self.comp.accumulators(sto)):
                 if read_access.ZERO != self.flow[(sto, acc)].read:
                     continue
-                rtype = produced_rtype(self.part[sto].impl, acc)
-                for coord in self.coords[acc]:
-                    reg = self.reg_of(acc, rtype, coord)
-                    if self.holder.get(reg) != (acc, coord):
-                        ops.append(lsc_zero(reg.owner, reg.index,
-                                            self.stos[sto].registers[acc],
-                                            rtypes=[reg.rtype]))
-                        self.holder[reg] = (acc, coord)
+                # each part's tiles in its register type: a split
+                # microtile's accumulator in tiles and in vectors
+                for part, stos in self.parts:
+                    if sto not in stos:
+                        continue
+                    rtype = produced_rtype(part[sto].impl, acc)
+                    tiling = stos[sto]
+                    mine = []
+                    for op in tiling.ops:
+                        g = self.gcoord(tiling, acc, op.coord(acc))
+                        if g not in mine:
+                            mine.append(g)
+                    for coord in mine:
+                        reg = self.reg_of(acc, rtype, coord)
+                        if self.holder.get(reg) != (acc, coord):
+                            ops.append(lsc_zero(reg.owner, reg.index, tiling.registers[acc],
+                                                rtypes=[reg.rtype]))
+                            self.holder[reg] = (acc, coord)
         if any(self.data_regs.get(a, len(self.coords[a])) < len(self.coords[a])
                for sto in block.stos for a in self.comp.accumulators(sto)):
             raise model_error("an accumulator needs a register for every tile it "
@@ -991,7 +1030,7 @@ class program_builder:
 
         streamed = {c for sto in block.stos for c in self.comp.get_sto(sto).operands
                     if read_access.STREAM == self.flow[(sto, c)].read}
-        items = self.emit_section([(sto, self.stos[sto].ops, None, None) for sto in block.stos])
+        items = self.emit_section(self.items(block.stos))
 
         # what the loop stores along its index moves with it too (a packing
         # kernel's buffer); only what it reads did
@@ -1048,8 +1087,8 @@ class program_builder:
         # unroll of 1 the loop itself steps by one operation.
         if block.tail and out.unroll > 1:
             self.forget(streamed)
-            items = self.emit_section([(sto, self.stos[sto].regenerate(counts={k: 1}), None, None)
-                                       for sto in block.stos])
+            items = self.emit_section(self.items(block.stos,
+                                                 lambda tiling: tiling.regenerate(counts={k: 1})))
             out.tail = _flatten(items)
             out.tail_step = extent
 
@@ -1090,7 +1129,7 @@ class program_builder:
     def build_block(self, block: block_description) -> ir_block:
         if block.is_loop:
             return self.build_loop(block)
-        items = self.emit_section([(sto, self.stos[sto].ops, None, None) for sto in block.stos])
+        items = self.emit_section(self.items(block.stos))
         return ir_block(name="+".join(block.stos), body=_flatten(items))
 
     def build(self) -> ir_program:
