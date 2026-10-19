@@ -93,8 +93,8 @@ packm:
 | # | Step | Status |
 |---|------|--------|
 | 1 | Family configuration: loading, size enumeration, a flow run per size; kernel metadata (symbol, mr/nr, parameters, C layout) | done for gemm: `injectors/blis/families.py`, `tests/injectors/test_families.py` |
-| 2 | gemm wrappers (BLIS signature, edge-case macros) and the kernel table | next |
-| 3 | Context initialization: run-time kernel choice from `BLIS_{MR,NR}_{S,D}`, default and fallback; cache blocksize defaults | |
+| 2 | gemm wrappers (BLIS signature, edge-case macros) and the kernel table | done: `injectors/blis/cgen.py`, `tests/injectors/test_cgen.py` |
+| 3 | Context initialization: run-time kernel choice from `BLIS_{MR,NR}_{S,D}`, default and fallback; cache blocksize defaults | next |
 | 4 | BLIS patching: configuration and kernel directories, registry, PR 960, `inherit` | |
 | 5 | BLIS build and testsuite: x86 natively, SVE/RVV under qemu | |
 | 6 | packm families: cases, generated dispatch tree, reference fallback | |
@@ -112,3 +112,22 @@ packm:
   doubles: 2 per vector), on VLA ISAs as multiples of VL (`2*VL`, symbol
   `2v`). A size that doesn't fit is skipped with the flow's first line of
   reason ("... vector registers ...").
+- Step 2: a wrapper per kernel has BLIS's gemm microkernel signature, reads
+  MR and NR (the vector length at run time where they're vectors), and
+  brackets the assembly call with `GEMM_UKR_SETUP_CT`/`GEMM_UKR_FLUSH_CT`
+  in the kernel's C orientation - partial tiles, the other orientation and
+  general strides go through BLIS's temporary tile. BLIS's arguments map onto
+  the kernel's parameters by name; C's stride in bytes. A table per data type
+  lists the kernels as (count, vectors) for MR and NR and chooses by MR x NR
+  in elements, falling back to the family's default size. Tested through a
+  stub of blis.h (`tests/injectors/blis_stub.h`: BLIS's types and the
+  edge-case macros as BLIS defines them): NEON and SVE wrappers exact on
+  full and partial tiles in all three storages; the chooser exact and
+  falling back.
+- To do with step 3: the stack temporary tile is `BLIS_STACK_BUF_MAX_SIZE`
+  bytes; long vectors need more (8x3v doubles at 2048-bit SVE: 6 KiB) - the
+  configuration should set it from the largest kernel at the longest vector
+  length it supports.
+- asmgen's `get_simd_size()` on RVV measures one ungrouped register; with
+  LMUL above 1 a kernel's vector is a group - the function should take the
+  grouping into account (asmgen's state). Families use LMUL 1 until then.

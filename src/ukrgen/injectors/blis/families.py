@@ -145,7 +145,7 @@ def size_name(expr: str) -> str:
     """
     text = str(expr).replace(" ", "")
     if "VL" == text:
-        return "v"
+        return "1v"
     if text.endswith("*VL"):
         return text[:-3] + "v"
     return text
