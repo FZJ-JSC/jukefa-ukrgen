@@ -80,10 +80,10 @@ class test_sme_run(unittest.TestCase):
         ctx, res = run(**{"C-subtiling": "slices_col:unroll=2"})
         code = ctx.emitted[0].instructions()
         start = next(i for i, l in enumerate(code) if l.endswith("_slices:"))
-        stores = [l for l in code[start:start + 8] if l.startswith("st1d")]
-        self.assertEqual(["st1d {za0v.d[w12, 0]}", "st1d {za0v.d[w12, 1]}"],
-                         [l.split(",")[0] + "," + l.split(",")[1] for l in stores])
-        self.assertTrue(any(l.endswith(",#2") and "x12" in l for l in code[start:start + 8]))
+        end = next(i for i, l in enumerate(code) if i > start and l.startswith("cbnz"))
+        stores = [l.split("}")[0] + "}" for l in code[start:end] if l.startswith("st1d {za0v")]
+        self.assertEqual(["st1d {za0v.d[w12, 0]}", "st1d {za0v.d[w12, 1]}"], stores)
+        self.assertTrue(any(l.endswith(",#2") and "x12" in l for l in code[start:end]))
 
 
 if __name__ == "__main__":
@@ -200,6 +200,10 @@ class test_slice_irmods(unittest.TestCase):
         self.assertLess(count(fused, lambda l: l.startswith("st1d {za")),
                         count(plain, lambda l: l.startswith("st1d {za")))
         self.assertLess(len(fused), len(plain))
+        # across tiles: one loop over slices per case of the dispatch
+        import re
+        cases = sum(1 for l in fused if re.fullmatch(r"\.ukr\d+_case\d+:", l))
+        self.assertEqual(cases, count(fused, lambda l: l.endswith("_slices:")))
         # no broadcast left inside a loop over slices
         inside = False
         for l in fused:

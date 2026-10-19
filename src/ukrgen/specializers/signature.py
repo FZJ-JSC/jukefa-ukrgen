@@ -698,6 +698,20 @@ class signature_emitter:
                     and coeff > 0 and 0 == coeff % esize:
                 sreg = self.stride_reg(factors[0])
                 lines += [self.gen.add_greg_greg(dst=areg, reg1=areg, reg2=sreg)] * (coeff // esize)
+            elif coeff < 0 and 0 == coeff % esize and (
+                    (1 == len(factors) and factors[0].startswith("stride(")) or ("VL",) == factors
+                    or (2 == len(factors) and "VL" == factors[0] and factors[1].startswith("stride("))):
+                # backwards: the amount's register negated once, added as often
+                if 1 == len(factors) and factors[0].startswith("stride("):
+                    source = self.stride_reg(factors[0])
+                elif ("VL",) == factors:
+                    source = self.vl_bytes(dt)
+                else:
+                    source = self.vl_stride(factors[1], dt)
+                negated = self.greg()
+                lines.append(self.gen.mul_greg_imm(src=source, dst=negated, factor=-1))
+                lines += [self.gen.add_greg_greg(dst=areg, reg1=areg, reg2=negated)] * (-coeff // esize)
+                self.rt.unuse_reg("greg", negated.idx)
             else:
                 raise specialization_error(
                     f"moving {comp}'s address by {amount} bytes needs run-time arithmetic "

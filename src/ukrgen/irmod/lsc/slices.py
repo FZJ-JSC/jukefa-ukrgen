@@ -6,7 +6,7 @@ loads hoisted out of them
 from asmgen.asmblocks.op import register_type as rgt
 
 from ...models.load_store_operations import lsc_load, lsc_store, lsc_move, lsc_loop
-from .base import irmod_placement, lsc_irmod, blocks_and_sections
+from .base import irmod_param, irmod_placement, lsc_irmod, blocks_and_sections
 
 
 SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
@@ -68,10 +68,14 @@ class fuse_slices(lsc_irmod):
     adding on a tile and the tile's store run in one pass over its slices
     """
     name = "fuse_slices"
-    description = "fuse adjacent loops over the same tile's slices"
+    description = "fuse loops over tiles' slices: the same tile's, or every tile's of a path"
     placement = irmod_placement.PRE_SPECIALIZE
     default_enabled = True
-    constraints = "the loops cover a tile register in common, by slices of one orientation"
+    constraints = "slices of one orientation, as many; nothing flowing between the loops' tiles"
+    params = [irmod_param(name="across_tiles", default=True,
+                          parse=lambda v: str(v).lower() not in ("0", "false", "no", "off"),
+                          description="fuse loops over different tiles too - one pass over the "
+                                      "slices of every tile of a path, a slice index shared")]
 
     def apply(self, program) -> int:
         fused = 0
@@ -85,7 +89,7 @@ class fuse_slices(lsc_irmod):
                     second = ops[j]
                     # a later loop over the same tiles moves up to the first,
                     # past what it doesn't depend on, and joins it
-                    if slice_loop(second) and self.compatible(first, second) and \
+                    if slice_loop(second) and self.compatible(first, second, self.values["across_tiles"]) and \
                             all(self.independent(program, second, between) for between in ops[i + 1:j]):
                         ops[i] = first = self.fuse(first, second)
                         del ops[j]
@@ -97,10 +101,15 @@ class fuse_slices(lsc_irmod):
         return fused
 
     @staticmethod
-    def compatible(first, second) -> bool:
+    def compatible(first, second, across_tiles=True) -> bool:
+        """
+        Loops over slices of one orientation, as many: the slice index is the
+        same for every tile, each tile's memory walking by its own pointer -
+        covering a tile in common, or any tiles where fusing across them
+        """
         return first.info.get("axis") == second.info.get("axis") \
             and first.subtiling.count == second.subtiling.count \
-            and bool(tiles_of(first) & tiles_of(second))
+            and (across_tiles or bool(tiles_of(first) & tiles_of(second)))
 
     @staticmethod
     def independent(program, moved, between) -> bool:
