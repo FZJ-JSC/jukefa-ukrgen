@@ -1,7 +1,7 @@
 """
 Kernel families for blisgen. A family configures how kernels are built - the
-ukrgen parameters every size shares: implementation choices (--mm-to,
---store-to, ...), register and preload limits, irmods, scheduling - and the
+ukrgen parameters every size shares: implementation choices (--mm-tileop,
+--store-tileop, ...), register and preload limits, irmods, scheduling - and the
 sizes to try; blisgen runs the flow once per size and keeps every kernel the
 ISA can build, with what BLIS needs to know of it, and why each other size
 was skipped.

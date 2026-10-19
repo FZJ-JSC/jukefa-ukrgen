@@ -22,7 +22,7 @@ def run(isa, **extra):
     i = [x.__name__ for x in stages].index("model_stage") + 1
     saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
     try:
-        return t.mm(isa=isa, **{"mm-to": [CAND], "n": "4"}, **extra)
+        return t.mm(isa=isa, **{"mm-tileop": [CAND], "n": "4"}, **extra)
     finally:
         t.STAGES = saved
 
@@ -42,7 +42,7 @@ class test_bc_lanes(unittest.TestCase):
         # a lane per element needs the number of lanes now: fixed width only
         saved, t.STAGES = t.STAGES, t.STAGES[:5]
         try:
-            ctx, res = t.mm(isa="sve", **{"list-to-candidates": True, "mm-to": None})
+            ctx, res = t.mm(isa="sve", **{"list-tileop-candidates": True, "mm-tileop": None})
         finally:
             t.STAGES = saved
         self.assertFalse(any("bc_lanes" in l for l in res.output.splitlines()))

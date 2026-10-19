@@ -248,7 +248,7 @@ class solve_stage(stage):
     take from ZA. So every --<sto>-to takes one value per part, or a single value
     used by every part. The number of parts is the longest list given.
 
-    --list-to-candidates prints every candidate and stops.
+    --list-tileop-candidates prints every candidate and stops.
 
     Implementations depend on the data types, which is why candidates are only
     computed here and not offered as choices earlier: a data type combination
@@ -261,11 +261,11 @@ class solve_stage(stage):
         self.debug = logging.getLogger("SOLVE").debug
 
         for sto in context.composition.get_sto_descriptions():
-            self.params[f"{sto.name}-to"] = stage_param(
+            self.params[f"{sto.name}-tileop"] = stage_param(
                     value=None,
                     description=f"Implementation of {sto.name}: one per part of the "
                                 f"microtile, or one for all parts. A candidate string "
-                                f"or its index from --list-to-candidates",
+                                f"or its index from --list-tileop-candidates",
                     required=False,
                     multi=True)
 
@@ -277,19 +277,19 @@ class solve_stage(stage):
                     continue
                 # optional: an empty default, so it is not a question --help
                 # stops at
-                self.params[f"{name}-subtail-to"] = stage_param(
+                self.params[f"{name}-subtail-tileop"] = stage_param(
                         value=[],
                         default=[],
                         description=f"Implementation for the remainder of the loop over "
                                     f"{block.loop_index} shorter than one operation of "
-                                    f"--{name}-to: a candidate covering one element of "
+                                    f"--{name}-tileop: a candidate covering one element of "
                                     f"{block.loop_index}. Only for an implementation "
                                     f"covering more; without it the loop count must be "
                                     f"a multiple of what that covers",
                         required=False,
                         multi=True)
 
-        self.params["list-to-candidates"] = stage_param(
+        self.params["list-tileop-candidates"] = stage_param(
                 value=False,
                 default=False,
                 description="List the implementation candidates of every STO and exit",
@@ -426,14 +426,14 @@ class solve_stage(stage):
                     lines.append("")
                     lines.append(f"{name}{where}: {len(cands)} candidate(s)")
                     if block.is_loop and sto_kind.COMPUTE == composition.get_sto(name).kind:
-                        lines.append(f"  (--{name}-subtail-to takes one covering a single "
+                        lines.append(f"  (--{name}-subtail-tileop takes one covering a single "
                                      f"element of {block.loop_index}, for a main one "
                                      f"covering more)")
                     if not cands:
                         lines.append("    none for these data types")
                     width = len(str(max(len(cands) - 1, 0)))
                     for i, enc in enumerate(cands):
-                        lines.append(f"  [{i:>{width}}] --{name}-to \"{enc}\"")
+                        lines.append(f"  [{i:>{width}}] --{name}-tileop \"{enc}\"")
         return "\n".join(lines)
 
     def select(self, name: str, values: list[str], cands: dict[str, object]) -> list[str]:
@@ -450,9 +450,9 @@ class solve_stage(stage):
             shown = list(enumerate(cands))[:self.SHOWN_CANDIDATES]
             more = len(cands) - len(shown)
             raise stage_error(
-                f"--{name}-to is required ({len(cands)} candidates):\n" +
+                f"--{name}-tileop is required ({len(cands)} candidates):\n" +
                 "\n".join(f"  [{i}] {enc}" for i, enc in shown) +
-                (f"\n  ... and {more} more: --list-to-candidates lists them all"
+                (f"\n  ... and {more} more: --list-tileop-candidates lists them all"
                  if more > 0 else ""))
 
         encodings = list(cands)
@@ -466,8 +466,8 @@ class solve_stage(stage):
             else:
                 close = difflib.get_close_matches(value, encodings, n=3, cutoff=0.6)
                 hint = ("\nClosest candidates:\n" + "\n".join(f"  {c}" for c in close)) \
-                    if close else "\nSee --list-to-candidates"
-                raise stage_error(f"--{name}-to: not a candidate: {value}{hint}")
+                    if close else "\nSee --list-tileop-candidates"
+                raise stage_error(f"--{name}-tileop: not a candidate: {value}{hint}")
         return chosen
 
     def loop_extent(self, impl, index: str):
@@ -486,7 +486,7 @@ class solve_stage(stage):
                 continue
             k = block.loop_index
             for name in block.stos:
-                key = f"{name}-subtail-to"
+                key = f"{name}-subtail-tileop"
                 values = self.params[key].value if key in self.params else None
                 if not values:
                     continue
@@ -500,7 +500,7 @@ class solve_stage(stage):
                     impl = candidates[name][enc]
                     if ONE == self.loop_extent(main, k):
                         raise stage_error(
-                            f"--{key}: not needed, --{name}-to already covers one element "
+                            f"--{key}: not needed, --{name}-tileop already covers one element "
                             f"of {k} per operation")
                     if ONE != self.loop_extent(impl, k):
                         raise stage_error(f"--{key}: {enc} covers more than one element of {k}")
@@ -519,20 +519,20 @@ class solve_stage(stage):
     def progress(self):
         candidates = self.all_candidates()
 
-        if self.params["list-to-candidates"].value:
+        if self.params["list-tileop-candidates"].value:
             raise early_exit(self.listing(candidates))
 
         composition = self.context.composition
         order = composition.sto_order()
 
-        given = {name: self.params[f"{name}-to"].value or [] for name in order}
+        given = {name: self.params[f"{name}-tileop"].value or [] for name in order}
         nparts = max([len(values) for values in given.values()] + [1])
 
         parts: list[dict[str, str]] = [dict() for _ in range(nparts)]
         for name in order:
             values = given[name]
             if values and len(values) not in (1, nparts):
-                raise stage_error(f"--{name}-to has {len(values)} values for {nparts} "
+                raise stage_error(f"--{name}-tileop has {len(values)} values for {nparts} "
                                   f"parts: give one per part, or one for all parts")
             chosen = self.select(name, values, candidates[name])
             if 1 == len(chosen):

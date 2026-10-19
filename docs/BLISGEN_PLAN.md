@@ -8,7 +8,7 @@ is updated as the work lands; each step names its status.
 
 - `{s,d}gemm` and `{s,d}packm` for one ISA per configuration.
 - A **family** configures how kernels are built - the implementation choices
-  (`--mm-to`, `--store-to`, ...), the register and preload limits, scheduling
+  (`--mm-tileop`, `--store-tileop`, ...), the register and preload limits, scheduling
   - and blisgen generates **every microtile size** (mr x nr) those choices
   can build on the ISA. Sizes that don't fit are skipped, with the reason.
 - The microkernel is chosen **at run time**: `BLIS_MR_S`, `BLIS_NR_S`,
@@ -43,7 +43,7 @@ n: 1..3                        # n in vectors
 default: 8x3                   # the kernel when BLIS_MR_D/BLIS_NR_D name none made
 blocksizes: {mr-in-mc: 16, nr-in-nc: 64, kc: 256}
 params:                        # ukrgen parameters for every size
-  mm-to: ["fma(A.VEC:bc_load, B.VEC:direct, AB.VEC){m=1, i=n, k*=1}"]
+  mm-tileop: ["fma(A.VEC:bc_load, B.VEC:direct, AB.VEC){m=1, i=n, k*=1}"]
   ...                          # the epilogue's choices, layouts, preload, irmods
 # several families: a list under families:
 ```
@@ -99,9 +99,9 @@ params:                        # ukrgen parameters for every size
 
 ## Notes from the work
 
-- Step 1: a gemm family's `params` carry every gemm choice - `mm-to` into AB,
-  `betascale-to`, `alphascale-to`, `store-to` and the special cases'
-  (`alphamul-to`, `add-to`, `alphaadd-to`, `betaadd-to`, `store_ab-to`) - and
+- Step 1: a gemm family's `params` carry every gemm choice - `mm-tileop` into AB,
+  `betascale-tileop`, `alphascale-tileop`, `store-tileop` and the special cases'
+  (`alphamul-tileop`, `add-tileop`, `alphaadd-tileop`, `betaadd-tileop`, `store_ab-tileop`) - and
   BLIS's packed panels as layouts (`A: m:c k:p`, `B: n:c k:p`), so a kernel's
   parameters are `k, A, B, C, alpha, beta` and C's stride. `k` (the unroll
   along k) defaults to 1. On fixed-width ISAs mr/nr come out as numbers (NEON

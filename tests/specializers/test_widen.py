@@ -37,10 +37,10 @@ class test_widen(unittest.TestCase):
         # a wide register counts as a group: the extents agree
         saved, t.STAGES = t.STAGES, t.STAGES[:5]
         try:
-            ctx, res = t.mm(isa="neon", **MIXED_FOR["neon"], **{"list-to-candidates": True, "mm-to": None})
+            ctx, res = t.mm(isa="neon", **MIXED_FOR["neon"], **{"list-tileop-candidates": True, "mm-tileop": None})
         finally:
             t.STAGES = saved
-        self.assertIn(NEON_SPLIT, [l.split('"')[1] for l in res.output.splitlines() if "--mm-to" in l])
+        self.assertIn(NEON_SPLIT, [l.split('"')[1] for l in res.output.splitlines() if "--mm-tileop" in l])
 
     def test_gated(self):
         # fmlal needs FEAT_FHM: without it, FP16 inputs have no implementation
@@ -48,14 +48,14 @@ class test_widen(unittest.TestCase):
         saved, t.STAGES = t.STAGES, t.STAGES[:5]
         try:
             with self.assertRaisesRegex(stage_error, "no implementation for data types"):
-                t.mm(isa="neon", **MIXED, **{"mm-to": [NEON_SPLIT]})
+                t.mm(isa="neon", **MIXED, **{"mm-tileop": [NEON_SPLIT]})
         finally:
             t.STAGES = saved
 
     def test_neon_halves(self):
         # fmlal and fmlal2 per register of A, into the members of a C group;
         # member 1 stored 4 elements after member 0
-        ctx, res = run("neon", **{"mm-to": [NEON_SPLIT]})
+        ctx, res = run("neon", **{"mm-tileop": [NEON_SPLIT]})
         self.assertTrue(res.completed, res.output)
         p = ctx.emitted[0]
         body = p.blocks[0].sections["body"]
@@ -69,10 +69,10 @@ class test_widen(unittest.TestCase):
         saved, t.STAGES = t.STAGES, t.STAGES[:5]
         try:
             ctx, res = t.mm(isa=isa, **MIXED_FOR[isa], **extra,
-                            **{"list-to-candidates": True, "mm-to": None})
+                            **{"list-tileop-candidates": True, "mm-tileop": None})
         finally:
             t.STAGES = saved
-        cands = [l.split('"')[1] for l in res.output.splitlines() if "--mm-to" in l]
+        cands = [l.split('"')[1] for l in res.output.splitlines() if "--mm-tileop" in l]
         return next(c for c in cands if method in c and "A.VEC:direct" in c and "i=m" in c
                     and not any(x in c for x in ("ILANE", "BLOCKLANE", "VF", "NP")))
 
@@ -84,7 +84,7 @@ class test_widen(unittest.TestCase):
         saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
         try:
             ctx, res = t.mm(isa=isa, **MIXED_FOR[isa], **extra,
-                            **{"mm-to": [cand or self.candidate(isa, method, **extra)]})
+                            **{"mm-tileop": [cand or self.candidate(isa, method, **extra)]})
         finally:
             t.STAGES = saved
         self.assertTrue(res.completed, res.output)
@@ -146,7 +146,7 @@ class test_widen(unittest.TestCase):
         if "rvv" == isa:
             types["rvv-LMUL"] = "1"
         try:
-            ctx, res = gemm(isa, **types, **{"mm-to": [cand]})
+            ctx, res = gemm(isa, **types, **{"mm-tileop": [cand]})
         finally:
             t.STAGES = saved
         self.assertTrue(res.completed, res.output)

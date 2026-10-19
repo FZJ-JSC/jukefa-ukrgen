@@ -12,17 +12,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 # gemm's epilogue cases, vectors along m: C contiguous along m, or general strides
 CASES_CONTIGUOUS = [
-    "--alphamul-to", "fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}",
-    "--add-to", "fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}",
-    "--alphaadd-to", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}",
-    "--betaadd-to", "fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}",
-    "--store_ab-to", "AB.VEC:direct"]
+    "--alphamul-tileop", "fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}",
+    "--add-tileop", "fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}",
+    "--alphaadd-tileop", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}",
+    "--betaadd-tileop", "fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}",
+    "--store_ab-tileop", "AB.VEC:direct"]
 CASES_STRIDED = [
-    "--alphamul-to", "fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}",
-    "--add-to", "fadd(AB.VEC, C.VEC:gather, C.VEC){i=m, n=1}",
-    "--alphaadd-to", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC:gather){i=m, n=1}",
-    "--betaadd-to", "fma(C.VEC:gather, beta.VEC:bc_load, AB.VEC){i=m, n=1}",
-    "--store_ab-to", "AB.VEC:scatter"]
+    "--alphamul-tileop", "fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}",
+    "--add-tileop", "fadd(AB.VEC, C.VEC:gather, C.VEC){i=m, n=1}",
+    "--alphaadd-tileop", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC:gather){i=m, n=1}",
+    "--betaadd-tileop", "fma(C.VEC:gather, beta.VEC:bc_load, AB.VEC){i=m, n=1}",
+    "--store_ab-tileop", "AB.VEC:scatter"]
 
 
 def cli(*args):
@@ -34,21 +34,21 @@ def cli(*args):
 class test_cli(unittest.TestCase):
 
     def test_later_options_are_not_abbreviations(self):
-        # --m is a dimension, not an abbreviation of --mm-to
+        # --m is a dimension, not an abbreviation of --mm-tileop
         mm = "fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"
         dts = [f"--{c}-data-type" for c in ("A", "B", "AB", "C")]
         # NEON: a complete run goes through the specializer, which doesn't
         # handle SVE's predicates yet
         args = ["--isa", "neon"] + [a for d in dts for a in (d, "FP64")] + [
             "--A-layout", "m:c", "k:s", "--B-layout", "k:s", "n:c", "--C-layout", "m:c", "n:s",
-            "--mm-to", mm, "--betascale-to", "fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}",
-            "--alphascale-to", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}", "--store-to", "C.VEC:direct",
+            "--mm-tileop", mm, "--betascale-tileop", "fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}",
+            "--alphascale-tileop", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}", "--store-tileop", "C.VEC:direct",
             "--m", "1", "--n", "1", "--k", "1",
             "--A-data-regs", "1", "--B-data-regs", "1", "--C-data-regs", "1"] + CASES_CONTIGUOUS
         out = cli(*args)
         self.assertEqual(0, out.returncode, out.stderr)
-        chosen = next(l for l in out.stdout.splitlines() if l.startswith("--mm-to"))
-        self.assertEqual(f'--mm-to "{mm}"', chosen)
+        chosen = next(l for l in out.stdout.splitlines() if l.startswith("--mm-tileop"))
+        self.assertEqual(f'--mm-tileop "{mm}"', chosen)
 
 
 class test_cli_help_and_errors(unittest.TestCase):
@@ -67,7 +67,7 @@ class test_cli_help_and_errors(unittest.TestCase):
         # needs them: help stops there and shows them
         out = cli(*self.COMMON, "--help")
         self.assertEqual(0, out.returncode, out.stderr)
-        for option in ("--mm-to", "--store-to", "--list-to-candidates"):
+        for option in ("--mm-tileop", "--store-tileop", "--list-tileop-candidates"):
             self.assertIn(option, out.stdout)
 
     def test_unknown_option_reported(self):
@@ -75,17 +75,17 @@ class test_cli_help_and_errors(unittest.TestCase):
         self.assertEqual(2, out.returncode)
         self.assertIn("not recognized by the stages so far (or mistyped): --print-tos", out.stderr)
         # the missing choice is reported briefly, pointing at the listing
-        self.assertIn("--list-to-candidates lists them all", out.stderr)
+        self.assertIn("--list-tileop-candidates lists them all", out.stderr)
         self.assertLess(len(out.stderr.splitlines()), 20)
 
     def test_unknown_option_after_a_complete_run(self):
         dts = [a for c in ("A", "B", "AB", "C") for a in (f"--{c}-data-type", "DOUBLE")]
         out = cli("--isa", "neon", "--ukr", "gemm", *dts,
                   "--A-layout", "m:c", "k:s", "--B-layout", "k:s", "n:c", "--C-layout", "m:c", "n:s",
-                  "--mm-to", "fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}",
-                  "--betascale-to", "fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}",
-                  "--alphascale-to", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}",
-                  "--store-to", "C.VEC:direct", "--m", "1", "--n", "1", "--k", "1",
+                  "--mm-tileop", "fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}",
+                  "--betascale-tileop", "fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}",
+                  "--alphascale-tileop", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}",
+                  "--store-tileop", "C.VEC:direct", "--m", "1", "--n", "1", "--k", "1",
                   "--A-data-regs", "1", "--B-data-regs", "1", "--C-data-regs", "1",
                   *CASES_CONTIGUOUS, "--bogus")
         self.assertEqual(2, out.returncode, out.stdout + out.stderr)

@@ -20,7 +20,7 @@ STRIDED_C = {"C-layout": ["m:s", "n:s"]}
 
 
 def mm_to(rsln):
-    return {"mm-to": [f"fma(A.VEC:{rsln}, B.VEC:bc_load, C.VEC){{i=m, n=1, k*=1}}"]}
+    return {"mm-tileop": [f"fma(A.VEC:{rsln}, B.VEC:bc_load, C.VEC){{i=m, n=1, k*=1}}"]}
 
 
 class test_subtiles(unittest.TestCase):
@@ -56,7 +56,7 @@ class test_subtiles(unittest.TestCase):
     @unittest.skipUnless(cpu_has("avx2"), "needs an AVX2 CPU")
     def test_avx2_block_lanes(self):
         self.runs("avx256", {**STRIDED_A, **mm_to("block_lanes")}, "strided_mm_harness.c", "tile 8 x 2")
-        self.runs("avx256", {**STRIDED_C, "store-to": ["C.VEC:block_lanes"]}, "strided_c_harness.c",
+        self.runs("avx256", {**STRIDED_C, "store-tileop": ["C.VEC:block_lanes"]}, "strided_c_harness.c",
                   "tile 8 x 2")
 
     @unittest.skipUnless(cpu_has("avx512f"), "needs an AVX-512 CPU")
@@ -64,7 +64,7 @@ class test_subtiles(unittest.TestCase):
         self.runs("avx512", {**STRIDED_A, **mm_to("block_lanes")}, "strided_mm_harness.c", "tile 16 x 2")
         self.runs("avx512", {**STRIDED_A, **mm_to("block_lanes_256")}, "strided_mm_harness.c",
                   "tile 16 x 2")
-        self.runs("avx512", {**STRIDED_C, "store-to": ["C.VEC:block_lanes"]}, "strided_c_harness.c",
+        self.runs("avx512", {**STRIDED_C, "store-tileop": ["C.VEC:block_lanes"]}, "strided_c_harness.c",
                   "tile 16 x 2")
 
 

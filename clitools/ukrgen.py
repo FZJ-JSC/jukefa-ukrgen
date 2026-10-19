@@ -61,7 +61,7 @@ class argparse_prolog:
         # the help then shows everything given so far plus what this stage
         # asks. That includes options argparse doesn't require but the stage
         # does - the solve stage's --<sto>-to, optional only so that
-        # --list-to-candidates works before any choice is made. Parsing first
+        # --list-tileop-candidates works before any choice is made. Parsing first
         # would fail on a missing argument instead of helping.
         argv = sys.argv[1:]
         if any(a in argv for a in helpargs):
@@ -91,7 +91,7 @@ def main():
 
     # No abbreviations: the parser grows stage by stage, so an option of a
     # later stage would be taken for an abbreviation of an earlier one's -
-    # --m (a dimension) for --mm-to, silently replacing the chosen
+    # --m (a dimension) for --mm-tileop, silently replacing the chosen
     # implementation.
     parser = ArgumentParser(add_help=False, allow_abbrev=False)
 
@@ -178,7 +178,7 @@ def main():
         encodings = [part[sto].encoding for part in ukr_ctx.to_parts]
         if 1 == len(set(encodings)):
             encodings = encodings[:1]
-        print(f"--{sto}-to " + " ".join(f'"{enc}"' for enc in encodings))
+        print(f"--{sto}-tileop " + " ".join(f'"{enc}"' for enc in encodings))
     print("(the flow currently ends after the LSC model; see --print-ir)", file=sys.stderr)
 
 if __name__ == "__main__":

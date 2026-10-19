@@ -74,7 +74,7 @@ class test_lanefuse(unittest.TestCase):
         base.STAGES = saved[:7] + [pre_specialize_irmod_stage, isa_specialize_stage,
                                    post_specialize_irmod_stage, emit_stage]
         try:
-            return base.mm(**{"mm-to": [self.LANE_FMA], "n": "4",
+            return base.mm(**{"mm-tileop": [self.LANE_FMA], "n": "4",
                               "pre-specialize-irmods": model_irmods, **extra})
         finally:
             base.STAGES = saved

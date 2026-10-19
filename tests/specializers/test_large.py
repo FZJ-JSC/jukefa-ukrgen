@@ -49,8 +49,8 @@ class test_large(unittest.TestCase):
                 self.assertIn(", 0 wrong", r.stdout)
 
     def test_rvv_8x3v(self):
-        self.runs("rvv", {"rvv-LMUL": "1", "m": "8", "n": "3", "store-to": ["C.VEC:strided"],
-                          "mm-to": ["fma(A.VEC:bc_load, B.VEC:direct, C.VEC){m=1, i=n, k*=1}"]},
+        self.runs("rvv", {"rvv-LMUL": "1", "m": "8", "n": "3", "store-tileop": ["C.VEC:strided"],
+                          "mm-tileop": ["fma(A.VEC:bc_load, B.VEC:direct, C.VEC){m=1, i=n, k*=1}"]},
                   ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"], None,
                   [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"] for v in (128, 256)],
                   ["tile 8 x 6", "tile 8 x 12"])
@@ -81,7 +81,7 @@ class test_large(unittest.TestCase):
 
     def test_sme_2vx4v_fp64(self):
         # all eight double tiles
-        self.runs("sme", {"sme-F64F64": "on", "mm-to": [FOPA], "store-to": ["C.TILE:slices_col"],
+        self.runs("sme", {"sme-F64F64": "on", "mm-tileop": [FOPA], "store-tileop": ["C.TILE:slices_col"],
                           "m": "2", "n": "4"},
                   ["aarch64-linux-gnu-gcc", "-static"], "-Wa,-march=armv9-a+sme+sme-f64f64",
                   [["qemu-aarch64-static", "-cpu", f"max,sme=on,sme{v}=on"] for v in (256, 512)],
@@ -90,7 +90,7 @@ class test_large(unittest.TestCase):
     def test_sme_2vx2v_fp32(self):
         # all four single tiles
         self.runs("sme", {"A-data-type": "FP32", "B-data-type": "FP32", "C-data-type": "FP32",
-                          "mm-to": [FOPA], "store-to": ["C.TILE:slices_col"], "m": "2", "n": "2"},
+                          "mm-tileop": [FOPA], "store-tileop": ["C.TILE:slices_col"], "m": "2", "n": "2"},
                   ["aarch64-linux-gnu-gcc", "-static"], "-Wa,-march=armv9-a+sme",
                   [["qemu-aarch64-static", "-cpu", f"max,sme=on,sme{v}=on"] for v in (256, 512)],
                   ["tile 16 x 16", "tile 32 x 32"], fp32=True)
@@ -99,8 +99,8 @@ class test_large(unittest.TestCase):
         # data registers given that can't fit beside the accumulators
         from ukrgen.flow.stages.stage import stage_error
         with self.assertRaisesRegex(stage_error, "35 of 32"):
-            t.mm(isa="rvv", **{"rvv-LMUL": "1", "m": "8", "n": "3", "store-to": ["C.VEC:strided"],
-                               "mm-to": ["fma(A.VEC:bc_load, B.VEC:direct, C.VEC){m=1, i=n, k*=1}"],
+            t.mm(isa="rvv", **{"rvv-LMUL": "1", "m": "8", "n": "3", "store-tileop": ["C.VEC:strided"],
+                               "mm-tileop": ["fma(A.VEC:bc_load, B.VEC:direct, C.VEC){m=1, i=n, k*=1}"],
                                "A-data-regs": "8", "B-data-regs": "3"})
 
 

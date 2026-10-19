@@ -30,8 +30,8 @@ def mm(isa="neon", **extra):
     params = {"isa": isa, "ukr": "mm", "A-data-type": "FP64", "B-data-type": "FP64",
               "C-data-type": "FP64", "A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"],
               "C-layout": ["m:c", "n:s"],
-              "mm-to": ["fma(A.VEC:direct, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"],
-              "store-to": ["C.VEC:direct"], "m": "2", "n": "2", "k": "1",
+              "mm-tileop": ["fma(A.VEC:direct, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"],
+              "store-tileop": ["C.VEC:direct"], "m": "2", "n": "2", "k": "1",
               "A-data-regs": "2", "B-data-regs": "2"}
     params.update(extra)
     def prolog(s):
@@ -128,7 +128,7 @@ class test_signature_specializer(unittest.TestCase):
     def test_scalar_broadcast(self):
         # bc_scalar: B's element into a scalar register, then broadcast - a
         # move between registers, emitted through asmgen's move signatures
-        ctx, res = mm(**{"mm-to": ["fma(A.VEC:direct, B.VEC:bc_scalar, C.VEC){i=m, n=1, k*=1}"]})
+        ctx, res = mm(**{"mm-tileop": ["fma(A.VEC:direct, B.VEC:bc_scalar, C.VEC){i=m, n=1, k*=1}"]})
         self.assertTrue(res.completed, res.output)
         body = ctx.emitted[0].blocks[0].sections["body"]
         self.assertTrue(any(l.startswith("dup ") and ".d[0]" in l for l in body))
@@ -159,7 +159,7 @@ class test_signature_specializer(unittest.TestCase):
     def test_sve_indexed_fma(self):
         # two consecutive B elements replicated into every 128-bit block
         # (ld1rqd), each feeding an FMA by element
-        ctx, res = mm(isa="sve", n="4", **{"mm-to": [self.BLOCK_FMA]})
+        ctx, res = mm(isa="sve", n="4", **{"mm-tileop": [self.BLOCK_FMA]})
         self.assertTrue(res.completed, res.output)
         body = ctx.emitted[0].blocks[0].sections["body"]
         self.assertTrue(any(l.startswith("ld1rqd") for l in body))
@@ -172,7 +172,7 @@ class test_signature_specializer(unittest.TestCase):
     def test_register_constraints(self):
         # the indexed register of fmla .d must be z0..z15: with 16
         # accumulators those registers are allocated first
-        ctx, res = mm(isa="sve", m="2", n="8", **{"B-data-regs": "4", "mm-to": [self.BLOCK_FMA]})
+        ctx, res = mm(isa="sve", m="2", n="8", **{"B-data-regs": "4", "mm-tileop": [self.BLOCK_FMA]})
         self.assertTrue(res.completed, res.output)
         body = ctx.emitted[0].blocks[0].sections["body"]
         indexed = {int(l.split(",")[2].split(".")[0][1:]) for l in body if l.startswith("fmla")}
@@ -212,20 +212,20 @@ class test_signature_specializer(unittest.TestCase):
         self.assertTrue(any(l.startswith("slli") for l in p.setup))
 
     def test_rvv_vf(self):
-        p = self.rvv(**{"mm-to": ["fma[bdreg:VF](A.VEC:direct, B.FP:use_scalar, C.VEC){i=m, n=1, k*=1}"]})
+        p = self.rvv(**{"mm-tileop": ["fma[bdreg:VF](A.VEC:direct, B.FP:use_scalar, C.VEC){i=m, n=1, k*=1}"]})
         self.assertTrue(any(".vf" in l for l in p.blocks[0].sections["body"]))
 
     def test_rvv_strided(self):
         # A strided along m: vlse with A's stride register; its second vector
         # is a vector length of strides on, vl times the stride multiplied once
         p = self.rvv(**{"A-layout": ["m:s", "k:c"],
-                        "mm-to": ["fma(A.VEC:strided, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
+                        "mm-tileop": ["fma(A.VEC:strided, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
         self.assertTrue(any(l.startswith("vlse64.v") for l in p.blocks[0].sections["body"]))
         self.assertTrue(any(l.startswith("mul ") for l in p.setup))
 
     def gather(self, isa):
         ctx, res = mm(isa=isa, **{"A-layout": ["m:s", "k:c"],
-                                  "mm-to": ["fma(A.VEC:gather, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
+                                  "mm-tileop": ["fma(A.VEC:gather, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
         self.assertTrue(res.completed, res.output)
         return ctx.emitted[0]
 
@@ -255,7 +255,7 @@ class test_signature_specializer(unittest.TestCase):
         # a gather is a choice of its own on RVV too: vid.v and vmul.vx build
         # the index vector of byte offsets, vluxei64 loads through it
         p = self.rvv(**{"A-layout": ["m:s", "k:c"],
-                        "mm-to": ["fma(A.VEC:gather, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
+                        "mm-tileop": ["fma(A.VEC:gather, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
         # built at the start of the region using it, before its loop
         loop = next(i for i, l in enumerate(p.code) if l.endswith("_loop:"))
         self.assertTrue(any(l.startswith("vid.v") for l in p.code[:loop]))
@@ -269,7 +269,7 @@ class test_signature_specializer(unittest.TestCase):
             with self.subTest(isa=isa):
                 ctx, res = mm(isa=isa, **{
                     "A-layout": ["m:s", "k:c"], "no-preload": True,
-                    "mm-to": ["fma(A.VEC:block_lanes, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
+                    "mm-tileop": ["fma(A.VEC:block_lanes, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
                 self.assertTrue(res.completed, res.output)
                 body = ctx.emitted[0].blocks[0].sections["body"]
                 loads = [l.split()[0] for l in body if l.startswith(("vmovsd", "vmovhpd"))]
@@ -283,7 +283,7 @@ class test_signature_specializer(unittest.TestCase):
         # the destination per vector, each after its half is complete
         ctx, res = mm(isa="avx512", **{
             "A-layout": ["m:s", "k:c"], "no-preload": True,
-            "mm-to": ["fma(A.VEC:block_lanes_256, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
+            "mm-tileop": ["fma(A.VEC:block_lanes_256, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]})
         self.assertTrue(res.completed, res.output)
         body = ctx.emitted[0].blocks[0].sections["body"]
         wide = [i for i, l in enumerate(body) if l.startswith("vinsertf64x4")]
@@ -298,7 +298,7 @@ class test_signature_specializer(unittest.TestCase):
         for isa, extract in (("avx256", "vextractf128"), ("avx512", "vextractf32x4")):
             with self.subTest(isa=isa):
                 ctx, res = mm(isa=isa, **{"C-layout": ["m:s", "n:s"],
-                                          "store-to": ["C.VEC:block_lanes"]})
+                                          "store-tileop": ["C.VEC:block_lanes"]})
                 self.assertTrue(res.completed, res.output)
                 store = [l for l in ctx.emitted[0].blocks[1].sections["body"]
                          if l.startswith(("vextract", "vmovsd", "vmovhpd"))]

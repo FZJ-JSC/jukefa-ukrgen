@@ -34,15 +34,15 @@ GEMM_NEON = {
     "isa": "neon", "ukr": "gemm", "A-data-type": "FP64", "B-data-type": "FP64",
     "AB-data-type": "FP64", "C-data-type": "FP64",
     "A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"], "C-layout": ["m:c", "n:s"],
-    "mm-to": ["fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"],
-    "betascale-to": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"],
-    "alphascale-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
-    "store-to": ["C.VEC:direct"],
-    "alphamul-to": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
-    "add-to": ["fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}"],
-    "alphaadd-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}"],
-    "betaadd-to": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}"],
-    "store_ab-to": ["AB.VEC:direct"],
+    "mm-tileop": ["fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"],
+    "betascale-tileop": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"],
+    "alphascale-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
+    "store-tileop": ["C.VEC:direct"],
+    "alphamul-tileop": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
+    "add-tileop": ["fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}"],
+    "alphaadd-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}"],
+    "betaadd-tileop": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}"],
+    "store_ab-tileop": ["AB.VEC:direct"],
     "m": "4", "n": "2", "k": "1", "A-data-regs": "4", "B-data-regs": "2", "C-data-regs": "8"}
 
 
@@ -63,7 +63,7 @@ def specs(*texts):
 class test_dependencies(unittest.TestCase):
 
     def test_lane_reads_depend_on_the_load(self):
-        ctx, _ = run(**{"mm-to": ["fma[bdreg:ILANE](A.VEC:direct, B.VEC:use_lane, AB.VEC)"
+        ctx, _ = run(**{"mm-tileop": ["fma[bdreg:ILANE](A.VEC:direct, B.VEC:use_lane, AB.VEC)"
                                   "{i=m, n=1, k*=1}"], "no-preload": True})
         body = ctx.programs[0].blocks[0].body
         edges = dependencies(body, loop=False)

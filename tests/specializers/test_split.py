@@ -19,11 +19,11 @@ import specializers.test_signature as t
 HERE = os.path.dirname(os.path.abspath(__file__))
 FOPA = "fopa(A.VEC:direct, B.VEC:direct, C.TILE){i=m, j=n, k*=1}"
 SPLIT_M = {"sme-F64F64": "on", "C-layout": ["n:c", "m:s"], "A-data-regs": None, "B-data-regs": None,
-           "mm-to": [FOPA, "fma(A.VEC:bc_load, B.VEC:direct, C.VEC){m=1, i=n, k*=1}"],
-           "store-to": ["C.TILE:slices_row", "C.VEC:direct"], "m": ["2", "2"], "n": ["4"]}
+           "mm-tileop": [FOPA, "fma(A.VEC:bc_load, B.VEC:direct, C.VEC){m=1, i=n, k*=1}"],
+           "store-tileop": ["C.TILE:slices_row", "C.VEC:direct"], "m": ["2", "2"], "n": ["4"]}
 SPLIT_N = {"sme-F64F64": "on", "A-data-regs": None, "B-data-regs": None,
-           "mm-to": [FOPA, "fma(A.VEC:direct, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"],
-           "store-to": ["C.TILE:slices_col", "C.VEC:direct"], "m": ["2"], "n": ["4", "2"]}
+           "mm-tileop": [FOPA, "fma(A.VEC:direct, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"],
+           "store-tileop": ["C.TILE:slices_col", "C.VEC:direct"], "m": ["2"], "n": ["4", "2"]}
 
 
 def build(params, mru=False):

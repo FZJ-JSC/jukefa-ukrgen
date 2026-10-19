@@ -11,24 +11,24 @@ from ukrgen.injectors.blis.families import family, configuration, build_gemm, pa
 from stages.test_sto import CASE_TOS
 
 # vectors along m, B broadcast; A and B packed as BLIS packs them
-VM = {"mm-to": ["fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"],
-      "betascale-to": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"],
-      "alphascale-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
-      "store-to": ["C.VEC:direct"],
+VM = {"mm-tileop": ["fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"],
+      "betascale-tileop": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"],
+      "alphascale-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
+      "store-tileop": ["C.VEC:direct"],
       "A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"], "C-layout": ["m:c", "n:s"]}
 VM.update(CASE_TOS)
 
 # vectors along n, A broadcast, C row-major (its vectors along n contiguous):
 # the 8x3v kind of kernel; the epilogue streams C, scheduled (--mru)
-VN = {"mm-to": ["fma(A.VEC:bc_load, B.VEC:direct, AB.VEC){m=1, i=n, k*=1}"],
-      "betascale-to": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){m=1, i=n}"],
-      "alphascale-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
-      "store-to": ["C.VEC:direct"],
-      "alphamul-to": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
-      "add-to": ["fadd(AB.VEC, C.VEC:direct, C.VEC){m=1, i=n}"],
-      "alphaadd-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){m=1, i=n}"],
-      "betaadd-to": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){m=1, i=n}"],
-      "store_ab-to": ["AB.VEC:direct"],
+VN = {"mm-tileop": ["fma(A.VEC:bc_load, B.VEC:direct, AB.VEC){m=1, i=n, k*=1}"],
+      "betascale-tileop": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){m=1, i=n}"],
+      "alphascale-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
+      "store-tileop": ["C.VEC:direct"],
+      "alphamul-tileop": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
+      "add-tileop": ["fadd(AB.VEC, C.VEC:direct, C.VEC){m=1, i=n}"],
+      "alphaadd-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){m=1, i=n}"],
+      "betaadd-tileop": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){m=1, i=n}"],
+      "store_ab-tileop": ["AB.VEC:direct"],
       "A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"], "C-layout": ["n:c", "m:s"],
       "mru": True}
 

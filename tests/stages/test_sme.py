@@ -13,7 +13,7 @@ FOPA = "fopa(A.VEC:direct, B.VEC:direct, C.TILE){i=m, j=n, k*=1}"
 def listing(**extra):
     saved, t.STAGES = t.STAGES, t.STAGES[:5]
     try:
-        ctx, res = t.mm(isa="sme", **extra, **{"list-to-candidates": True, "mm-to": None})
+        ctx, res = t.mm(isa="sme", **extra, **{"list-tileop-candidates": True, "mm-tileop": None})
     finally:
         t.STAGES = saved
     return (res.output or "").splitlines()
@@ -27,7 +27,7 @@ class test_sme(unittest.TestCase):
         self.assertTrue(any(FOPA in l for l in listing(**{"sme-F64F64": "on"})))
 
     def test_tile_slice_stores(self):
-        stores = [l.split('"')[1] for l in listing(**{"sme-F64F64": "on"}) if "--store-to" in l]
+        stores = [l.split('"')[1] for l in listing(**{"sme-F64F64": "on"}) if "--store-tileop" in l]
         self.assertIn("C.TILE:slices_col", stores)
         self.assertIn("C.TILE:slices_row", stores)
 
@@ -38,12 +38,12 @@ class test_sme(unittest.TestCase):
         saved, t.STAGES = t.STAGES, t.STAGES[:5]
         try:
             ctx, res = t.mm(isa="sme", ukr="gemm", **{
-                "sme-F64F64": "on", "AB-data-type": "FP64", "list-to-candidates": True,
-                "mm-to": ["fopa(A.VEC:direct, B.VEC:direct, AB.TILE){i=m, j=n, k*=1}"],
-                "store_ab-to": None, "store-to": None})
+                "sme-F64F64": "on", "AB-data-type": "FP64", "list-tileop-candidates": True,
+                "mm-tileop": ["fopa(A.VEC:direct, B.VEC:direct, AB.TILE){i=m, j=n, k*=1}"],
+                "store_ab-tileop": None, "store-tileop": None})
         finally:
             t.STAGES = saved
-        alphamul = [l.split('"')[1] for l in (res.output or "").splitlines() if "--alphamul-to" in l]
+        alphamul = [l.split('"')[1] for l in (res.output or "").splitlines() if "--alphamul-tileop" in l]
         self.assertTrue(any(c.startswith("fmul(AB.TILE:slice_vec_col") and "C.TILE:>slice_vec_col" in c
                             for c in alphamul), alphamul[:3])
 
@@ -71,24 +71,24 @@ class test_split(unittest.TestCase):
 
     def test_m(self):
         # 2v rows of outer products, then 2 rows of fmas: part 2 from 2v
-        offsets = self.stos(**{"mm-to": [self.FOPA, "fma(A.VEC:bc_load, B.VEC:direct, C.VEC){m=1, i=n, k*=1}"],
-                               "store-to": ["C.TILE:slices_row", "C.VEC:direct"],
+        offsets = self.stos(**{"mm-tileop": [self.FOPA, "fma(A.VEC:bc_load, B.VEC:direct, C.VEC){m=1, i=n, k*=1}"],
+                               "store-tileop": ["C.TILE:slices_row", "C.VEC:direct"],
                                "m": ["2", "2"], "n": ["4"]})
         self.assertIn("VL", next(iter(offsets[1])))
 
     def test_n(self):
-        offsets = self.stos(**{"mm-to": [self.FOPA, "fma(A.VEC:direct, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"],
-                               "store-to": ["C.TILE:slices_row", "C.VEC:vla_lanes"],
+        offsets = self.stos(**{"mm-tileop": [self.FOPA, "fma(A.VEC:direct, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"],
+                               "store-tileop": ["C.TILE:slices_row", "C.VEC:vla_lanes"],
                                "m": ["2"], "n": ["4", "2"]})
         self.assertIn("'n'", next(iter(offsets[1])))
 
     def test_must_line_up(self):
         from ukrgen.flow.stages.stage import stage_error
         with self.assertRaisesRegex(stage_error, "the parts cover n differently"):
-            self.stos(**{"mm-to": [self.FOPA, "fma(A.VEC:direct, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"],
-                         "store-to": ["C.TILE:slices_row", "C.VEC:vla_lanes"],
+            self.stos(**{"mm-tileop": [self.FOPA, "fma(A.VEC:direct, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"],
+                         "store-tileop": ["C.TILE:slices_row", "C.VEC:vla_lanes"],
                          "m": ["2", "2"], "n": ["4"]})
         with self.assertRaisesRegex(stage_error, "split along one index"):
-            self.stos(**{"mm-to": [self.FOPA, "fma(A.VEC:bc_load, B.VEC:direct, C.VEC){m=1, i=n, k*=1}"],
-                         "store-to": ["C.TILE:slices_row", "C.VEC:direct"],
+            self.stos(**{"mm-tileop": [self.FOPA, "fma(A.VEC:bc_load, B.VEC:direct, C.VEC){m=1, i=n, k*=1}"],
+                         "store-tileop": ["C.TILE:slices_row", "C.VEC:direct"],
                          "m": ["2", "2"], "n": ["4", "3"]})

@@ -29,11 +29,11 @@ def run(params):
 
 CASE_TOS = {
     # gemm's epilogue cases, all with vectors along m like the main loop
-    "alphamul-to": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
-    "add-to": ["fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}"],
-    "alphaadd-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}"],
-    "betaadd-to": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}"],
-    "store_ab-to": ["AB.VEC:direct"],
+    "alphamul-tileop": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
+    "add-tileop": ["fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}"],
+    "alphaadd-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}"],
+    "betaadd-tileop": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}"],
+    "store_ab-tileop": ["AB.VEC:direct"],
 }
 
 
@@ -41,8 +41,8 @@ def gemm(**extra):
     p = {"isa": "sve", "ukr": "gemm", "A-data-type": "FP64", "B-data-type": "FP64",
          "AB-data-type": "FP64", "C-data-type": "FP64",
          # vectors along m in every STO: their tilings must line up
-         "mm-to": ["fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"], "betascale-to": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"],
-         "alphascale-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"], "store-to": ["C.VEC:direct"],
+         "mm-tileop": ["fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"], "betascale-tileop": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"],
+         "alphascale-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"], "store-tileop": ["C.VEC:direct"],
          "A-layout": ["m:c", "k:s"], "B-layout": ["k:s", "n:c"], "C-layout": ["m:c", "n:s"],
          "m": "2", "n": "3", "k": "2"}
     p.update(CASE_TOS)
@@ -55,7 +55,7 @@ class test_sto_stage(unittest.TestCase):
     def test_lane_fma(self):
         # NEON fmla by element: B loaded whole along n, one lane per operation
         ctx, res = run(gemm(isa="neon", n="4", m="1", k="1", **{
-            "mm-to": ["fma[bdreg:ILANE](A.VEC:direct, B.VEC:use_lane, AB.VEC){i=m, n=1, k*=1}"]}))
+            "mm-tileop": ["fma[bdreg:ILANE](A.VEC:direct, B.VEC:use_lane, AB.VEC){i=m, n=1, k*=1}"]}))
         self.assertTrue(res.completed)
         mm = ctx.stos[0]["mm"]
         self.assertEqual([(0, 0), (0, 0), (0, 1), (0, 1)], [op.coord("B") for op in mm.ops])
@@ -98,12 +98,12 @@ class test_sto_stage(unittest.TestCase):
     def test_parts_need_partition(self):
         # two consistent parts, both with vectors along m
         with self.assertRaisesRegex(stage_error, "one value per part"):
-            run(gemm(**{"mm-to": ["fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}",
+            run(gemm(**{"mm-tileop": ["fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}",
                                   "fma(A.VEC:direct, B.VEC:bc_scalar, AB.VEC){i=m, n=1, k*=1}"]}))
 
     def test_pack(self):
         ctx, res = run({"isa": "sve", "ukr": "pack", "X-data-type": "FP64",
-                        "Y-data-type": "FP64", "pack-to": ["0"], "store-to": ["0"],
+                        "Y-data-type": "FP64", "pack-tileop": ["0"], "store-tileop": ["0"],
                         "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"],
                         "m": "3", "n": "2"})
         self.assertTrue(res.completed)

@@ -28,11 +28,11 @@ ALPHA = "fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"
 
 CASE_TOS = {
     # gemm's epilogue cases, all with vectors along m like the main loop
-    "alphamul-to": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
-    "add-to": ["fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}"],
-    "alphaadd-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}"],
-    "betaadd-to": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}"],
-    "store_ab-to": ["AB.VEC:direct"],
+    "alphamul-tileop": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
+    "add-tileop": ["fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}"],
+    "alphaadd-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}"],
+    "betaadd-tileop": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}"],
+    "store_ab-tileop": ["AB.VEC:direct"],
 }
 
 
@@ -40,8 +40,8 @@ def run(stages=TO_STAGES, **extra):
     params = {"isa": "sve", "ukr": "gemm",
               "A-data-type": "FP64", "B-data-type": "FP64", "AB-data-type": "FP64",
               "C-data-type": "FP64", "A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"],
-              "C-layout": ["m:c", "n:s"], "mm-to": [FMA_M], "betascale-to": [BETA],
-              "alphascale-to": [ALPHA], "store-to": ["C.VEC:direct"],
+              "C-layout": ["m:c", "n:s"], "mm-tileop": [FMA_M], "betascale-tileop": [BETA],
+              "alphascale-tileop": [ALPHA], "store-tileop": ["C.VEC:direct"],
               "m": "2", "n": "2", "k": "1",
               "A-data-regs": "2", "B-data-regs": "2", "C-data-regs": "4", **CASE_TOS}
     params.update(extra)
@@ -189,7 +189,7 @@ class test_builder(unittest.TestCase):
 class test_builder_resolutions(unittest.TestCase):
 
     def test_chain_temporaries(self):
-        ctx, res = run(**{"mm-to": [
+        ctx, res = run(**{"mm-tileop": [
             "fmul(A.VEC:direct, B.VEC:bc_load, T0.VEC){i=m, n=1, k*=1} ; "
             "fadd(AB.VEC, T0.VEC, AB.VEC){i=m, n=1, k*=1}"]})
         self.assertTrue(res.completed)
@@ -200,7 +200,7 @@ class test_builder_resolutions(unittest.TestCase):
 
     def test_scalar_broadcast_via_register(self):
         # bc_scalar: load B's element into a scalar register, then broadcast it
-        ctx, res = run(**{"mm-to": ["fma(A.VEC:direct, B.VEC:bc_scalar, AB.VEC){i=m, n=1, k*=1}"]})
+        ctx, res = run(**{"mm-tileop": ["fma(A.VEC:direct, B.VEC:bc_scalar, AB.VEC){i=m, n=1, k*=1}"]})
         mm = program_builder(ctx, preload=False).build().blocks[0]
         moves = [op for op in mm.body if isinstance(op, lsc_move)]
         self.assertEqual(2, len(moves))
@@ -209,7 +209,7 @@ class test_builder_resolutions(unittest.TestCase):
     def test_lanes_resolution(self):
         # NEON, row-major A: vectors along m loaded lane by lane
         ctx, res = run(isa="neon", **{"A-layout": ["m:s", "k:c"],
-                                      "mm-to": ["fma(A.VEC:lanes, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"]})
+                                      "mm-tileop": ["fma(A.VEC:lanes, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"]})
         self.assertTrue(res.completed, res.output)
         mm = program_builder(ctx, preload=False).build().blocks[0]
         a = loads(mm.body, "A")
@@ -222,7 +222,7 @@ class test_builder_resolutions(unittest.TestCase):
         from ukrgen.irmod.lsc import lanefuse
         from ukrgen.models.load_store_operations import ldst_modifier
         ctx, res = run(isa="neon", n="4", m="1", **{
-            "mm-to": ["fma[bdreg:ILANE](A.VEC:direct, B.VEC:use_lane, AB.VEC){i=m, n=1, k*=1}"]})
+            "mm-tileop": ["fma[bdreg:ILANE](A.VEC:direct, B.VEC:use_lane, AB.VEC){i=m, n=1, k*=1}"]})
         prog = program_builder(ctx, preload=False).build()
         mm = prog.blocks[0]
         self.assertEqual([0, 1, 0, 1], [op.properties.get("lane") for op in loads(mm.body, "B")])
@@ -252,8 +252,8 @@ class test_model_stage(unittest.TestCase):
 
     def test_subtail_not_needed(self):
         # the main FMA already covers one element of k
-        with self.assertRaisesRegex(stage_error, "--mm-subtail-to: not needed"):
-            run(**{"mm-subtail-to": [FMA_M]})
+        with self.assertRaisesRegex(stage_error, "--mm-subtail-tileop: not needed"):
+            run(**{"mm-subtail-tileop": [FMA_M]})
 
     def test_invalid_pattern(self):
         with self.assertRaisesRegex(stage_error, "--A-addr-pattern"):
@@ -267,16 +267,16 @@ if __name__ == "__main__":
 class test_register_pressure(unittest.TestCase):
 
     GENERAL = {"A-layout": ["m:c", "k:s"], "B-layout": ["k:s", "n:c"], "C-layout": ["m:s", "n:s"],
-               "mm-to": ["fma(A.VEC:bc_load, B.VEC:direct, AB.VEC){m=1, i=n, k*=1}"],
-               "betascale-to": ["fmul(C.VEC:gather, beta.VEC:bc_load, C.VEC){m=1, i=n}"],
-               "alphascale-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
-               "store-to": ["C.VEC:scatter"], "n": "2", "k": "2",
+               "mm-tileop": ["fma(A.VEC:bc_load, B.VEC:direct, AB.VEC){m=1, i=n, k*=1}"],
+               "betascale-tileop": ["fmul(C.VEC:gather, beta.VEC:bc_load, C.VEC){m=1, i=n}"],
+               "alphascale-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
+               "store-tileop": ["C.VEC:scatter"], "n": "2", "k": "2",
                # the epilogue cases, also with vectors along n
-               "alphamul-to": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
-               "add-to": ["fadd(AB.VEC, C.VEC:gather, C.VEC){m=1, i=n}"],
-               "alphaadd-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:gather){m=1, i=n}"],
-               "betaadd-to": ["fma(C.VEC:gather, beta.VEC:bc_load, AB.VEC){m=1, i=n}"],
-               "store_ab-to": ["AB.VEC:scatter"]}
+               "alphamul-tileop": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
+               "add-tileop": ["fadd(AB.VEC, C.VEC:gather, C.VEC){m=1, i=n}"],
+               "alphaadd-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:gather){m=1, i=n}"],
+               "betaadd-tileop": ["fma(C.VEC:gather, beta.VEC:bc_load, AB.VEC){m=1, i=n}"],
+               "store_ab-tileop": ["AB.VEC:scatter"]}
 
     def test_fewer_registers_load_in_place(self):
         # A in 8 registers: each holds two tiles per iteration, so A cannot be
@@ -306,7 +306,7 @@ class test_old_ir_compatibility(unittest.TestCase):
         # including moves between scratch and data registers
         from ukrgen.schedulers.distance import distance_specification
         from ukrgen.schedulers.simple_dependency_scheduler import simple_dependency_scheduler
-        ctx, _ = run(**{"mm-to": ["fma(A.VEC:direct, B.VEC:bc_scalar, AB.VEC){i=m, n=1, k*=1}"]})
+        ctx, _ = run(**{"mm-tileop": ["fma(A.VEC:direct, B.VEC:bc_scalar, AB.VEC){i=m, n=1, k*=1}"]})
         mm = program_builder(ctx).build().blocks[0]
         specs = [distance_specification.from_string(s)
                  for s in ("raw:data::ld:fma:3", "raw:data::mv:fma:2")]

@@ -14,8 +14,8 @@ import specializers.test_signature as t
 from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PARAMS = {"sme-F64F64": "on", "mm-to": ["fopa(A.VEC:direct, B.VEC:direct, C.TILE){i=m, j=n, k*=1}"],
-          "store-to": ["C.TILE:slices_col"]}
+PARAMS = {"sme-F64F64": "on", "mm-tileop": ["fopa(A.VEC:direct, B.VEC:direct, C.TILE){i=m, j=n, k*=1}"],
+          "store-tileop": ["C.TILE:slices_col"]}
 
 
 def run(**extra):
@@ -110,20 +110,20 @@ class test_required_registers(unittest.TestCase):
 GEMM = {
     "sme-F64F64": "on", "AB-data-type": "FP64", "C-data-regs": "4",
     "A-layout": ["m:c", "k:s"], "B-layout": ["n:c", "k:s"],
-    "mm-to": ["fopa(A.VEC:direct, B.VEC:direct, AB.TILE){i=m, j=n, k*=1}"],
-    "store_ab-to": ["AB.TILE:slices_col"],
-    "alphamul-to": ["fmul(AB.TILE:slice_vec_col[0:adreg:COL], alpha.VEC:bc_load, "
+    "mm-tileop": ["fopa(A.VEC:direct, B.VEC:direct, AB.TILE){i=m, j=n, k*=1}"],
+    "store_ab-tileop": ["AB.TILE:slices_col"],
+    "alphamul-tileop": ["fmul(AB.TILE:slice_vec_col[0:adreg:COL], alpha.VEC:bc_load, "
                     "C.TILE:>slice_vec_col[0:bdreg:COL]){i=m, n=1}"],
-    "betascale-to": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.TILE:>slice_vec_col){i=m, n=1}"],
-    "add-to": ["fadd(AB.TILE:slice_vec_col[0:adreg:COL], C.VEC:direct, "
+    "betascale-tileop": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.TILE:>slice_vec_col){i=m, n=1}"],
+    "add-tileop": ["fadd(AB.TILE:slice_vec_col[0:adreg:COL], C.VEC:direct, "
                "C.TILE:>slice_vec_col[0:bdreg:COL]){i=m, n=1}"],
-    "alphaadd-to": ["fma(AB.TILE:slice_vec_col[0:adreg:COL], alpha.VEC:bc_load, "
+    "alphaadd-tileop": ["fma(AB.TILE:slice_vec_col[0:adreg:COL], alpha.VEC:bc_load, "
                     "C.TILE:direct>slice_vec_col[0:bdreg:COL]){i=m, n=1}"],
-    "betaadd-to": ["fma(C.VEC:direct, beta.VEC:bc_load, "
+    "betaadd-tileop": ["fma(C.VEC:direct, beta.VEC:bc_load, "
                    "AB.TILE:slice_vec_col[0:adreg:COL]>slice_vec_col[0:bdreg:COL]){i=m, n=1}"],
-    "alphascale-to": ["fma(AB.TILE:slice_vec_col[0:adreg:COL], alpha.VEC:bc_load, "
+    "alphascale-tileop": ["fma(AB.TILE:slice_vec_col[0:adreg:COL], alpha.VEC:bc_load, "
                       "C.TILE:slice_vec_col[0:adreg:COL]>slice_vec_col[0:bdreg:COL]){i=m, n=1}"],
-    "store-to": ["C.TILE:slices_col"]}
+    "store-tileop": ["C.TILE:slices_col"]}
 
 
 class test_sme_gemm(unittest.TestCase):
@@ -266,18 +266,18 @@ class test_slice_unroll(unittest.TestCase):
 GEMM_ROWS = {
     "sme-F64F64": "on", "AB-data-type": "FP64", "C-data-regs": "4",
     "A-layout": ["m:c", "k:s"], "B-layout": ["n:c", "k:s"], "C-layout": ["n:c", "m:s"],
-    "mm-to": ["fopa(A.VEC:direct, B.VEC:direct, AB.TILE){i=m, j=n, k*=1}"],
-    "store_ab-to": ["AB.TILE:slices_row"], "store-to": ["C.TILE:slices_row"],
-    "alphamul-to": ["fmul(AB.TILE:slice_vec_row[0:adreg:ROW], alpha.VEC:bc_load, "
+    "mm-tileop": ["fopa(A.VEC:direct, B.VEC:direct, AB.TILE){i=m, j=n, k*=1}"],
+    "store_ab-tileop": ["AB.TILE:slices_row"], "store-tileop": ["C.TILE:slices_row"],
+    "alphamul-tileop": ["fmul(AB.TILE:slice_vec_row[0:adreg:ROW], alpha.VEC:bc_load, "
                     "C.TILE:>slice_vec_row[0:bdreg:ROW]){m=1, i=n}"],
-    "add-to": ["fadd(AB.TILE:slice_vec_row[0:adreg:ROW], C.VEC:direct, "
+    "add-tileop": ["fadd(AB.TILE:slice_vec_row[0:adreg:ROW], C.VEC:direct, "
                "C.TILE:>slice_vec_row[0:bdreg:ROW]){m=1, i=n}"],
-    "alphaadd-to": ["fma(AB.TILE:slice_vec_row[0:adreg:ROW], alpha.VEC:bc_load, "
+    "alphaadd-tileop": ["fma(AB.TILE:slice_vec_row[0:adreg:ROW], alpha.VEC:bc_load, "
                     "C.TILE:direct>slice_vec_row[0:bdreg:ROW]){m=1, i=n}"],
-    "betaadd-to": ["fma(C.VEC:direct, beta.VEC:bc_load, "
+    "betaadd-tileop": ["fma(C.VEC:direct, beta.VEC:bc_load, "
                    "AB.TILE:slice_vec_row[0:adreg:ROW]>slice_vec_row[0:bdreg:ROW]){m=1, i=n}"],
-    "betascale-to": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.TILE:>slice_vec_row){m=1, i=n}"],
-    "alphascale-to": ["fma(AB.TILE:slice_vec_row[0:adreg:ROW], alpha.VEC:bc_load, "
+    "betascale-tileop": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.TILE:>slice_vec_row){m=1, i=n}"],
+    "alphascale-tileop": ["fma(AB.TILE:slice_vec_row[0:adreg:ROW], alpha.VEC:bc_load, "
                       "C.TILE:slice_vec_row[0:adreg:ROW]>slice_vec_row[0:bdreg:ROW]){m=1, i=n}"]}
 
 

@@ -31,7 +31,7 @@ def listing(isa, a="k", c="n", b="n"):
     params = {"isa": isa, "A-data-type": "FP64", "B-data-type": "FP64",
               "AB-data-type": "FP64", "C-data-type": "FP64",
               "A-layout": layout("mk", a), "B-layout": layout("kn", b),
-              "C-layout": layout("mn", c), "list-to-candidates": True}
+              "C-layout": layout("mn", c), "list-tileop-candidates": True}
     def prolog(s):
         for p in s.get_parameter_names():
             if p in params:
@@ -46,7 +46,7 @@ def tags(out, comp, sto, along="m"):
     restricted to vectors along one index; store candidates cover whatever the
     implementations before them leave.
     """
-    lines = [l for l in out.splitlines() if f"--{sto}-to" in l]
+    lines = [l for l in out.splitlines() if f"--{sto}-tileop" in l]
     if "store" != sto:
         # every operation of the candidate with vectors along that index
         other = {"m": "n", "n": "m"}[along]
@@ -176,7 +176,7 @@ class test_layout_stage(unittest.TestCase):
             params = {"isa": "sve", "A-data-type": "FP64", "B-data-type": "FP64",
                       "AB-data-type": "FP64", "C-data-type": "FP64",
                       "A-layout": spec, "B-layout": ["k:p", "n:c"],
-                      "C-layout": ["m:c", "n:s"], "list-to-candidates": True}
+                      "C-layout": ["m:c", "n:s"], "list-tileop-candidates": True}
             def prolog(s):
                 for p in s.get_parameter_names():
                     if p in params:

@@ -31,11 +31,11 @@ def run(params):
 
 CASE_TOS = {
     # gemm's epilogue cases, all with vectors along m like the main loop
-    "alphamul-to": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
-    "add-to": ["fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}"],
-    "alphaadd-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}"],
-    "betaadd-to": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}"],
-    "store_ab-to": ["AB.VEC:direct"],
+    "alphamul-tileop": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
+    "add-tileop": ["fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}"],
+    "alphaadd-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}"],
+    "betaadd-tileop": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}"],
+    "store_ab-tileop": ["AB.VEC:direct"],
 }
 
 
@@ -49,25 +49,25 @@ class test_solve(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # one listing, reused: solving is the slow part
-        cls.ctx, cls.listing = run(gemm("sve", **{"list-to-candidates": True}))
+        cls.ctx, cls.listing = run(gemm("sve", **{"list-tileop-candidates": True}))
 
     def test_listing_exits_early(self):
         self.assertFalse(self.listing.completed)
         self.assertEqual("solve_stage", self.listing.stage)
         for sto in ("mm", "betascale", "alphascale", "store"):
-            self.assertIn(f"--{sto}-to", self.listing.output)
-        self.assertIn('--store-to "C.VEC:direct"', self.listing.output)
+            self.assertIn(f"--{sto}-tileop", self.listing.output)
+        self.assertIn('--store-tileop "C.VEC:direct"', self.listing.output)
         self.assertIn("inside the loop over k", self.listing.output)
 
     def test_scalars_are_broadcast(self):
         # beta is a scalar requirement operand: it only ever arrives broadcast
-        lines = [l for l in self.listing.output.splitlines() if "--betascale-to" in l]
+        lines = [l for l in self.listing.output.splitlines() if "--betascale-tileop" in l]
         self.assertTrue(lines)
         for line in lines:
             self.assertRegex(line, r"beta\.VEC:bc_")
 
     def candidates(self, sto):
-        return [l for l in self.listing.output.splitlines() if f"--{sto}-to" in l]
+        return [l for l in self.listing.output.splitlines() if f"--{sto}-tileop" in l]
 
     def test_accumulator_resident(self):
         # AB is zeroed and accumulated in registers: never loaded or stored
@@ -93,10 +93,10 @@ class test_solve(unittest.TestCase):
 
     def test_select_by_index_and_string(self):
         ctx, res = run(gemm("sve", **{
-            "mm-to": ["0"],
-            "betascale-to": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"],
-            "alphascale-to": ["0"],
-            "store-to": ["0"]}))
+            "mm-tileop": ["0"],
+            "betascale-tileop": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"],
+            "alphascale-tileop": ["0"],
+            "store-tileop": ["0"]}))
         self.assertTrue(res.completed)
         self.assertEqual(1, len(ctx.to_parts))
         part = ctx.to_parts[0]
@@ -106,8 +106,8 @@ class test_solve(unittest.TestCase):
 
     def test_parts(self):
         # two mm implementations make two parts; a single value serves both
-        ctx, res = run(gemm("sve", **{"mm-to": ["0", "1"], "betascale-to": ["0"],
-                                      "alphascale-to": ["0"], "store-to": ["0", "0"]}))
+        ctx, res = run(gemm("sve", **{"mm-tileop": ["0", "1"], "betascale-tileop": ["0"],
+                                      "alphascale-tileop": ["0"], "store-tileop": ["0", "0"]}))
         self.assertTrue(res.completed)
         self.assertEqual(2, len(ctx.to_parts))
         self.assertNotEqual(ctx.to_parts[0]["mm"].encoding, ctx.to_parts[1]["mm"].encoding)
@@ -115,22 +115,22 @@ class test_solve(unittest.TestCase):
                          ctx.to_parts[1]["alphascale"].encoding)
 
     def test_part_count_mismatch(self):
-        with self.assertRaisesRegex(stage_error, "--mm-to has 2 values for 3 parts"):
-            run(gemm("sve", **{"mm-to": ["0", "1"], "betascale-to": ["0"],
-                               "alphascale-to": ["0", "1", "2"], "store-to": ["0"]}))
+        with self.assertRaisesRegex(stage_error, "--mm-tileop has 2 values for 3 parts"):
+            run(gemm("sve", **{"mm-tileop": ["0", "1"], "betascale-tileop": ["0"],
+                               "alphascale-tileop": ["0", "1", "2"], "store-tileop": ["0"]}))
 
     def test_missing_selection_lists_candidates(self):
-        with self.assertRaisesRegex(stage_error, r"--mm-to is required(.|\n)*\[0\]"):
+        with self.assertRaisesRegex(stage_error, r"--mm-tileop is required(.|\n)*\[0\]"):
             run(gemm("sve"))
 
     def test_typo_suggests_candidates(self):
         with self.assertRaisesRegex(stage_error, "Closest candidates"):
-            run(gemm("sve", **{"mm-to": [
+            run(gemm("sve", **{"mm-tileop": [
                 "fma(A.VEC:direct, B.VEC:bc_lod, AB.VEC:direct>direct){i=m, n=1, k*=1}"]}))
 
     def test_produced_rtype(self):
-        ctx, _ = run(gemm("sve", **{"mm-to": ["0"], "betascale-to": ["0"],
-                                    "alphascale-to": ["0"], "store-to": ["0"]}))
+        ctx, _ = run(gemm("sve", **{"mm-tileop": ["0"], "betascale-tileop": ["0"],
+                                    "alphascale-tileop": ["0"], "store-tileop": ["0"]}))
         impl = next(iter(ctx.to_candidates["alphascale"].values()))
         self.assertEqual(rgt.VEC, produced_rtype(impl, "C"))
         self.assertIsNone(produced_rtype(impl, "alpha"))
@@ -140,7 +140,7 @@ class test_solve(unittest.TestCase):
     def test_unsupported_data_types(self):
         # UINT64 can be loaded on NEON, but no arithmetic operation takes it
         with self.assertRaisesRegex(stage_error, "no implementation"):
-            run(gemm("neon", dt="UINT64", **{"mm-to": ["0"]}))
+            run(gemm("neon", dt="UINT64", **{"mm-tileop": ["0"]}))
 
 
 class test_part_chain(unittest.TestCase):
@@ -189,15 +189,15 @@ class test_solve_pack(unittest.TestCase):
 
     def test_pack_candidates(self):
         ctx, res = run({"isa": "sve", "ukr": "pack", "X-data-type": "FP64",
-                        "Y-data-type": "FP64", "list-to-candidates": True})
+                        "Y-data-type": "FP64", "list-tileop-candidates": True})
         out = res.output
         self.assertIn("inside the loop over n", out)
-        pack = [l for l in out.splitlines() if "--pack-to" in l]
+        pack = [l for l in out.splitlines() if "--pack-tileop" in l]
         self.assertTrue(pack)
         # Y is only written, and stays in registers for the store STO
         for line in pack:
             self.assertNotIn("Y.VEC:", line)
-        self.assertIn('--store-to "Y.VEC:direct"', out)
+        self.assertIn('--store-tileop "Y.VEC:direct"', out)
 
 
 if __name__ == "__main__":

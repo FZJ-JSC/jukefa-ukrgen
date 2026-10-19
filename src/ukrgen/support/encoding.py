@@ -8,7 +8,7 @@
 Textual encoding of hardware implementations.
 
 Each implementation the solver finds gets one string, and that string is what the user
-passes back on the command line to pin a choice (--mm-to, --scale-to, --store-to, ...).
+passes back on the command line to pin a choice (--mm-tileop, --scale-tileop, --store-tileop, ...).
 The encoding therefore has to be injective: two implementations that emit different
 assembly must never share a string, or the choice is ambiguous.
 

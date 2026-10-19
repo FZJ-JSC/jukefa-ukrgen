@@ -5,7 +5,7 @@ class stage_param:
     """
     A parameter a stage asks for.
 
-    :param flag: a boolean switch taking no value, e.g. --list-to-candidates. Its
+    :param flag: a boolean switch taking no value, e.g. --list-tileop-candidates. Its
                  value is True when given and False otherwise.
     """
     value       : str|list[str]|bool

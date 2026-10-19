@@ -16,7 +16,7 @@ from ukrgen.models.load_store_operations import lsc_loop
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PARAMS = {"rvv-LMUL": "1", "A-layout": ["m:s", "k:c"],
-          "mm-to": ["fma(A.VEC:vla_lanes, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]}
+          "mm-tileop": ["fma(A.VEC:vla_lanes, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"]}
 
 
 def run(isa="rvv", params=None, **extra):
@@ -51,8 +51,8 @@ class test_vla_repeat(unittest.TestCase):
     def test_only_on_vla(self):
         saved, t.STAGES = t.STAGES, t.STAGES[:5]
         try:
-            ctx, res = t.mm(isa="neon", **{"A-layout": ["m:s", "k:c"], "list-to-candidates": True,
-                                           "mm-to": None})
+            ctx, res = t.mm(isa="neon", **{"A-layout": ["m:s", "k:c"], "list-tileop-candidates": True,
+                                           "mm-tileop": None})
         finally:
             t.STAGES = saved
         self.assertFalse(any("vla_lanes" in l for l in res.output.splitlines()))
@@ -105,7 +105,7 @@ class test_vla_repeat(unittest.TestCase):
     def test_drain_rvv(self):
         # C stored element by element: vfmv.f.s, a scalar store, vslidedown
         ctx, res = run(params={"rvv-LMUL": "1", "C-layout": ["m:s", "n:s"],
-                               "store-to": ["C.VEC:vla_lanes"]})
+                               "store-tileop": ["C.VEC:vla_lanes"]})
         self.assertTrue(res.completed, res.output)
         store = ctx.emitted[0].blocks[1].sections["body"]
         self.assertTrue(any(l.startswith("vfmv.f.s") for l in store))
@@ -117,7 +117,7 @@ class test_vla_repeat(unittest.TestCase):
     def test_fill_sve(self):
         # insr fills into lane 0, shifting up: the walk runs backwards from
         # the last element
-        ctx, res = run(isa="sve", params={"A-layout": ["m:s", "k:c"], "mm-to": PARAMS["mm-to"]})
+        ctx, res = run(isa="sve", params={"A-layout": ["m:s", "k:c"], "mm-tileop": PARAMS["mm-tileop"]})
         self.assertTrue(res.completed, res.output)
         self.assertTrue(any(l.startswith("insr") for l in ctx.emitted[0].blocks[0].sections["body"]))
         emulate(self, ctx, "strided_mm_harness.c", "aarch64-linux-gnu-gcc", "-march=armv8-a+sve",
