@@ -69,10 +69,12 @@ class model_stage(stage):
                                 if c not in self.accumulators]
         for comp in self.data_components:
             self.params[f"{comp}-data-regs"] = stage_param(
-                    value=None,
+                    value=None, required=False,
                     description=f"Data registers for {comp}. Fewer than its tiles cycles "
                                 f"through them, reloading; a component kept in registers "
-                                f"between STOs needs one per tile")
+                                f"between STOs needs one per tile. Not given: one per tile "
+                                f"where the register file holds them, else a share of what "
+                                f"the accumulators leave")
 
         for comp in self.memory:
             self.params[f"{comp}-subtiling"] = stage_param(
@@ -116,6 +118,9 @@ class model_stage(stage):
 
         data_regs = {}
         for comp in self.data_components:
+            if self.params[f"{comp}-data-regs"].value is None:
+                # fitted to the register file by the model
+                continue
             value = str(self.params[f"{comp}-data-regs"].value)
             if not value.isdigit() or int(value) < 1:
                 raise stage_error(f"--{comp}-data-regs must be a positive integer, got {value}")

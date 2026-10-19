@@ -324,9 +324,10 @@ class test_old_ir_compatibility(unittest.TestCase):
         epi = {id(op) for op in mm.epilogue} | {id(i) for op in mm.epilogue for i in op.indices}
         self.assertFalse(body & epi)
 
-    def test_data_registers_mandatory(self):
-        with self.assertRaisesRegex(ValueError, "C-data-regs is required"):
-            run(stages=TO_STAGES + [model_stage], **{"C-data-regs": None})
+    def test_data_registers_fitted(self):
+        # not given: the model fits them to the register file
+        ctx, res = run(stages=TO_STAGES + [model_stage], **{"C-data-regs": None})
+        self.assertTrue(ctx.programs)
 
 
 class test_register_rings(unittest.TestCase):

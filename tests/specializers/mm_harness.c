@@ -5,7 +5,9 @@
 #endif
 typedef WT w;
 void ukr(long k, const w* A, const w* B, w* C, long sCn);
+#ifndef LDC
 #define LDC 71
+#endif
 static w A[8192], B[8192], Cbuf[LDC * 64 + 128];
 static w *C = Cbuf + 16;
 int main(void) {

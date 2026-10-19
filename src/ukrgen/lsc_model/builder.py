@@ -9,6 +9,7 @@ second run with saved and restored state.
 """
 
 from __future__ import annotations
+from asmgen.asmblocks.op import register_type as rgt
 from ..components.tile import (
     tile, subtiling, dimension_properties as dimp, dimension_type as dimt,
 )
@@ -151,6 +152,7 @@ class program_builder:
                         if op.coord(name) not in seen:
                             seen.append(op.coord(name))
         self.coords = coords
+        self.data_regs = self.fit_registers(dict(self.data_regs))
 
         # the order an operation's components get their data in: which
         # component's memory is touched first
@@ -168,6 +170,91 @@ class program_builder:
         self.addr_setup: dict[tuple[str, int], int] = {}
 
     # --- registers ---------------------------------------------------------
+
+    def fit_registers(self, given: dict) -> dict:
+        """
+        Data register counts fitting the register file. An accumulator keeps
+        a register per tile - all are live at once. An input component given
+        no count (--COMP-data-regs) has a register per tile where that fits
+        beside the accumulators and the counts given; where not, the inputs
+        without counts share what is left - each at least one, as a ring.
+        Vector and FP registers count against one file where they share it
+        (AArch64, x86); tiles have their own
+        """
+        rtypes: dict[str, set] = {}
+        written: set[str] = set()
+        for sto in self.stos:
+            impl = self.part[sto].impl if sto in self.part else None
+            if not hasattr(impl, "resolved_chain"):
+                # a store's choice: no operation
+                continue
+            for res, step in zip(impl.resolved_chain, impl.math_chain):
+                written.add(step.name_mapping.get(step.hw_ast.left.name, step.hw_ast.left.name))
+                for hw, math in step.name_mapping.items():
+                    shape = res.compute_sg.representative.operands.get(hw)
+                    strat = [st for (n, _), st in res.operand_strategies.items() if n == hw]
+                    resident = next((getattr(st.rsln, "resident_rtype", None) for st in strat
+                                     if getattr(st.rsln, "resident_rtype", None)), None)
+                    rtype = resident or (shape.rtype if shape is not None else None)
+                    if rtype is not None:
+                        rtypes.setdefault(math, set()).add(rtype)
+        shared = getattr(self.gen, "are_fregs_in_vregs", False)
+        def on_vregs(comp):
+            kinds = rtypes.get(comp, set())
+            return rgt.VEC in kinds or (shared and rgt.FP in kinds)
+        try:
+            budget = len(self.gen.get_reg_tracker().available_regs.get("vreg", []))
+        except Exception:
+            budget = self.gen.max_vregs()
+        on_file = {c for c in self.coords if on_vregs(c)}
+        # what each block of the composition holds at once: the accumulators
+        # its STOs touch - a register per tile - and its inputs
+        blocks = []
+        for block in self.comp.all_blocks():
+            comps = set()
+            for name in getattr(block, "stos", []):
+                if name in self.stos:
+                    for op in self.stos[name].ops:
+                        comps |= {n for n in op.tile_strs if n in on_file}
+            if comps:
+                blocks.append(comps)
+        shares: dict[str, int] = {}
+        for comps in blocks:
+            accumulators = sorted(c for c in comps if c in written)
+            inputs = sorted(c for c in comps if c not in written)
+            need = sum(len(self.coords[c]) for c in accumulators)
+            fixed = sum(int(given[c]) for c in inputs if c in given)
+            free = [c for c in inputs if c not in given]
+            left = budget - need - fixed
+            if left < 0:
+                raise model_error(
+                    f"the accumulators ({', '.join(accumulators)}) take {need} vector registers "
+                    f"and the data registers given {fixed}: {need + fixed} of {budget} - fewer "
+                    f"data registers (--COMP-data-regs) or a smaller microtile fit")
+            if left < len(free):
+                raise model_error(
+                    f"the accumulators ({', '.join(accumulators)}) take {need} of {budget} vector "
+                    f"registers{' beside ' + str(fixed) + ' given' if fixed else ''}: {left} left "
+                    f"for {', '.join(free)}, at least one each - a smaller microtile fits")
+            if sum(len(self.coords[c]) for c in free) <= left:
+                continue
+            # the inputs without counts share what the block leaves: each at
+            # least one, the larger ones first
+            share = {c: 1 for c in free}
+            left -= len(free)
+            while left > 0:
+                grow = [c for c in free if share[c] < len(self.coords[c])]
+                if not grow:
+                    break
+                for c in sorted(grow, key=lambda c: -len(self.coords[c])):
+                    if left <= 0:
+                        break
+                    share[c] += 1
+                    left -= 1
+            for c, n in share.items():
+                shares[c] = min(shares.get(c, n), n)
+        given.update(shares)
+        return given
 
     def reg_of(self, comp: str, rtype, coord: tuple) -> vreg:
         """
