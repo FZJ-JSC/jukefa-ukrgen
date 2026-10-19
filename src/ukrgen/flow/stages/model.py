@@ -146,6 +146,11 @@ class model_stage(stage):
                               f"once, got {' '.join(order)}")
         order += [c for c in names if c not in order]
 
+        if len(self.context.to_parts) > 1:
+            raise stage_error(
+                f"the microtile is split into {len(self.context.to_parts)} parts along "
+                f"{self.context.split_index}: building them into one program - registers by "
+                f"the elements they hold, shared between the parts - is not done yet")
         try:
             programs = [program_builder(self.context, part, addressing, data_regs,
                                         preload=not self.params["no-preload"].value,

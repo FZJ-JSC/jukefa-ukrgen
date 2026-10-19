@@ -92,12 +92,12 @@ class test_sto_stage(unittest.TestCase):
             run(gemm(order="mn"))
 
     def test_bad_size(self):
-        with self.assertRaisesRegex(stage_error, "--n must be a positive integer"):
+        with self.assertRaisesRegex(stage_error, "--n must be positive integers"):
             run(gemm(n="0"))
 
     def test_parts_need_partition(self):
         # two consistent parts, both with vectors along m
-        with self.assertRaisesRegex(stage_error, "partition"):
+        with self.assertRaisesRegex(stage_error, "one value per part"):
             run(gemm(**{"mm-to": ["fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}",
                                   "fma(A.VEC:direct, B.VEC:bc_scalar, AB.VEC){i=m, n=1, k*=1}"]}))
 

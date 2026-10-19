@@ -50,3 +50,45 @@ class test_sme(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class test_split(unittest.TestCase):
+    """
+    A microtile split between implementations along one index: the parts one
+    after another along it, covering the same elements along every other
+    """
+
+    FOPA = "fopa(A.VEC:direct, B.VEC:direct, C.TILE){i=m, j=n, k*=1}"
+
+    def stos(self, **extra):
+        saved, t.STAGES = t.STAGES, t.STAGES[:6]
+        try:
+            ctx, res = t.mm(isa="sme", **{"sme-F64F64": "on", "C-layout": ["n:c", "m:s"],
+                                          "print-stos": True, **extra})
+        finally:
+            t.STAGES = saved
+        return [{str(tl.part_offset) for tl in part.values()} for part in ctx.stos]
+
+    def test_m(self):
+        # 2v rows of outer products, then 2 rows of fmas: part 2 from 2v
+        offsets = self.stos(**{"mm-to": [self.FOPA, "fma(A.VEC:bc_load, B.VEC:direct, C.VEC){m=1, i=n, k*=1}"],
+                               "store-to": ["C.TILE:slices_row", "C.VEC:direct"],
+                               "m": ["2", "2"], "n": ["4"]})
+        self.assertIn("VL", next(iter(offsets[1])))
+
+    def test_n(self):
+        offsets = self.stos(**{"mm-to": [self.FOPA, "fma(A.VEC:direct, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"],
+                               "store-to": ["C.TILE:slices_row", "C.VEC:vla_lanes"],
+                               "m": ["2"], "n": ["4", "2"]})
+        self.assertIn("'n'", next(iter(offsets[1])))
+
+    def test_must_line_up(self):
+        from ukrgen.flow.stages.stage import stage_error
+        with self.assertRaisesRegex(stage_error, "the parts cover n differently"):
+            self.stos(**{"mm-to": [self.FOPA, "fma(A.VEC:direct, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"],
+                         "store-to": ["C.TILE:slices_row", "C.VEC:vla_lanes"],
+                         "m": ["2", "2"], "n": ["4"]})
+        with self.assertRaisesRegex(stage_error, "split along one index"):
+            self.stos(**{"mm-to": [self.FOPA, "fma(A.VEC:bc_load, B.VEC:direct, C.VEC){m=1, i=n, k*=1}"],
+                         "store-to": ["C.TILE:slices_row", "C.VEC:direct"],
+                         "m": ["2", "2"], "n": ["4", "3"]})

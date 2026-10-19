@@ -37,7 +37,10 @@ class dimension_stage(stage):
             self.params[idx] = stage_param(
                     value=None,
                     description=f"Microtile size along {idx}, in extents of the "
-                                f"chosen implementations")
+                                f"chosen implementations; one value per part of the "
+                                f"microtile where it is split along {idx} - the parts "
+                                f"one after another along it",
+                    multi=True)
 
         loops = [b.loop_index for b in composition.all_blocks() if b.is_loop]
         default = loops + [i for i in self.indices if i not in loops]
@@ -49,12 +52,27 @@ class dimension_stage(stage):
                 required=False)
 
     def progress(self):
-        dims = {}
+        values = {}
         for idx in self.indices:
-            value = str(self.params[idx].value)
-            if not value.isdigit() or int(value) < 1:
-                raise stage_error(f"--{idx} must be a positive integer, got {value}")
-            dims[idx] = int(value)
+            raw = self.params[idx].value
+            raw = raw if isinstance(raw, (list, tuple)) else [raw]
+            for value in map(str, raw):
+                if not value.isdigit() or int(value) < 1:
+                    raise stage_error(f"--{idx} must be positive integers, got {value}")
+            values[idx] = [int(v) for v in raw]
+        split = [idx for idx, v in values.items() if len(v) > 1]
+        if len(split) > 1:
+            raise stage_error(f"the microtile is split along one index, not {', '.join(split)}: "
+                              f"give one of them a value per part")
+        parts = len(values[split[0]]) if split else 1
+        wanted = len(getattr(self.context, "to_parts", None) or [None])
+        if split and parts != wanted:
+            raise stage_error(f"--{split[0]} gives {parts} parts, the implementations "
+                              f"(--<sto>-to) {wanted}")
+        self.context.split_index = split[0] if split else None
+        self.context.part_dims = [{idx: v[p] if len(v) > 1 else v[0] for idx, v in values.items()}
+                                  for p in range(max(parts, wanted))]
+        dims = self.context.part_dims[0]
 
         raw = self.params["order"].value
         order = raw.split(",") if "," in raw else list(raw)

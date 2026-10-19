@@ -8,6 +8,7 @@ import logging
 from dataclasses import dataclass
 
 from ...components.tile import tile, dimension_properties as dimp, dimension_type as dimt
+from ...lsc_model.addressing import sym
 from ...components.operation import operation
 from ...generators.tiling import generate_tiling, generators
 from ...support.tiles import index_extents, kernel_groups, operand_tiles, lane_axes, register_tiles, ONE
@@ -198,7 +199,7 @@ class sto_stage(stage):
             if sto_kind.COMPUTE == sto.kind and slice_loop is not None:
                 tilings[name].slice_loop = slice_loop
 
-    def tile_part(self, part: dict, subtail: dict | None = None) \
+    def tile_part(self, part: dict, subtail: dict | None = None, dims: dict | None = None) \
             -> tuple[dict[str, sto_tiling], dict[str, sto_tiling]]:
         """
         Tile every STO of a part, and the subtail of each loop block whose
@@ -208,7 +209,7 @@ class sto_stage(stage):
 
         :return: the tilings and the subtail tilings
         """
-        dims = self.context.dims
+        dims = dims or self.context.dims
         seen: dict[str, tuple[dimp, str]] = {}
         left: dict[str, tuple[tile, tuple]] = {}
         tilings: dict[str, sto_tiling] = {}
@@ -269,16 +270,58 @@ class sto_stage(stage):
                 lines.append("")
         return "\n".join(lines).rstrip()
 
-    def progress(self):
-        if len(self.context.to_parts) > 1:
-            raise stage_error(
-                "several parts need a partition of the microtile - which index is "
-                "split and how far each part reaches - and that is not specified yet")
+    def place_parts(self, parts: list[dict], part_dims: list[dict]):
+        """
+        The parts of a split microtile, one after another along the split
+        index: each starts where the one before ends, in elements. Along every
+        other index they cover the same elements - and along a loop index they
+        step alike: a part covering a vector length of k (a dota) beside one
+        covering one would need a nested loop for the finer one
+        """
+        split = self.context.split_index
+        loops = {b.loop_index for b in self.context.composition.all_blocks() if b.is_loop}
+        computes = {s.name for s in self.context.composition.get_sto_descriptions()
+                    if sto_kind.COMPUTE == s.kind}
+        def cover(tilings, dims, idx):
+            extents = [t.extents[idx] for name, t in tilings.items()
+                       if name in computes and idx in t.extents]
+            return dimp(dt=extents[0].dt, size=extents[0].size * dims[idx]) if extents else None
+        # where each part starts along the split index, in elements: a sum of
+        # constants and vector lengths (2v rows of outer products, then 2 of
+        # fmas)
+        offset = sym.const(0)
+        for p, (tilings, dims) in enumerate(zip(parts, part_dims)):
+            for t in tilings.values():
+                t.part_offset = {split: offset}
+            here = cover(tilings, dims, split)
+            if here is None:
+                raise stage_error(f"part {p + 1} computes nothing along {split}")
+            offset = offset + sym.extent(here)
+        indices = sorted({i for tilings in parts for t in tilings.values() for i in t.extents})
+        for idx in indices:
+            if idx == split:
+                continue
+            covers = {str(c) for c in (cover(t, d, idx) for t, d in zip(parts, part_dims)) if c is not None}
+            if len(covers) > 1:
+                how = "step" if idx in loops else "cover"
+                raise stage_error(
+                    f"the parts {how} {idx} differently ({', '.join(sorted(covers))})" +
+                    (": the finer part would need a loop nested in the loop over it - not "
+                     "supported yet" if idx in loops else
+                     f": along every index but the split one ({split}) the parts cover the "
+                     f"same elements"))
 
+    def progress(self):
         subtails = self.context.subtail_parts or [{}] * len(self.context.to_parts)
-        results = [self.tile_part(part, sub)
-                   for part, sub in zip(self.context.to_parts, subtails)]
+        part_dims = getattr(self.context, "part_dims", None) or [self.context.dims] * len(self.context.to_parts)
+        if len(self.context.to_parts) > 1 and getattr(self.context, "split_index", None) is None:
+            raise stage_error("several parts split the microtile along an index: give that "
+                              "index one value per part (--m 2 2)")
+        results = [self.tile_part(part, sub, dims)
+                   for part, sub, dims in zip(self.context.to_parts, subtails, part_dims)]
         parts = [tilings for tilings, _ in results]
+        if len(parts) > 1:
+            self.place_parts(parts, part_dims)
         self.context.stos = parts
         self.context.subtail_stos = [sub for _, sub in results]
 
