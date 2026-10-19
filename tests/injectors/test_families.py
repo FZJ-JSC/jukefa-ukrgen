@@ -18,6 +18,20 @@ VM = {"mm-to": ["fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"],
       "A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"], "C-layout": ["m:c", "n:s"]}
 VM.update(CASE_TOS)
 
+# vectors along n, A broadcast, C row-major (its vectors along n contiguous):
+# the 8x3v kind of kernel; the epilogue streams C, scheduled (--mru)
+VN = {"mm-to": ["fma(A.VEC:bc_load, B.VEC:direct, AB.VEC){m=1, i=n, k*=1}"],
+      "betascale-to": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){m=1, i=n}"],
+      "alphascale-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
+      "store-to": ["C.VEC:direct"],
+      "alphamul-to": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
+      "add-to": ["fadd(AB.VEC, C.VEC:direct, C.VEC){m=1, i=n}"],
+      "alphaadd-to": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){m=1, i=n}"],
+      "betaadd-to": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){m=1, i=n}"],
+      "store_ab-to": ["AB.VEC:direct"],
+      "A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"], "C-layout": ["n:c", "m:s"],
+      "mru": True}
+
 
 class test_families(unittest.TestCase):
 

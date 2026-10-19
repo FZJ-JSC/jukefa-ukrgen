@@ -201,6 +201,7 @@ class program_builder:
         """
         rtypes: dict[str, set] = {}
         written: set[str] = set()
+        written_by: dict[str, set] = {}
         for part, stos in self.parts:
             for sto in stos:
               impl = part[sto].impl if sto in part else None
@@ -208,7 +209,9 @@ class program_builder:
                   # a store's choice: no operation
                   continue
               for res, step in zip(impl.resolved_chain, impl.math_chain):
-                  written.add(step.name_mapping.get(step.hw_ast.left.name, step.hw_ast.left.name))
+                  out = step.name_mapping.get(step.hw_ast.left.name, step.hw_ast.left.name)
+                  written.add(out)
+                  written_by.setdefault(sto, set()).add(out)
                   for hw, math in step.name_mapping.items():
                       shape = res.compute_sg.representative.operands.get(hw)
                       strat = [st for (n, _), st in res.operand_strategies.items() if n == hw]
@@ -229,50 +232,59 @@ class program_builder:
         # what each block of the composition holds at once: the accumulators
         # its STOs touch - a register per tile - and its inputs
         blocks = []
+        uses: dict[str, int] = {}
         for block in self.comp.all_blocks():
-            comps = set()
+            comps, wrote = set(), set()
             for name in getattr(block, "stos", []):
+                wrote |= written_by.get(name, set())
                 for _, stos in self.parts:
                     if name in stos:
                         for op in stos[name].ops:
                             comps |= {n for n in op.tile_strs if n in on_file}
             if comps:
-                blocks.append(comps)
-        shares: dict[str, int] = {}
-        for comps in blocks:
-            accumulators = sorted(c for c in comps if c in written)
-            inputs = sorted(c for c in comps if c not in written)
-            need = sum(len(self.coords[c]) for c in accumulators)
-            fixed = sum(int(given[c]) for c in inputs if c in given)
-            free = [c for c in inputs if c not in given]
-            left = budget - need - fixed
-            if left < 0:
-                raise model_error(
-                    f"the accumulators ({', '.join(accumulators)}) take {need} vector registers "
-                    f"and the data registers given {fixed}: {need + fixed} of {budget} - fewer "
-                    f"data registers (--COMP-data-regs) or a smaller microtile fit")
-            if left < len(free):
-                raise model_error(
-                    f"the accumulators ({', '.join(accumulators)}) take {need} of {budget} vector "
-                    f"registers{' beside ' + str(fixed) + ' given' if fixed else ''}: {left} left "
-                    f"for {', '.join(free)}, at least one each - a smaller microtile fits")
-            if sum(len(self.coords[c]) for c in free) <= left:
-                continue
-            # the inputs without counts share what the block leaves: each at
-            # least one, the larger ones first
-            share = {c: 1 for c in free}
-            left -= len(free)
-            while left > 0:
-                grow = [c for c in free if share[c] < len(self.coords[c])]
-                if not grow:
+                blocks.append((comps, wrote, getattr(block, "loop_index", None) is not None))
+                for c in comps:
+                    uses[c] = uses.get(c, 0) + 1
+        accumulated = set().union(*[wrote for _, wrote, looped in blocks if looped])
+        # all of a component's tiles live at once: accumulated in a loop - in
+        # it, and carried after it (AB into the epilogue). One written in
+        # straight-line code only (C in each epilogue case) streams: a model
+        # register per tile, which scheduling renames into the accumulators'
+        # registers as they are consumed - none kept for it here. An input's
+        # registers stay its own to the end: every block's inputs share what
+        # the most accumulators any block holds leave
+        live = [sorted(c for c in comps if c in accumulated) for comps, _, _ in blocks]
+        streamed = sorted({c for comps, _, _ in blocks for c in comps
+                           if c in written and c not in accumulated})
+        inputs = sorted({c for comps, _, _ in blocks for c in comps if c not in written})
+        accumulators = max(live, key=lambda cs: sum(len(self.coords[c]) for c in cs), default=[])
+        need = sum(len(self.coords[c]) for c in accumulators)
+        fixed = sum(int(given[c]) for c in inputs if c in given)
+        free = [c for c in inputs if c not in given]
+        left = budget - need - fixed
+        held = f"the accumulators ({', '.join(accumulators)}) take {need}"
+        if left < 0:
+            raise model_error(
+                f"{held} vector registers and the data registers given {fixed}: "
+                f"{need + fixed} of {budget} - fewer data registers "
+                f"(--COMP-data-regs) or a smaller microtile fit")
+        if left < len(free):
+            raise model_error(
+                f"{held} of {budget} vector registers{' beside ' + str(fixed) + ' given' if fixed else ''}"
+                f": {left} left for {', '.join(free)}, at least one each - a smaller microtile fits")
+        if sum(len(self.coords[c]) for c in free) <= left:
+            return given
+        shares = {c: 1 for c in free}
+        left -= len(free)
+        while left > 0:
+            grow = [c for c in free if shares[c] < len(self.coords[c])]
+            if not grow:
+                break
+            for c in sorted(grow, key=lambda c: -len(self.coords[c])):
+                if left <= 0:
                     break
-                for c in sorted(grow, key=lambda c: -len(self.coords[c])):
-                    if left <= 0:
-                        break
-                    share[c] += 1
-                    left -= 1
-            for c, n in share.items():
-                shares[c] = min(shares.get(c, n), n)
+                shares[c] += 1
+                left -= 1
         given.update(shares)
         return given
 

@@ -248,8 +248,9 @@ class signature_emitter:
                         raise specialization_error(
                             f"{key[0]}: no vector register left - the accumulators, the data "
                             f"registers and a loop's unrolled copies (unroll_loops' factor and "
-                            f"registers) take them all; fewer register sets or data registers "
-                            f"fit") from err
+                            f"registers) take them all; scheduling (--mru) renames tiles "
+                            f"streamed through straight-line code into the registers free, "
+                            f"fewer register sets or data registers fit") from err
                 else:
                     used = self.rt.get_used_regs("vreg")
                     free = [i for i in bound if i not in used]

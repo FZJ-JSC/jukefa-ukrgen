@@ -95,8 +95,8 @@ packm:
 | 1 | Family configuration: loading, size enumeration, a flow run per size; kernel metadata (symbol, mr/nr, parameters, C layout) | done for gemm: `injectors/blis/families.py`, `tests/injectors/test_families.py` |
 | 2 | gemm wrappers (BLIS signature, edge-case macros) and the kernel table | done: `injectors/blis/cgen.py`, `tests/injectors/test_cgen.py` |
 | 3 | Context initialization: run-time kernel choice from `BLIS_{MR,NR}_{S,D}`, default and fallback; cache blocksize defaults | done: `cgen.cntx_init`, `family_header`, `generate.py`; `--family-config`, `--stack-buf-size` |
-| 3b | Epilogue STOs interleaved tile by tile, so C streams through a ring: the default 8x3v (24 AB accumulators) needs it | next |
-| 4 | BLIS patching: configuration and kernel directories, registry, PR 960, `inherit` | |
+| 3b | Large tiles: C streamed through the epilogue (MRU renaming), register fitting by liveness | done: the default 8x3v builds |
+| 4 | BLIS patching: configuration and kernel directories, registry, PR 960, `inherit` | next |
 | 5 | BLIS build and testsuite: x86 natively, SVE/RVV under qemu | |
 | 6 | packm families: cases, generated dispatch tree, reference fallback | |
 | 7 | packm in the BLIS configuration; testsuite again | |
@@ -190,9 +190,17 @@ void bli_cntx_init_<config>( cntx_t* cntx )
   broken with today's asmgen: `asmgen.asmblocks.operations` is gone) are
   loaded only on that path; its per-data-type configurations and BLIS source
   are required only there.
-- Found: gemm's epilogue emits STO after STO over all tiles, so C is held in
-  a register per tile beside AB's accumulators: 2vx8 (16 + 16 of 32) is
-  skipped, and the default 8x3v (24 AB accumulators) can't build. Step 3b:
-  the builder interleaves a block's STOs tile by tile where their tilings
-  line up - scale, update and store one tile before the next - so C needs a
-  ring of a few registers, as hand-written kernels do.
+- Step 3b: 2vx8 and the default 8x3v were refused by the model's register
+  fitting (0082), not by the hardware: it counted every written component as
+  an accumulator, all tiles live - C in the epilogue too. The builder emits
+  the epilogue STO after STO (C a model register per tile); MRU scheduling
+  pulls each tile's dependent instructions together and renames C into the
+  accumulators' registers as they are consumed - that works. The fitting now
+  counts as all-live only what a loop accumulates (AB, in the loop and
+  carried into the epilogue); a component written in straight-line code only
+  (C) streams, with no registers kept for it; and since an input's physical
+  registers stay its own to the end of the kernel, every block's inputs (A,
+  B, alpha, beta) share what the most accumulators any block holds leave.
+  Without --mru such a kernel runs out of registers in the emitter, which
+  says to schedule. Families with large tiles set `mru: true`. SVE 8x3v (C
+  row-major), NEON 8x3v, SVE 2vx8 exact through the wrapper harness.

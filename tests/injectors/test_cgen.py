@@ -16,7 +16,7 @@ from ukrgen.injectors.blis.families import family, build_gemm
 from ukrgen.injectors.blis.cgen import (gemm_wrapper, asm_source, vl_helper, c_expr, gemm_table,
                                         GEMM_TABLE_PRELUDE, CTYPE, cntx_init, stack_buf_size,
                                         family_header)
-from injectors.test_families import VM
+from injectors.test_families import VM, VN
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CC = ["aarch64-linux-gnu-gcc", "-static", "-march=armv8-a+sve"]
@@ -141,6 +141,31 @@ int main( void )
             self.assertIn("d vm_1vx2 mr 4 nr 2", run({"BLIS_MR_D": "4", "BLIS_NR_D": "2"}))
             # a size not made: the default
             self.assertIn("d vm_2vx3 mr 8 nr 3", run({"BLIS_MR_D": "5", "BLIS_NR_D": "5"}))
+
+    @needs_tools
+    def test_large_tiles(self):
+        # the accumulators fill the register file: C streams through the
+        # epilogue, scheduled into their registers as they are consumed
+        plain = family.from_yaml("gemm", {"family": "vm", "dtypes": ["FP64"], "params": VM,
+                                          "m": [2], "n": [8]})
+        built, skipped = build_gemm("sve", "ukrgen_sve", plain)
+        self.assertEqual([], built)
+        self.assertIn("--mru", skipped[0][2])
+        for params, m, n, tiles in ((dict(VM, mru=True), 2, 8, ("mr 8 nr 8", "mr 16 nr 8")),
+                                    (VN, 8, 3, ("mr 8 nr 12", "mr 8 nr 24"))):
+            fam = family.from_yaml("gemm", {"family": "f", "dtypes": ["FP64"], "params": params,
+                                            "m": [m], "n": [n]})
+            built, skipped = build_gemm("sve", "ukrgen_sve", fam)
+            self.assertEqual(1, len(built), skipped)
+            k = built[0]
+            src = "#include \"blis_stub.h\"\n" + vl_helper(make_generator("sve")) + gemm_wrapper(k) + \
+                  f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, 'double')}; }}\n" \
+                  f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, 'double')}; }}\n" + \
+                  open(os.path.join(HERE, "wrapper_harness.c")).read()
+            outs = self.run_c("sve", src, [k], [[QEMU, "-cpu", f"max,sve{v}=on"] for v in (256, 512)],
+                              [f"-DUKR={k.symbol}", "-DWT=double"])
+            for out, tile in zip(outs, tiles):
+                self.assertIn(f"{tile}: 81 runs, 0 wrong", out, k.symbol)
 
     def test_stack_and_family_header(self):
         fam, built = build("sve", "FP64", [2], [3])
