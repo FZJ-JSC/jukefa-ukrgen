@@ -756,30 +756,50 @@ class signature_emitter:
         counter = self.greg()
         lines = [self.gen.mov_greg(src=self.vl_elements(dt), dst=counter),
                  self.gen.mov_greg_imm(reg=index, imm=0)]
-        walkers, deltas = [], []
+        # explicit copies in the block (unroll_loops): emitted once an
+        # iteration, every pointer stepping by the unroll; a step register
+        # shared by walks of the same step
+        explicit = op.info.get("unrolled")
+        scale = op.subtiling.unroll if explicit else 1
+        walkers, deltas, steps, shared = [], [], {}, {}
         for walk in op.walks:
             anchor = walk.anchor
             wcomp, wreg = anchor.indices[0].component, anchor.indices[0].indices[0]
             elements = self.program.offsets.elements_offset(
                 anchor.offset, self.program.strides.get(wcomp, {}))
-            walker, delta = self.greg(), self.greg()
-            lines.append(self.gen.mov_greg(src=self.aregs[(wcomp, wreg)], dst=walker))
-            lines += self.add_bytes(walker, self.bytes_of(wcomp, elements - self.positions[(wcomp, wreg)]), wcomp)
             terms = dict(walk.step.terms)
             wdt = self.ctx.component_dts[wcomp]
-            if not terms or set(terms) == {()}:
-                lines.append(self.gen.mov_greg_imm(reg=delta, imm=terms.get((), 0) * adt_size(wdt)))
-            else:
-                lines.append(self.gen.mov_greg(src=self.stride_reg(next(iter(terms))[0]), dst=delta))
+            key = (tuple(sorted(terms.items())), adt_size(wdt))
+            # a pointer shared by walks of one component from the same element
+            # by the same step: a tile's load and store of C
+            start = (wcomp, str(elements), key)
+            if start in shared:
+                walkers.append(shared[start])
+                deltas.append(steps[key])
+                continue
+            walker = self.greg()
+            shared[start] = walker
+            lines.append(self.gen.mov_greg(src=self.aregs[(wcomp, wreg)], dst=walker))
+            lines += self.add_bytes(walker, self.bytes_of(wcomp, elements - self.positions[(wcomp, wreg)]), wcomp)
+            if key not in steps:
+                delta = self.greg()
+                if not terms or set(terms) == {()}:
+                    lines.append(self.gen.mov_greg_imm(reg=delta, imm=terms.get((), 0) * adt_size(wdt) * scale))
+                elif scale > 1:
+                    lines.append(self.gen.mul_greg_imm(src=self.stride_reg(next(iter(terms))[0]),
+                                                       dst=delta, factor=scale))
+                else:
+                    lines.append(self.gen.mov_greg(src=self.stride_reg(next(iter(terms))[0]), dst=delta))
+                steps[key] = delta
             walkers.append(walker)
-            deltas.append(delta)
+            deltas.append(steps[key])
         loop = f"ukr{next(self.labels)}_slices"
         lines.append(self.gen.label(label=loop))
         unroll = op.subtiling.unroll
         # the block's own vector temporaries - written before read - rotate
         # through as many register sets as asked: an unrolled iteration's
         # slices don't wait on each other's registers
-        rotate = max(1, min(op.subtiling.registers, unroll))
+        rotate = 1 if explicit else max(1, min(op.subtiling.registers, unroll))
         def keys(b, positions):
             types = getattr(b, "rtypes", None) or []
             return [(b.indices[p].component, b.indices[p].indices[0], types[p] if p < len(types) else None)
@@ -791,7 +811,7 @@ class signature_emitter:
                 if rgt.VEC == k[2] and k not in read and k not in local:
                     local.append(k)
         sets = [{} for _ in range(rotate)]
-        for u in range(unroll):
+        for u in range(1 if explicit else unroll):
             group = u % rotate
             saved = {}
             if group:
@@ -805,7 +825,8 @@ class signature_emitter:
                     self.phys[k] = sets[group][k][1]
             for b in op.block:
                 if b in sliced:
-                    b.properties.update(slice_reg=index, slice_imm=u)
+                    b.properties.update(slice_reg=index,
+                                        slice_imm=b.properties.get("copy", 0) if explicit else u)
                 if isinstance(b, (lsc_load, lsc_store)):
                     walker = walkers[b.properties.get("walk", 0)]
                     line = self._mem(b, self.reg(b.indices[1], b.rtypes[1]), walker, 0)
@@ -818,7 +839,7 @@ class signature_emitter:
                     lines.append(self.move(b))
                 else:
                     lines += self._emit_op(b)
-            for walker, delta in zip(walkers, deltas):
+            for walker, delta in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values():
                 lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
             self.phys.update(saved)
         for group in sets:
@@ -827,7 +848,7 @@ class signature_emitter:
         lines.append(self.gen.add_greg_imm(reg=index, imm=unroll))
         lines.append(self.gen.add_greg_imm(reg=counter, imm=-unroll))
         lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
-        for r in [counter, index] + walkers + deltas:
+        for r in [counter, index] + list(shared.values()) + list(steps.values()):
             self.rt.unuse_reg("greg", r.idx)
         return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
                 if l.strip()]

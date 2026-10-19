@@ -366,3 +366,33 @@ class test_sme_fp32(unittest.TestCase):
                 t.mm(isa="sme", ukr="gemm", **GEMM32, **{"pre-specialize-irmods": ["hoist"]})
         finally:
             t.STAGES = saved
+
+
+class test_slice_scheduling(unittest.TestCase):
+    """
+    Loops over slices scheduled as loop bodies: unrolled into explicit
+    copies - each copy's temporaries its own, its slices at its immediate,
+    its memory from its own first slice - the scheduler interleaves the
+    tiles' chains and the copies
+    """
+
+    def test_interleaved(self):
+        from ukrgen.flow.stages.scheduling import schedule_stage
+        stages = list(t.STAGES)
+        i = [x.__name__ for x in stages].index("model_stage") + 1
+        stages = stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
+        j = [x.__name__ for x in stages].index("emit_stage")
+        saved, t.STAGES = t.STAGES, stages[:j] + [schedule_stage] + stages[j:]
+        try:
+            ctx, res = t.mm(isa="sme", ukr="gemm", **GEMM, **{
+                "pre-specialize-irmods": ["fuse_slices", "forward_slices", "hoist_slices",
+                                          "unroll_loops", "hoist"],
+                "unroll_loops-factor": "2", "unroll_loops-registers": "2", "mru": True})
+        finally:
+            t.STAGES = saved
+        code = ctx.emitted[0].instructions()
+        start = next(i for i, l in enumerate(code) if l.endswith("_slices:")
+                     and sum(x.startswith("mova") for x in code[i:i + 30]) >= 8)
+        body = [l.split()[0] for l in code[start + 1:start + 25]]
+        # every slice moved out before the first multiply: tiles and copies
+        self.assertEqual(["mova"] * 8, body[:8])

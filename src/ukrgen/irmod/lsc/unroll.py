@@ -2,6 +2,7 @@
 Unrolling loops over a vector's elements
 """
 
+import copy
 from dataclasses import replace
 
 from asmgen.registers import adt_size
@@ -9,7 +10,10 @@ from asmgen.registers import adt_size
 from .base import irmod_param, irmod_placement, lsc_irmod
 from .vectorize import repeats
 from .base import blocks_and_sections
-from ...models.load_store_operations import lsc_loop
+from ...models.load_store_operations import lsc_loop, loop_walk, lsc_load, lsc_store
+from ...models.lsc.index import lsc_reg_index
+from ...lsc_model.addressing import sym
+from asmgen.asmblocks.op import register_type as rgt
 from ...support.domains import operand_values
 
 
@@ -53,6 +57,8 @@ class unroll_loops(lsc_irmod):
             if factor > 1:
                 op.subtiling = replace(op.subtiling, unroll=factor,
                                        registers=max(1, min(int(self.values["registers"]), factor)))
+                if "slices" == op.info.get("kind"):
+                    expand_copies(program, op)
                 changed += 1
         return changed
 
@@ -92,3 +98,68 @@ def _sigs(groups) -> list:
         if hasattr(groups, attr):
             return list(getattr(groups, attr))
     return [getattr(groups, "representative", groups)]
+
+
+def _clone(op):
+    new = copy.copy(op)
+    new.indices = list(op.indices)
+    new.properties = dict(getattr(op, "properties", {}) or {})
+    for attr in ("reads", "writes", "rtypes", "reg_types"):
+        if getattr(op, attr, None) is not None:
+            setattr(new, attr, list(getattr(op, attr)))
+    return new
+
+
+def expand_copies(program, loop):
+    """
+    An unrolled loop over slices with its copies in its block: each copy's
+    slice operations at its immediate (property copy), its memory accesses
+    walking from its own first slice - shifted along the index the slices
+    iterate - and its own vector temporaries in register set copy mod
+    registers: a scheduler sees only the dependencies there are and
+    interleaves the copies. The emitter then emits the block once an
+    iteration, every pointer and the slice index stepping by the unroll
+    """
+    unroll, registers = loop.subtiling.unroll, max(1, loop.subtiling.registers)
+    if unroll < 2 or loop.info.get("unrolled"):
+        return
+    index = loop.info.get("index")
+    def keys(op, positions):
+        types = getattr(op, "rtypes", None) or []
+        return [(op.indices[p].component, op.indices[p].indices[0], types[p] if p < len(types) else None)
+                for p in positions]
+    local, read = [], set()
+    for b in loop.block:
+        read |= set(keys(b, getattr(b, "reads", [])))
+        for k in keys(b, getattr(b, "writes", [])):
+            if rgt.VEC == k[2] and k not in read and k not in local:
+                local.append(k)
+    base, walks = list(loop.block), list(loop.walks)
+    for b in base:
+        b.add_property("copy", 0)
+    block = list(base)
+    for u in range(1, unroll):
+        group = u % registers
+        rename = {k: lsc_reg_index(k[0], [k[1] + 1000 * group]) for k in local} if group else {}
+        moved = {}
+        for b in base:
+            n = _clone(b)
+            types = getattr(n, "rtypes", None) or []
+            for p, idx in enumerate(n.indices):
+                k = (idx.component, idx.indices[0], types[p] if p < len(types) else None)
+                if k in rename:
+                    n.indices[p] = rename[k]
+            n.add_property("copy", u)
+            if isinstance(n, (lsc_load, lsc_store)):
+                w = b.properties.get("walk", 0)
+                if w not in moved:
+                    old = loop.walks[w]
+                    anchor = _clone(old.anchor)
+                    anchor.offset = program.offsets.shifted(old.anchor.offset, index, sym.const(u))
+                    moved[w] = len(walks)
+                    walks.append(loop_walk(anchor=anchor, step=old.step))
+                n.add_property("walk", moved[w])
+            block.append(n)
+    loop.block, loop.walks = block, walks
+    loop.info["unrolled"] = unroll
+    loop.refresh()

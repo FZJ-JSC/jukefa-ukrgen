@@ -4,6 +4,7 @@ Scheduling the specialized LSC IR
 
 import logging
 
+from ...models.load_store_operations import lsc_loop
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
@@ -104,6 +105,13 @@ class schedule_stage(stage):
                         loop = block.loop_index is not None and "body" == section
                         order, report = scheduler(ops, loop=loop, budget=budget)
                         setattr(block, section, order)
+                        # a loop's own block, as a loop body: a fused loop's
+                        # tiles' chains, an unrolled one's copies, interleaved
+                        for op in order:
+                            if isinstance(op, lsc_loop) and op.block:
+                                inner, _ = scheduler(list(op.block), loop=True)
+                                op.block = inner
+                                op.refresh()
                         where = f"{(case.label + ': ') if case else ''}{block.name} {section}"
                         for warning in report.warnings():
                             self.log.warning(f"{where}: {warning}")

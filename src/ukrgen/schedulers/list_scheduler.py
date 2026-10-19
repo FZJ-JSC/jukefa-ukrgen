@@ -31,8 +31,14 @@ INF = float("inf")
 
 
 def _key(op, pos) -> tuple:
+    """
+    A register: its kind, component, number and type - a tile and a vector of
+    the same component and number are different registers
+    """
     idx = op.indices[pos]
-    return (op.reg_types[pos], idx.component, idx.indices[0])
+    rtypes = getattr(op, "rtypes", None) or []
+    return (op.reg_types[pos], idx.component, idx.indices[0],
+            rtypes[pos] if pos < len(rtypes) else None)
 
 
 def _tag(op, pos) -> str | None:

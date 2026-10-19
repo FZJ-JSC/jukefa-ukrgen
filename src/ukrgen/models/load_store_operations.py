@@ -457,15 +457,19 @@ class lsc_loop(lsc_operation):
         The registers the loop reads and writes, from its walks and block
         """
         self.indices, self.rtypes, self.reads, self.writes = [], [], [], []
+        self.reg_types = []
         for w in self.walks:
             self.indices.append(w.anchor.indices[0])
             self.rtypes.append(None)
+            self.reg_types.append(w.anchor.reg_types[0])
             self.reads.append(len(self.indices) - 1)
         for op in self.block:
             types = getattr(op, "rtypes", None) or [None] * len(op.indices)
+            kinds = getattr(op, "reg_types", None) or []
             for p, idx in enumerate(op.indices):
                 self.indices.append(idx)
                 self.rtypes.append(types[p] if p < len(types) else None)
+                self.reg_types.append(kinds[p] if p < len(kinds) else lsc_reg_type.data)
                 if p in op.reads:
                     self.reads.append(len(self.indices) - 1)
                 if p in op.writes:
