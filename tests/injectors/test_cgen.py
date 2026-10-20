@@ -148,9 +148,10 @@ int main( void )
         # epilogue, scheduled into their registers as they are consumed
         plain = family.from_yaml("gemm", {"family": "vm", "dtypes": ["FP64"],
                                           "params": dict(VM, **{"no-mru": True}), "m": [2], "n": [8]})
+        # the cluster irmod pulls each tile's chain together before addresses
+        # are fixed: even unscheduled, C streams through a few registers
         built, skipped = build_gemm("sve", "ukrgen_sve", plain)
-        self.assertEqual([], built)
-        self.assertIn("--mru", skipped[0][2])
+        self.assertEqual(1, len(built), skipped)
         for params, m, n, tiles in ((dict(VM, mru=True), 2, 8, ("mr 8 nr 8", "mr 16 nr 8")),
                                     (VN, 8, 3, ("mr 8 nr 12", "mr 8 nr 24"))):
             fam = family.from_yaml("gemm", {"family": "f", "dtypes": ["FP64"], "params": params,

@@ -90,6 +90,10 @@ class addressing_plan:
     pattern : addr_pattern = field(default_factory=lambda: addr_pattern("rotate"))
 
 
+#: scratch registers a data movement may name (its steps' tags)
+SCRATCH_STRIDE = 16
+
+
 class program_builder:
     """
     Builds the IR program of one part of the microtile
@@ -442,7 +446,8 @@ class program_builder:
         if isinstance(ref, orig_ref):
             return final
         tag = str(getattr(ref, "tag", "0"))
-        reg = vreg("S", rtype, int(tag) if tag.isdigit() else 0)
+        base = getattr(self, "scratch_base", 0) if getattr(self, "unique_scratch", False) else 0
+        reg = vreg("S", rtype, base + (int(tag) if tag.isdigit() else 0))
         self._use(reg)
         return reg
 
@@ -532,9 +537,23 @@ class program_builder:
         """
         return tiling.registers.get(reg.owner, scalar_tile)
 
-    def move_data(self, sto: str, tiling, comp: str, coord: tuple, reg: vreg,
-                  steps, direction: str, tag: str,
-                  memory: str | None = None, lane: int | None = None) -> list[lsc_operation]:
+    def move_data(self, *args, **kwargs) -> list[lsc_operation]:
+        """
+        One data movement, its scratch registers its own in straight-line code
+        """
+        if not getattr(self, "unique_scratch", False):
+            return self._move_data(*args, **kwargs)
+        saved = getattr(self, "scratch_base", 0)
+        self.next_scratch = getattr(self, "next_scratch", 0) + 1
+        self.scratch_base = SCRATCH_STRIDE * self.next_scratch
+        try:
+            return self._move_data(*args, **kwargs)
+        finally:
+            self.scratch_base = saved
+
+    def _move_data(self, sto: str, tiling, comp: str, coord: tuple, reg: vreg,
+                   steps, direction: str, tag: str,
+                   memory: str | None = None, lane: int | None = None) -> list[lsc_operation]:
         """
         The operations of one data movement: its steps in order, a repeated
         step once per lane, each load or store at the tile's address - in
@@ -1230,7 +1249,14 @@ class program_builder:
     def build_block(self, block: block_description) -> ir_block:
         if block.is_loop:
             return self.build_loop(block)
-        items = self.emit_section(self.items(block.stos))
+        # straight-line code: each data movement's scratch its own virtual
+        # register - a C tile's halves loaded and inserted apart from the next
+        # tile's - for the MRU to pull chains together and rename
+        self.unique_scratch = True
+        try:
+            items = self.emit_section(self.items(block.stos))
+        finally:
+            self.unique_scratch = False
         return ir_block(name="+".join(block.stos), body=_flatten(items))
 
     def build(self) -> ir_program:

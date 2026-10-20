@@ -57,6 +57,11 @@ class schedule_stage(stage):
                 value=False, default=False, flag=True, required=False,
                 description="Schedule straight-line blocks within the registers there are - "
                             "the default; kept for older command lines")
+        self.params["mru-window"] = stage_param(
+                value=None, required=False,
+                description="With MRU: how far ahead of the first instruction not yet placed one "
+                            "may move, in the order the cluster irmod pulled together "
+                            "(default 12)")
         self.params["no-mru"] = stage_param(
                 value=False, default=False, flag=True, required=False,
                 description="Don't schedule straight-line blocks within the registers there "
@@ -111,7 +116,12 @@ class schedule_stage(stage):
                     for section in SECTIONS:
                         ops = getattr(block, section)
                         loop = block.loop_index is not None and "body" == section
-                        order, report = scheduler(ops, loop=loop, budget=budget)
+                        # MRU: chains pulled together before addresses were
+                        # fixed (the cluster irmod), spread within a window
+                        window = None
+                        if budget is not None:
+                            window = int(self.params["mru-window"].value or 12)
+                        order, report = scheduler(ops, loop=loop, budget=budget, window=window)
                         setattr(block, section, order)
                         # a loop's own block, as a loop body: a fused loop's
                         # tiles' chains, an unrolled one's copies, interleaved

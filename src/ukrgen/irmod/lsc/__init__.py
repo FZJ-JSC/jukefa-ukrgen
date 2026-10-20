@@ -16,9 +16,10 @@ from .hoist import hoist
 from .vectorize import vectorize_loops
 from .unroll import unroll_loops
 from .slices import fuse_slices, forward_slices, hoist_slices
+from .cluster import cluster
 
 IRMODS : list[type[lsc_irmod]] = [widen, vectorize_loops, fuse_slices, forward_slices, hoist_slices,
-                                  unroll_loops, hoist, lanefuse, ldinc]
+                                  unroll_loops, hoist, cluster, lanefuse, ldinc]
 
 
 def irmods_at(placement: irmod_placement) -> list[type[lsc_irmod]]:

@@ -110,6 +110,42 @@ class test_presets(unittest.TestCase):
                                      timeout=120).stdout
                 self.assertIn(f"{tile}: 81 runs, 0 wrong", out)
 
+    @unittest.skipUnless("avx2" in open("/proc/cpuinfo").read() and shutil.which("gcc"),
+                         "needs an AVX2 CPU")
+    def test_block_trees_run(self):
+        # 4x3v and 2x6v: C reached by block trees, the epilogue's chains
+        # pulled together (cluster irmod), their scratch their own
+        from ukrgen.injectors.blis.families import family, build_gemm
+        from ukrgen.injectors.blis.cgen import gemm_wrapper, asm_source, vl_helpers, c_expr
+        from ukrgen.flow.isa_map import make_generator
+        here = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "injectors")
+        cc = ["gcc", "-mavx2", "-mfma"]
+        for m, n, tile in ((4, 3, "mr 4 nr 12"), (2, 6, "mr 2 nr 24")):
+            fam = family.from_yaml("gemm", {"family": "bt", "dtypes": ["FP64"], "m": [m], "n": [n],
+                                            "preset": "gemm_fma_bc_blocks", "vectorize": "n",
+                                            "params": {"A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"],
+                                                       "C-layout": ["m:c", "n:s"]}})
+            built, skipped = build_gemm("avx256", "ukrgen_avx2", fam)
+            self.assertEqual(1, len(built), skipped)
+            k = built[0]
+            src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator("avx256")) + gemm_wrapper(k) + \
+                  f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, 'double', k.vl_fn)}; }}\n" \
+                  f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, 'double', k.vl_fn)}; }}\n" + \
+                  open(os.path.join(here, "wrapper_harness.c")).read()
+            with tempfile.TemporaryDirectory() as d:
+                with open(os.path.join(d, "k.s"), "w") as f:
+                    f.write(asm_source(k))
+                subprocess.run(cc + ["-c", os.path.join(d, "k.s"), "-o", os.path.join(d, "k.o")], check=True)
+                with open(os.path.join(d, "w.c"), "w") as f:
+                    f.write(src)
+                r = subprocess.run(cc + ["-O1", f"-I{here}", f"-DUKR={k.symbol}", "-DWT=double",
+                                         os.path.join(d, "w.c"), os.path.join(d, "k.o"), "-o",
+                                         os.path.join(d, "run")], capture_output=True, text=True)
+                self.assertEqual(0, r.returncode, r.stderr)
+                out = subprocess.run([os.path.join(d, "run")], capture_output=True, text=True,
+                                     timeout=60).stdout
+                self.assertIn(f"{tile}: 81 runs, 0 wrong", out)
+
 
 if __name__ == "__main__":
     unittest.main()

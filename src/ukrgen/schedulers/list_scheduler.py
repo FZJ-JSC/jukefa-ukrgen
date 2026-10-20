@@ -152,6 +152,38 @@ class register_budget:
     live_out : set = field(default_factory=set)
 
 
+def cluster(ops: list) -> list:
+    """
+    Dependent instructions pulled together - the MRU's first half: each sink
+    (an instruction nothing after it depends on), in order, right after what
+    it depends on and isn't placed yet - a C tile loaded, scaled, combined
+    with its accumulator and stored before the next tile is touched. Its
+    values live briefly, their registers free again for the next tile - the
+    emitter renames virtual registers onto the physical ones free - and the
+    list scheduler pulls the chains apart again as far as registers allow
+    """
+    edges = [e for e in dependencies(ops, False) if not e.carried]
+    preds: dict[int, list[int]] = {j: [] for j in range(len(ops))}
+    succ = set()
+    for e in edges:
+        preds[e.dst].append(e.src)
+        succ.add(e.src)
+    placed, order = set(), []
+    def visit(j):
+        if j in placed:
+            return
+        for p in sorted(preds[j]):
+            visit(p)
+        placed.add(j)
+        order.append(j)
+    for j in range(len(ops)):
+        if j not in succ:
+            visit(j)
+    for j in range(len(ops)):
+        visit(j)
+    return [ops[i] for i in order]
+
+
 class list_scheduler:
     """
     :param specs: distance specifications
@@ -169,7 +201,8 @@ class list_scheduler:
         return edges
 
     def __call__(self, ops: list, loop: bool = False,
-                 budget: register_budget | None = None) -> tuple[list, schedule_report]:
+                 budget: register_budget | None = None,
+                 window: int | None = None) -> tuple[list, schedule_report]:
         if len(ops) < 2:
             return list(ops), self.report(ops, list(range(len(ops))), self.edges(ops, loop), 0)
         edges = self.edges(ops, loop)
@@ -182,7 +215,8 @@ class list_scheduler:
         best, best_score, best_over = None, None, 0
         bonus = [0.0] * len(ops)
         for _ in range(4 if loop else 1):
-            order, over = self.place(ops, intra, [p + b for p, b in zip(prio, bonus)], budget)
+            order, over = self.place(ops, intra, [p + b for p, b in zip(prio, bonus)], budget,
+                                     window)
             pos = {op: t for t, op in enumerate(order)}
             score = self.score(edges, pos, len(ops))
             if best is None or score < best_score:
@@ -205,7 +239,7 @@ class list_scheduler:
             shorts.append(max(0, e.distance - reached))
         return (max(shorts or [0]), sum(shorts))
 
-    def place(self, ops, intra, prio, budget) -> tuple[list[int], int]:
+    def place(self, ops, intra, prio, budget, window=None) -> tuple[list[int], int]:
         """
         Fill slots one at a time: of the instructions whose predecessors are all
         placed, take the most critical one meeting its distances, else the one
@@ -226,6 +260,11 @@ class list_scheduler:
         for t in range(n):
             ready = [j for j in range(n) if j not in placed
                      and all(e.src in placed for e in preds[j])]
+            if window is not None:
+                # at most a window ahead of the first not placed: the chains
+                # pulled together stay near each other
+                low = next(j for j in range(n) if j not in placed)
+                ready = [j for j in ready if j < low + window] or ready
 
             def slack(j):
                 return min([t - placed[e.src] - e.distance for e in preds[j]] or [INF])
