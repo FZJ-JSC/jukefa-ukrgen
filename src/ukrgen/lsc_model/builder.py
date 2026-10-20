@@ -270,68 +270,76 @@ class program_builder:
             # it, and carried after it (AB into the epilogue). One written in
             # straight-line code only (C in each epilogue case) streams: a model
             # register per tile, which scheduling renames into the accumulators'
-            # registers as they are consumed - none kept for it here. An input's
-            # registers stay its own to the end: every block's inputs share what
-            # the most accumulators any block holds leave
-            live = [sorted(c for c in comps if c in accumulated) for comps, _, _ in blocks]
-            streamed = sorted({c for comps, _, _ in blocks for c in comps
-                               if c in written and c not in accumulated})
-            inputs = sorted({c for comps, _, _ in blocks for c in comps if c not in written})
-            accumulators = max(live, key=lambda cs: sum(len(self.coords[c]) for c in cs), default=[])
-            need = sum(len(self.coords[c]) for c in accumulators)
-            fixed = sum(int(given[c]) for c in inputs if c in given)
-            free = [c for c in inputs if c not in given]
-            # a streamed tile is loaded before the accumulator it's combined with
-            # is consumed - into a register of its own, where vector instructions
-            # can't take it from memory (all but x86): one kept per streamed
-            # component there
-            folds = "avx" in type(self.gen).__module__
-            kept = 0 if folds else len(streamed)
-            left = budget - need - fixed - kept
-            held = f"the accumulators ({', '.join(accumulators)}) take {need}" + \
-                   (f" and the streamed ({', '.join(streamed)}) {kept}" if kept else "")
-            if left < 0:
-                raise model_error(
-                    f"{held} vector registers and the data registers given {fixed}: "
-                    f"{need + kept + fixed} of {budget} - fewer data registers "
-                    f"(--COMP-data-regs) or a smaller microtile fit")
-            if left < len(free):
-                raise model_error(
-                    f"{held} of {budget} vector registers{' beside ' + str(fixed) + ' given' if fixed else ''}"
-                    f": {left} left for {', '.join(free)}, at least one each - a smaller microtile fits")
-            # an input's ceiling: the tiles it has, --COMP-max-data-regs, and its
-            # minimal ring plus --COMP-max-preload iterations of its tiles
-            minimal = {c: self.minimal_ring(c) for c in free}
-            caps = {}
-            for c in free:
-                cap = len(self.coords[c])
-                if c in self.max_data_regs:
-                    cap = min(cap, int(self.max_data_regs[c]))
-                if c in self.max_preload:
-                    cap = min(cap, minimal[c] + int(self.max_preload[c]) * self.tiles_per_step(c))
-                caps[c] = max(1, cap)
-            if sum(caps[c] for c in free) <= left:
-                given.update({c: caps[c] for c in free if caps[c] < len(self.coords[c])})
-                continue
-            # first what keeps an input from loading a tile twice an iteration
-            # (its minimal ring), where the registers allow; then the rest up to
-            # the ceilings, the inputs with most tiles first
-            shares = {c: 1 for c in free}
-            left -= len(free)
-            for c in sorted(free, key=lambda c: -len(self.coords[c])):
-                more = min(minimal[c], caps[c]) - shares[c]
-                if 0 < more <= left:
-                    shares[c] += more
-                    left -= more
-            while left > 0:
-                grow = [c for c in free if shares[c] < caps[c]]
-                if not grow:
-                    break
-                for c in sorted(grow, key=lambda c: -len(self.coords[c])):
-                    if left <= 0:
+            # registers as they are consumed - none kept for it here. A block's
+            # inputs share what its accumulators leave; an input used in several
+            # blocks takes the least it gets in any
+            def share(comps):
+                """
+                What a block's inputs get beside its accumulators and streamed
+                components: the emitter frees a component's registers after the
+                last block using it - the loop's A and B before the epilogue
+                """
+                accumulators = sorted(c for c in comps if c in accumulated)
+                streamed = sorted(c for c in comps if c in written and c not in accumulated)
+                inputs = sorted(c for c in comps if c not in written)
+                need = sum(len(self.coords[c]) for c in accumulators)
+                fixed = sum(int(given[c]) for c in inputs if c in given)
+                free = [c for c in inputs if c not in given]
+                # a streamed tile is loaded before the accumulator it's combined with
+                # is consumed - into a register of its own, where vector instructions
+                # can't take it from memory (all but x86): one kept per streamed
+                # component there
+                folds = "avx" in type(self.gen).__module__
+                kept = 0 if folds else len(streamed)
+                left = budget - need - fixed - kept
+                held = f"the accumulators ({', '.join(accumulators)}) take {need}" + \
+                       (f" and the streamed ({', '.join(streamed)}) {kept}" if kept else "")
+                if left < 0:
+                    raise model_error(
+                        f"{held} vector registers and the data registers given {fixed}: "
+                        f"{need + kept + fixed} of {budget} - fewer data registers "
+                        f"(--COMP-data-regs) or a smaller microtile fit")
+                if left < len(free):
+                    raise model_error(
+                        f"{held} of {budget} vector registers{' beside ' + str(fixed) + ' given' if fixed else ''}"
+                        f": {left} left for {', '.join(free)}, at least one each - a smaller microtile fits")
+                # an input's ceiling: the tiles it has, --COMP-max-data-regs, and its
+                # minimal ring plus --COMP-max-preload iterations of its tiles
+                minimal = {c: self.minimal_ring(c) for c in free}
+                caps = {}
+                for c in free:
+                    cap = len(self.coords[c])
+                    if c in self.max_data_regs:
+                        cap = min(cap, int(self.max_data_regs[c]))
+                    if c in self.max_preload:
+                        cap = min(cap, minimal[c] + int(self.max_preload[c]) * self.tiles_per_step(c))
+                    caps[c] = max(1, cap)
+                if sum(caps[c] for c in free) <= left:
+                    return {c: caps[c] for c in free if caps[c] < len(self.coords[c])}
+                # first what keeps an input from loading a tile twice an iteration
+                # (its minimal ring), where the registers allow; then the rest up to
+                # the ceilings, the inputs with most tiles first
+                shares = {c: 1 for c in free}
+                left -= len(free)
+                for c in sorted(free, key=lambda c: -len(self.coords[c])):
+                    more = min(minimal[c], caps[c]) - shares[c]
+                    if 0 < more <= left:
+                        shares[c] += more
+                        left -= more
+                while left > 0:
+                    grow = [c for c in free if shares[c] < caps[c]]
+                    if not grow:
                         break
-                    shares[c] += 1
-                    left -= 1
+                    for c in sorted(grow, key=lambda c: -len(self.coords[c])):
+                        if left <= 0:
+                            break
+                        shares[c] += 1
+                        left -= 1
+                return shares
+            shares = {}
+            for comps, _, _ in blocks:
+                for c, n in share(comps).items():
+                    shares[c] = min(shares.get(c, n), n)
             given.update(shares)
         return given
 

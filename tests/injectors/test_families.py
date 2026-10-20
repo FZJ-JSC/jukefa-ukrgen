@@ -124,9 +124,10 @@ class test_families(unittest.TestCase):
             built, skipped = build_gemm("sve", "ukrgen_sve", fam)
             body = built[0].program.blocks[0].sections["body"]
             return len({x for l in body if l.startswith("ld1rd") for x in re.findall(r"\{z(\d+)\.", l)})
-        # A's broadcasts: a ring of what's left (one kept for C streamed
-        # through the epilogue), at most 1 asked, the minimal 1 without preload
-        self.assertEqual(2, loop_registers())
+        # A's broadcasts: a ring of what the loop's accumulators and B's
+        # minimal ring leave - the epilogue's registers are freed A and B's
+        # once the loop is done - at most 1 asked, the minimal 1 without preload
+        self.assertEqual(5, loop_registers())
         self.assertEqual(1, loop_registers(**{"max-data-regs": {"A": 1}}))
         self.assertEqual(1, loop_registers(**{"max-preload": {"A": 0}}))
 

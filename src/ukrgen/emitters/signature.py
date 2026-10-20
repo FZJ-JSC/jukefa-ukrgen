@@ -357,6 +357,25 @@ class signature_emitter:
                         for n in allowed:
                             self.rt.set_priority(tag, n, min(-2, self.rt.priority(tag, n)))
 
+    def operand_comps(self, blocks) -> set[str]:
+        """
+        The components the blocks' operations use as operands - a loop's
+        block too
+        """
+        comps = set()
+        def scan(ops):
+            for op in ops:
+                for idx in getattr(op, "indices", None) or ():
+                    comp = getattr(idx, "component", None)
+                    if comp is not None:
+                        comps.add(comp)
+                if getattr(op, "block", None):
+                    scan(op.block)
+        for block in blocks:
+            for section in ("prologue", "body", "epilogue", "tail", "subtail"):
+                scan(getattr(block, section, None) or ())
+        return comps
+
     def release(self, key):
         """
         A virtual register's value is dead: its physical register is free again
@@ -1411,6 +1430,11 @@ class signature_emitter:
             new = set(self.aregs) - new_before
             self.release_aregs({k for k in self.aregs
                                 if k[0] not in later or (k in new and k not in self.program.addr_setup)})
+            # data registers no later block reads or writes: free for the next
+            # blocks - the loop's A and B for the epilogue's temporaries
+            used = self.operand_comps(prefix[i + 1:] + case_blocks)
+            for key in [k for k in self.phys if k[0] not in used]:
+                self.release(key)
             for reg in counters or ():
                 if reg is not None:
                     self.rt.unuse_reg("greg", reg.idx)
