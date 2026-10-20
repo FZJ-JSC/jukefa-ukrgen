@@ -310,23 +310,29 @@ void bli_cntx_init_{config_name}( cntx_t* cntx )
 LONGEST_VECTOR = {"sve": 256, "sme": 256, "rvv": 256, "rvv071": 256}
 
 
+#: the element size BLIS checks the stack buffer by: a double complex's
+DCOMPLEX_SIZE = 16
+
+
 def stack_buf_size(isa: str, gen, kernels: list[kernel], given: int | None = None) -> int:
     """
-    BLIS_STACK_BUF_MAX_SIZE: given, or the largest kernel's tile (MR x NR x
-    the element size) at the ISA's longest vector, at least BLIS's 2048,
-    rounded up to 64 bytes
+    BLIS_STACK_BUF_MAX_SIZE: given, or what BLIS checks it against
+    (bli_check_sufficient_stack_buf_size) - every kernel's MR x NR at the
+    ISA's longest vector, in double complex elements whatever the kernel's
+    type (mixed-domain and induced methods use the microtile so) - at least
+    BLIS's 2048, rounded up to 64 bytes
     """
     if given:
         return int(given)
     largest = 2048
     for k in kernels:
-        esize = 4 if "FP32" == k.dtype else 8
-        vl = LONGEST_VECTOR.get(isa, 0) // esize
+        # the vector length in the kernel's own elements
+        vl = LONGEST_VECTOR.get(isa, 0) // (4 if "FP32" == k.dtype else 8)
         mv, me = split_size(k.mr)
         nv, ne = split_size(k.nr)
         mr = mv * vl + me
         nr = nv * vl + ne
-        largest = max(largest, mr * nr * esize)
+        largest = max(largest, mr * nr * DCOMPLEX_SIZE)
     return (largest + 63) // 64 * 64
 
 

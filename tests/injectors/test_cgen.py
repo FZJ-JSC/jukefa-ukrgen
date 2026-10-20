@@ -395,14 +395,19 @@ int main( void )
             self.assertIn("6 runs, 2 by generated cases, 0 wrong", out)
 
     def test_stack_and_family_header(self):
+        # what BLIS checks: MR x NR in double complex elements (16 bytes),
+        # whatever the kernel's type - 2 vectors of 32 doubles (2048 bits) by 3
         fam, built = build("sve", "FP64", [2], [3])
-        # 2 vectors by 3 doubles at 2048 bits: 64 x 3 x 8 bytes; at least BLIS's 2048
-        self.assertEqual(2048, stack_buf_size("sve", None, built))
+        self.assertEqual(64 * 3 * 16, stack_buf_size("sve", None, built))
         fam, built = build("sve", "FP64", [2], [6])
         self.assertEqual(1, len(built))
-        # 2 vectors of 32 doubles by 6: 3 KiB
-        self.assertEqual(64 * 6 * 8, stack_buf_size("sve", None, built))
+        self.assertEqual(64 * 6 * 16, stack_buf_size("sve", None, built))
         self.assertEqual(65536, stack_buf_size("sve", None, built, given=65536))
+        # fixed width: AVX-512's 8x3v singles, 8 x 48 - their own 1536 bytes
+        # too little for BLIS's check
+        fam, built = build("avx512", "FP32", [8], [3])
+        self.assertEqual(1, len(built))
+        self.assertEqual(8 * 48 * 16, stack_buf_size("avx512", None, built))
         header = family_header("ukrgen_sve", 12288)
         self.assertIn("#define BLIS_STACK_BUF_MAX_SIZE 12288", header)
         self.assertIn("#define BLIS_RELAX_MCNR_NCMR_CONSTRAINTS", header)
