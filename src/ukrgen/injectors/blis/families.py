@@ -49,6 +49,27 @@ def run_flow(params: dict) -> tuple[ukr_context, object]:
     return ctx, result
 
 
+def run_unrolled(params: dict, key: str):
+    """
+    The flow with params[key] the unroll asked - a ceiling: where the kernel
+    can't be built so (registers), half of it, down to 1. The flow's result
+    and the unroll it took; the last failure where none builds
+    """
+    asked = int(params.get(key, 1) or 1)
+    tries = []
+    while asked >= 1:
+        tries.append(asked)
+        asked //= 2
+    error = None
+    for unroll in tries:
+        try:
+            ctx, result = run_flow(dict(params, **{key: str(unroll)}))
+            return ctx, result, unroll
+        except Exception as err:
+            error = err
+    raise error
+
+
 def parse_sizes(value) -> list[int]:
     """
     Sizes to try: a number, a list, or a range "a..b" (both included)
@@ -139,6 +160,9 @@ class family:
     #: a split's ratios of instructions, first part to second (a, b): the
     #: second part's size along the split index the first's x b / a
     ratios: list[tuple] = field(default_factory=list)
+    #: packm: vectors a case keeps in flight at least - its unroll along the
+    #: panel, a case of m vectors (rows, trans) unrolled ceil(min_inflight / m)
+    min_inflight: int | None = None
 
     @staticmethod
     def from_yaml(kind: str, entry: dict) -> "family":
@@ -170,9 +194,11 @@ class family:
         ratios = parse_ratios(entry["split-ratios"]) if "split-ratios" in entry else []
         if ratios and 2 != len(parts):
             raise ValueError(f"family {entry['family']}: split-ratios relate two parts")
+        inflight = entry.get("min-inflight")
         return family(kind=kind, name=entry["family"], dtypes=list(entry.get("dtypes", ["FP64"])),
                       params=params, sizes=sizes, default=default, cases=cases,
-                      split=split, parts=parts, ratios=ratios)
+                      split=split, parts=parts, ratios=ratios,
+                      min_inflight=int(inflight) if inflight is not None else None)
 
 
 @dataclass
@@ -321,7 +347,7 @@ def build_gemm(isa: str, config_name: str, fam: family) -> tuple[list[kernel], l
                     params[f"{comp}-data-type"] = dt
                 params.update({"m": str(m), "n": str(n)})
                 try:
-                    ctx, result = run_flow(params)
+                    ctx, result, _ = run_unrolled(params, "k")
                 except Exception as err:
                     lines = [l.strip() for l in str(err).splitlines() if l.strip()]
                     skipped.append((dt, (m, n), lines[0] if lines else type(err).__name__))
@@ -358,8 +384,11 @@ def build_packm(isa: str, config_name: str, fam: family) -> tuple[list[kernel], 
                 for comp in ("X", "Y", "kappa"):
                     params[f"{comp}-data-type"] = dt
                 params["m"] = str(m)
+                if fam.min_inflight:
+                    # at least min_inflight vectors an iteration: m a copy
+                    params["n"] = str(max(1, -(-fam.min_inflight // m)))
                 try:
-                    ctx, result = run_flow(params)
+                    ctx, result, _ = run_unrolled(params, "n")
                 except Exception as err:
                     lines = [l.strip() for l in str(err).splitlines() if l.strip()]
                     skipped.append((dt, (case, m), lines[0] if lines else type(err).__name__))
@@ -407,7 +436,7 @@ def build_split_gemm(isa: str, config_name: str, fam: family) -> tuple[list[kern
                 params[other] = str(o)
                 size = combo + (o,) if "m" == split else (o,) + combo
                 try:
-                    ctx, result = run_flow(params)
+                    ctx, result, _ = run_unrolled(params, "k")
                 except Exception as err:
                     lines = [l.strip() for l in str(err).splitlines() if l.strip()]
                     skipped.append((dt, size, lines[0] if lines else type(err).__name__))

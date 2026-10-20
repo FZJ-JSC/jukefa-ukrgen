@@ -2,6 +2,7 @@
 # vectors of any cdim up to 16 rows more (a split's 2*VL + 2), the reference the rest, and along the panel (trans)
 isa: sve
 family: pk
+min-inflight: 8
 cases:
 - kind: vec
   m: 1..8
@@ -12,7 +13,6 @@ cases:
     Y-layout: ['m:c', 'n:s']
 - kind: trans
   m: 1..16
-  unroll: 2
   params:
     pack-tileop: ['fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}']
     store-tileop: ['Y.VEC:scatter']

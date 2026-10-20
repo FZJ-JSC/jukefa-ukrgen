@@ -2,6 +2,7 @@
 # vectors of any cdim up to 16 rows more (a split's 2*VL + 2), the reference the rest
 isa: neon
 family: pk
+min-inflight: 8
 cases:
 - kind: vec
   m: 1..8

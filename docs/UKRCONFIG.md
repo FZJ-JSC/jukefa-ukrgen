@@ -85,8 +85,16 @@ case of their own. `docs/BLISGEN_PLAN.md` has the details of each.
 
 ## Tuning in the examples
 
-- Unroll along k: 1. Preload: on - an input's ring holds its tiles for the
-  next iteration where the registers allow (`max-preload` limits it).
+- Unroll along k: 4 (the tail takes what's left of k, one at a time). An
+  unroll is a ceiling: a size the registers can't hold so is built at half
+  of it, down to 1, before it's skipped. Preload: on - an input's ring holds
+  its tiles for the next iteration where the registers allow (`max-preload`
+  limits it).
+- SME: the epilogue's slice loops unrolled (the `unroll_loops` irmod) - 2 for
+  doubles on one register set (all 8 tiles fused), 4 for singles on two.
+- packm: `min-inflight: 8` - a case of m vectors (rows, for trans) is
+  unrolled along the panel to keep at least 8 in flight: 2*VL four times,
+  4*VL twice; the tail packs a column at a time.
 - Scheduling: MRU on - straight-line chains pulled together (the cluster
   irmod), spread within a window of 12 under a register budget.
 - RVV (in-order cores): `schedule` keeps a vector register's value 13

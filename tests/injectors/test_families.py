@@ -150,6 +150,25 @@ class test_families(unittest.TestCase):
             family.from_yaml("gemm", {"family": "sf", "split": "m", "split-ratios": "1:1",
                                       "parts": [{"m": 1}, {"m": 1}, {"m": 1}]})
 
+    def test_min_inflight(self):
+        # at least 8 vectors an iteration: 2 vectors unrolled 4, 4 twice, 8 once;
+        # an unroll the registers can't hold halved (x86's 1-vector case)
+        from ukrgen.injectors.blis.families import build_packm
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+               "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
+        fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "min-inflight": 8,
+                                         "cases": [{"kind": "vec", "m": [2, 4, 8], "params": vec}]})
+        self.assertEqual(8, fam.min_inflight)
+        built, skipped = build_packm("sve", "ukrgen_sve", fam)
+        self.assertEqual(3, len(built), skipped)
+        for k in built:
+            body = k.program.blocks[0].sections["body"]
+            self.assertEqual(8, sum(l.startswith("ld1d") for l in body), k.symbol)
+        fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "min-inflight": 8,
+                                         "cases": [{"kind": "vec", "m": [1], "params": vec}]})
+        built, skipped = build_packm("avx256", "ukrgen_avx2", fam)
+        self.assertEqual(1, len(built), skipped)
+
 
 if __name__ == "__main__":
     unittest.main()

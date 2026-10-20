@@ -4,7 +4,7 @@ blocksizes: {mr-in-mc: 16, nr-in-nc: 64, kc: 256}
 families:
 - family: opa
   preset: gemm_fopa_bc_vindex
-  unroll: 1
+  unroll: 4
   m: 1..2
   n: 1..2
   default: 2x2
@@ -13,3 +13,6 @@ families:
     B-layout: ['n:c', 'k:p']
     C-layout: ['m:c', 'n:s']
     sme-F64F64: 'on'
+    pre-specialize-irmods: [fuse_slices, forward_slices, hoist_slices, unroll_loops, hoist, cluster]
+    unroll_loops-factor: '4'
+    unroll_loops-registers: '2'

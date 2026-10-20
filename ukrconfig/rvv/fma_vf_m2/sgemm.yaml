@@ -5,7 +5,7 @@ families:
 - family: vn
   preset: gemm_fma_vf
   vectorize: n
-  unroll: 1
+  unroll: 4
   m: [4, 6, 8]
   n: 1..2
   params:
@@ -20,7 +20,7 @@ families:
 - family: vm
   preset: gemm_fma_vf
   vectorize: m
-  unroll: 1
+  unroll: 4
   m: [1, 2]
   n: [4, 7]
   params:

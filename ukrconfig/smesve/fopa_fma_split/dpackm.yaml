@@ -1,6 +1,7 @@
 # FP64 packm, sme (streaming): vectors along cdim, and along the panel (trans)
 isa: sme
 family: pk
+min-inflight: 8
 cases:
 - kind: vec
   m: 1..8
@@ -12,7 +13,6 @@ cases:
     sme-F64F64: 'on'
 - kind: trans
   m: 1..16
-  unroll: 2
   params:
     pack-tileop: ['fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}']
     store-tileop: ['Y.VEC:scatter']
