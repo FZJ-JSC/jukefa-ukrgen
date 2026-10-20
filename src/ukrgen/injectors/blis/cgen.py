@@ -90,10 +90,12 @@ def gemm_wrapper(k: kernel) -> str:
     proto = ", ".join(GEMM_ARGS[p][0] for p in k.params)
     args = ", ".join(GEMM_ARGS[p][1].format(ctype=ctype) for p in k.params)
     row = "true" if "row" == k.c_layout else "false"
+    # C of any storage: the temporary tile only for edge cases
+    setup = "GEMM_UKR_SETUP_CT_ANY" if "any" == k.c_layout else "GEMM_UKR_SETUP_CT"
     return f"""\
 void {asm_symbol(k)}( {proto} );
 
-// {k.family}: {k.mr} x {k.nr}, C {k.c_layout}-major
+// {k.family}: {k.mr} x {k.nr}, C {"of any storage" if "any" == k.c_layout else k.c_layout + "-major"}
 void {k.symbol}
      (
              dim_t      m,
@@ -111,7 +113,7 @@ void {k.symbol}
 	( void )data; ( void )cntx;
 	const dim_t mr = {c_expr(k.mr, ctype, k.vl_fn)};
 	const dim_t nr = {c_expr(k.nr, ctype, k.vl_fn)};
-	GEMM_UKR_SETUP_CT( {ch}, mr, nr, {row} );
+	{setup}( {ch}, mr, nr, {row} );
 	{asm_symbol(k)}( {args} );
 	GEMM_UKR_FLUSH_CT( {ch} );
 }}

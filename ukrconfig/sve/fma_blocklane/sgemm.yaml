@@ -23,5 +23,5 @@ families:
   params:
     A-layout: ['m:c', 'k:p']
     B-layout: ['n:c', 'k:p']
-    C-layout: ['m:c', 'n:s']
+    C-layout: ['m:s', 'n:s']
   schedule: ['RAW:data:vreg:::4']

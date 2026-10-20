@@ -330,6 +330,18 @@ def size_name(expr: str) -> str:
     return text
 
 
+def c_storage(layout) -> str:
+    """
+    The C storage a kernel takes: row or col where one index is contiguous;
+    any where both are strided at run time (rows and columns a stride apart,
+    C's vectors gathered or strided) - BLIS needn't copy C for it
+    """
+    contiguous = [str(entry).split(":")[0] for entry in layout if str(entry).endswith(":c")]
+    if not contiguous:
+        return "any"
+    return "row" if "n" == contiguous[0] else "col"
+
+
 def _skip(dt, size, err) -> tuple:
     lines = [l.strip() for l in str(err).splitlines() if l.strip()]
     return ("skipped", (dt, size, lines[0] if lines else type(err).__name__))
@@ -388,7 +400,7 @@ def gemm_one(isa: str, config_name: str, fam: family, dt: str, m: int, n: int,
         return _skip(dt, (m, n), "the flow didn't complete")
     mr, nr = str(extent_of(ctx, "m")), str(extent_of(ctx, "n"))
     layout = params.get("C-layout", ["m:c", "n:s"])
-    c_layout = "row" if str(layout[0]).startswith("n") else "col"
+    c_layout = c_storage(layout)
     symbol = f"bli_{DT_CHAR[dt]}gemm_{config_name}_{fam.name}_{size_name(mr)}x{size_name(nr)}"
     program = ctx.emitted[0]
     return _done(kernel(family=fam.name, dtype=dt, size=(m, n), mr=mr, nr=nr, symbol=symbol,
@@ -486,7 +498,7 @@ def split_one(isa: str, config_name: str, fam: family, dt: str, combo: tuple, o:
     return _done(kernel(family=fam.name, dtype=dt, size=size, mr=mr, nr=nr,
                         symbol=f"bli_{DT_CHAR[dt]}gemm_{config_name}_{fam.name}_{names}",
                         params=list(program.params),
-                        c_layout="row" if str(layout[0]).startswith("n") else "col",
+                        c_layout=c_storage(layout),
                         program=program,
                         simd_size_c=getattr(ctx.gen, "c_simd_size_function", "")), detach)
 

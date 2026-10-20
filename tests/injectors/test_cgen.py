@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 from ukrgen.flow.isa_map import make_generator
-from ukrgen.injectors.blis.families import family, build_gemm
+from ukrgen.injectors.blis.families import family, build_gemm, configuration
 from ukrgen.injectors.blis.cgen import (gemm_wrapper, asm_source, vl_helper, vl_helpers, c_expr, gemm_table,
                                         GEMM_TABLE_PRELUDE, CTYPE, cntx_init, stack_buf_size,
                                         family_header)
@@ -393,6 +393,41 @@ int main( void )
             self.assertEqual(0, r.returncode, r.stderr)
             out = subprocess.run([os.path.join(d, "run")], capture_output=True, text=True, timeout=60).stdout
             self.assertIn("6 runs, 2 by generated cases, 0 wrong", out)
+
+    @unittest.skipUnless("avx512f" in open("/proc/cpuinfo").read() and shutil.which("gcc"),
+                         "needs an AVX-512 CPU")
+    def test_any_storage(self):
+        # vectors along n gathered with C's column stride, rows a row stride
+        # apart: C of any storage, the temporary for edge tiles only
+        import copy
+        cfg = configuration.from_files({("gemm", "FP64"): os.path.join(
+            os.path.dirname(HERE), os.pardir, "ukrconfig/avx512/fma_bc_vindex/dgemm.yaml")})
+        vn = next(f for f in cfg.families if "vn" == f.name)
+        f = copy.deepcopy(vn)
+        f.sizes = {"m": [8], "n": [3]}
+        built, skipped = build_gemm("avx512", "ukrgen_avx512", f)
+        self.assertEqual(1, len(built), skipped)
+        k = built[0]
+        self.assertEqual("any", k.c_layout)
+        wrapper = gemm_wrapper(k)
+        self.assertIn("GEMM_UKR_SETUP_CT_ANY", wrapper)
+        src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator("avx512")) + wrapper + \
+              f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, 'double', k.vl_fn)}; }}\n" \
+              f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, 'double', k.vl_fn)}; }}\n" + \
+              open(os.path.join(HERE, "wrapper_harness.c")).read()
+        cc = ["gcc", "-mavx512f", "-mavx512dq", "-mavx512vl"]
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "k.s"), "w") as fh:
+                fh.write(asm_source(k))
+            subprocess.run(cc + ["-c", os.path.join(d, "k.s"), "-o", os.path.join(d, "k.o")], check=True)
+            with open(os.path.join(d, "w.c"), "w") as fh:
+                fh.write(src)
+            r = subprocess.run(cc + ["-O1", f"-I{HERE}", f"-DUKR={k.symbol}", "-DWT=double",
+                                     os.path.join(d, "w.c"), os.path.join(d, "k.o"), "-o",
+                                     os.path.join(d, "run")], capture_output=True, text=True)
+            self.assertEqual(0, r.returncode, r.stderr)
+            out = subprocess.run([os.path.join(d, "run")], capture_output=True, text=True, timeout=60).stdout
+            self.assertIn("mr 8 nr 24: 81 runs, 0 wrong", out)
 
     def test_stack_and_family_header(self):
         # what BLIS checks: MR x NR in double complex elements (16 bytes),

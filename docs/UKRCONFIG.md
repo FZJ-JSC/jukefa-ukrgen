@@ -30,9 +30,14 @@ generator; the current blisgen doesn't read them.
 | `smesve/fopa_fma_split` | SME | the microtile split along m: outer products for the first part, streaming FMAs for the rest, sized by `split-ratios: 1..2:1..3` | 2vx4v+2x4v / 2vx2v+2x2v | vec, trans (scatters) |
 
 Every gemm file has two families where the ISA has two orientations: `vn`
-(vectors along n, A broadcast) and `vm` (vectors along m, B broadcast), both
-with column-major C - `vn` reaches C across its vectors, the stride paths
-the configuration is named for. Sizes are in the family's units: `8x3v` is
+(vectors along n, A broadcast) and `vm` (vectors along m, B broadcast). `vm`
+takes column-major C (its vectors run down C's columns). `vn` reaches C
+across its vectors - the stride paths the configuration is named for - with
+both of C's strides at run time (`C-layout: [m:s, n:s]`): C of any storage,
+so BLIS copies C through a temporary tile only for edge cases
+(`GEMM_UKR_SETUP_CT_ANY`). The block-tree configurations keep `vn`'s C
+column-major: with strided rows too, their addresses exceed x86's general
+registers. Sizes are in the family's units: `8x3v` is
 8 rows by 3 vectors, `2vx8` 2 vectors by 8 columns. Every size of a family
 the registers hold is built; the others are reported in
 `config/<name>/blisgen_report.txt`.

@@ -11,7 +11,7 @@ families:
   params:
     A-layout: ['m:c', 'k:p']
     B-layout: ['n:c', 'k:p']
-    C-layout: ['m:c', 'n:s']
+    C-layout: ['m:s', 'n:s']
     rvv-LMUL: '2'
   schedule: ['RAW:data:vreg:::13', 'WAW:data:vreg:::13', 'WAR:data:vreg:::13', 'RAW:address:greg:::3']
   max-addr-regs: {A: 2, B: 2}
