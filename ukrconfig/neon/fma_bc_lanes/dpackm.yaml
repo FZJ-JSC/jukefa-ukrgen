@@ -1,0 +1,11 @@
+# FP64 packm, neon: vectors along cdim
+isa: neon
+family: pk
+cases:
+- kind: vec
+  m: 1..8
+  params:
+    pack-tileop: ['fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}']
+    store-tileop: ['Y.VEC:direct']
+    X-layout: ['m:c', 'n:s']
+    Y-layout: ['m:c', 'n:p']

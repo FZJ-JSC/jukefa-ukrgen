@@ -32,8 +32,9 @@ def chosen(ctx, sto):
 class test_presets(unittest.TestCase):
 
     def test_shipped(self):
-        self.assertEqual(["gemm_fma_bc", "gemm_fma_bc_blocks", "gemm_fma_bc_vindex",
-                          "gemm_fma_blocklane_vindex", "gemm_fma_vf", "gemm_fopa_bc_vindex"],
+        self.assertEqual(["gemm_fma_bc", "gemm_fma_bc_blocks", "gemm_fma_bc_lanes", "gemm_fma_bc_vindex",
+                          "gemm_fma_blocklane_vindex", "gemm_fma_lane", "gemm_fma_vf",
+                          "gemm_fopa_bc_vindex"],
                          presets.names())
 
     def test_layout_decides_the_variant(self):

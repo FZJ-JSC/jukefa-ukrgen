@@ -1,0 +1,25 @@
+# FP64 gemm, rvv: vector-scalar FMA (vfmacc.vf), scalars in FP registers; C across vectors by strided loads and stores (LMUL 1)
+isa: rvv
+blocksizes: {mr-in-mc: 16, nr-in-nc: 64, kc: 256}
+families:
+- family: vn
+  preset: gemm_fma_vf
+  vectorize: n
+  unroll: 1
+  m: [6, 8, 12]
+  n: 1..3
+  params:
+    A-layout: &id001 ['m:c', 'k:p']
+    B-layout: &id002 ['n:c', 'k:p']
+    C-layout: &id003 ['m:c', 'n:s']
+  default: 8x3
+- family: vm
+  preset: gemm_fma_vf
+  vectorize: m
+  unroll: 1
+  m: [2, 3]
+  n: [4, 8, 12, 14]
+  params:
+    A-layout: *id001
+    B-layout: *id002
+    C-layout: *id003

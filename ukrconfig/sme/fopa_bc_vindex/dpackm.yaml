@@ -1,0 +1,21 @@
+# FP64 packm, sme (streaming): vectors along cdim, and along the panel (trans)
+isa: sme
+family: pk
+cases:
+- kind: vec
+  m: 1..8
+  params:
+    pack-tileop: ['fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}']
+    store-tileop: ['Y.VEC:direct']
+    X-layout: ['m:c', 'n:s']
+    Y-layout: ['m:c', 'n:p']
+    sme-F64F64: 'on'
+- kind: trans
+  m: 1..16
+  unroll: 2
+  params:
+    pack-tileop: ['fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}']
+    store-tileop: ['Y.VEC:scatter']
+    X-layout: ['n:c', 'm:s']
+    Y-layout: ['m:c', 'n:p']
+    sme-F64F64: 'on'

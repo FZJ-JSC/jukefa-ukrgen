@@ -1,0 +1,19 @@
+# FP64 gemm, sme: the microtile split along m - outer products for its first part, FMAs for the rest,
+# the FMA part sized by the ratio of their instructions (split-ratios)
+isa: sme
+blocksizes: {mr-in-mc: 16, nr-in-nc: 64, kc: 256}
+families:
+- family: sf
+  split: m
+  split-ratios: 1..2:1..3
+  unroll: 1
+  n: [2, 4]
+  default: 2+2x4
+  parts:
+  - {preset: gemm_fopa_bc_vindex, m: 1..2}
+  - {preset: gemm_fma_bc}
+  params:
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    C-layout: ['n:c', 'm:s']
+    sme-F64F64: 'on'

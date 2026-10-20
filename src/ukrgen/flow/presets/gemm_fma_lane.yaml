@@ -1,0 +1,34 @@
+# gemm_fma_lane: the lane FMA (NEON's fmla by element): the broadcast operand loaded as whole vectors, each lane an operand; C across vectors by lane loads and stores
+description: 'the lane FMA (NEON''s fmla by element): the broadcast operand loaded as whole vectors, each lane an operand; C across vectors by lane loads and stores'
+ukr: gemm
+variants:
+  m:
+    K: i=m, n=1, k*=1
+    T: i=m, n=1
+    V: A
+    S: B
+  n:
+    K: m=1, i=n, k*=1
+    T: m=1, i=n
+    V: B
+    S: A
+alternatives:
+  CL:
+  - direct
+  - lanes
+  CS:
+  - direct
+  - lanes
+  SC:
+  - bc_load
+  - bc_lane
+tileops:
+  mm: fma($V.VEC:direct, $S.VEC:bc_lanes, AB.VEC){$K}
+  betascale: fmul(C.VEC:$CL, beta.VEC:$SC, C.VEC){$T}
+  alphascale: fma(AB.VEC, alpha.VEC:$SC, C.VEC){$T}
+  store: C.VEC:$CS
+  alphamul: fmul(AB.VEC, alpha.VEC:$SC, C.VEC){$T}
+  add: fadd(AB.VEC, C.VEC:$CL, C.VEC){$T}
+  alphaadd: fma(AB.VEC, alpha.VEC:$SC, C.VEC:$CL){$T}
+  betaadd: fma(C.VEC:$CL, beta.VEC:$SC, AB.VEC){$T}
+  store_ab: AB.VEC:$CS

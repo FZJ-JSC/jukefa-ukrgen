@@ -1,0 +1,27 @@
+# FP32 gemm, rvv: as fma_vf with LMUL 2: 16 registers of two
+isa: rvv
+blocksizes: {mr-in-mc: 16, nr-in-nc: 64, kc: 256}
+families:
+- family: vn
+  preset: gemm_fma_vf
+  vectorize: n
+  unroll: 1
+  m: [4, 6, 8]
+  n: 1..2
+  params:
+    A-layout: &id001 ['m:c', 'k:p']
+    B-layout: &id002 ['n:c', 'k:p']
+    C-layout: &id003 ['m:c', 'n:s']
+    rvv-LMUL: '2'
+  default: 6x2
+- family: vm
+  preset: gemm_fma_vf
+  vectorize: m
+  unroll: 1
+  m: [1, 2]
+  n: [4, 7]
+  params:
+    A-layout: *id001
+    B-layout: *id002
+    C-layout: *id003
+    rvv-LMUL: '2'

@@ -1,0 +1,15 @@
+# FP64 gemm, sme: outer products into tiles, the epilogue slice by slice; C across vectors by gathers
+isa: sme
+blocksizes: {mr-in-mc: 16, nr-in-nc: 64, kc: 256}
+families:
+- family: opa
+  preset: gemm_fopa_bc_vindex
+  unroll: 1
+  m: 1..2
+  n: 1..4
+  default: 2x4
+  params:
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    C-layout: ['m:c', 'n:s']
+    sme-F64F64: 'on'
