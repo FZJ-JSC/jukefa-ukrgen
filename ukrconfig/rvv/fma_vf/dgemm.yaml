@@ -6,13 +6,13 @@ families:
   preset: gemm_fma_vf
   vectorize: n
   unroll: 4
-  m: [6, 8, 12]
-  n: 1..3
+  m: [4, 6, 8, 12, 14]
+  n: 1..4
   params:
     A-layout: ['m:c', 'k:p']
     B-layout: ['n:c', 'k:p']
     C-layout: ['m:s', 'n:s']
-  schedule: ['RAW:data:vreg:::13', 'WAW:data:vreg:::13', 'WAR:data:vreg:::13', 'RAW:address:greg:::3']
+  schedule: ['RAW:data::::13', 'WAW:data::::13', 'WAR:data::::13', 'RAW:address:greg:::3']
   max-addr-regs: {A: 2, B: 2}
   addr-pattern: {A: rotate, B: rotate}
   default: 8x3
@@ -20,12 +20,12 @@ families:
   preset: gemm_fma_vf
   vectorize: m
   unroll: 4
-  m: [2, 3]
-  n: [4, 8, 12, 14]
+  m: 1..4
+  n: [4, 6, 8, 12, 14]
   params:
     A-layout: ['m:c', 'k:p']
     B-layout: ['n:c', 'k:p']
     C-layout: ['m:c', 'n:s']
-  schedule: ['RAW:data:vreg:::13', 'WAW:data:vreg:::13', 'WAR:data:vreg:::13', 'RAW:address:greg:::3']
+  schedule: ['RAW:data::::13', 'WAW:data::::13', 'WAR:data::::13', 'RAW:address:greg:::3']
   max-addr-regs: {A: 2, B: 2}
   addr-pattern: {A: rotate, B: rotate}
