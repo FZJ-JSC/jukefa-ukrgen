@@ -68,9 +68,14 @@ class argparse_prolog:
             def given(pname):
                 return any(a == f"--{pname}" or a.startswith(f"--{pname}=") for a in argv)
             def unanswered(pname):
+                # what the stage can't go on without: a required option, or an
+                # STO's tile operation where no preset gives them
                 param = s.get_param(pname)
-                return not param.flag and not given(pname) and \
-                    (param.required or param.value is None)
+                if param.flag or given(pname):
+                    return False
+                if pname.endswith("-tileop"):
+                    return param.value is None and not given("tileop-preset")
+                return param.required and param.value is None
             if any(unanswered(p) for p in params):
                 self.parser.print_help()
                 sys.exit(0)
@@ -179,7 +184,7 @@ def main():
         if 1 == len(set(encodings)):
             encodings = encodings[:1]
         print(f"--{sto}-tileop " + " ".join(f'"{enc}"' for enc in encodings))
-    print("(the flow currently ends after the LSC model; see --print-ir)", file=sys.stderr)
+    print("(kernel built: --print-asm prints its assembly)", file=sys.stderr)
 
 if __name__ == "__main__":
     main()

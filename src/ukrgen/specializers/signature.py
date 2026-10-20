@@ -155,9 +155,11 @@ def _takes(sig, immediate: int) -> bool:
     return False
 
 
-#: column pointers kept per component and base; columns beyond them share
-#: one walking pointer
+#: column pointers kept per component and base where general registers are
+#: many (AArch64, RISC-V: 31); columns beyond them share one walking pointer
 MAX_COLUMN_POINTERS = 4
+#: ... and where they are few (x86: 16)
+FEW_COLUMN_POINTERS = 2
 
 
 class signature_specializer:
@@ -175,6 +177,20 @@ class signature_specializer:
     :raises specialization_error: for what is not specialized yet, e.g. the
                                   governing predicates of SVE and RVV
     """
+
+    def column_pointers(self) -> int:
+        """
+        Column pointers kept per component and base: fewer where the ISA has
+        few general registers - x86's 16 hold A's and B's pointers, the
+        loop's counter and the parameters too
+        """
+        if not hasattr(self, "_column_pointers"):
+            try:
+                gregs = len(self.ctx.gen.get_reg_tracker().available_regs.get("greg", []))
+            except Exception:
+                gregs = 32
+            self._column_pointers = MAX_COLUMN_POINTERS if gregs > 16 else FEW_COLUMN_POINTERS
+        return self._column_pointers
 
     def __init__(self, ctx, program: ir_program):
         self.ctx = ctx
@@ -238,7 +254,7 @@ class signature_specializer:
             lane_count = strided.pop((lane_factor,)) if lane_factor is not None else None
             key = (comp, reg, tuple(sorted(strided.items())))
             columns = [k for k in self.pointer_regs if k[:2] == (comp, reg) and "walk" != k[2]]
-            if strided and key not in self.pointer_regs and len(columns) >= MAX_COLUMN_POINTERS:
+            if strided and key not in self.pointer_regs and len(columns) >= self.column_pointers():
                 # more columns than pointers kept for them (general registers
                 # are few - RISC-V's C of 14 columns): one pointer walks
                 # between the rest, moved by the difference, computed from

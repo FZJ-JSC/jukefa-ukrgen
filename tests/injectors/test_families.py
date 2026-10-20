@@ -186,6 +186,20 @@ class test_families(unittest.TestCase):
         self.assertTrue(all(k.program is None and k.asm for k in par))
         self.assertEqual(skipped_seq, skipped_par)
 
+    def test_few_general_registers(self):
+        # vectors along m, C column-major with a run-time stride: x86's 16
+        # general registers keep two column pointers, one walks the rest
+        import copy
+        cfg = configuration.from_files({("gemm", "FP64"): os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "ukrconfig/avx512/fma_bc_vindex/dgemm.yaml")})
+        vm = next(f for f in cfg.families if "vm" == f.name)
+        for m, n in ((3, 8), (1, 14)):
+            f = copy.deepcopy(vm)
+            f.sizes = {"m": [m], "n": [n]}
+            built, skipped = build_gemm("avx512", "ukrgen_avx512", f)
+            self.assertEqual(1, len(built), skipped)
+
 
 if __name__ == "__main__":
     unittest.main()
