@@ -94,6 +94,27 @@ def key_params(kind: str, entry: dict) -> dict:
     return params
 
 
+def parse_ratios(value) -> list[tuple[int, int]]:
+    """
+    Ratios a:b - "1..2:1..3", or a list of "a:b" - those where a/b or b/a is
+    a whole number, each once as a fraction in lowest terms: 1..2:1..3 is 1:1,
+    1:2, 1:3, 2:1
+    """
+    from math import gcd
+    items = value if isinstance(value, list) else [value]
+    out = []
+    for item in items:
+        left, right = str(item).replace(" ", "").split(":")
+        for a in parse_sizes(left):
+            for b in parse_sizes(right):
+                if a % b and b % a:
+                    continue
+                g = gcd(a, b)
+                if (a // g, b // g) not in out:
+                    out.append((a // g, b // g))
+    return out
+
+
 @dataclass
 class family:
     """
@@ -115,6 +136,9 @@ class family:
     #: sizes along that index
     split: str | None = None
     parts: list[tuple] = field(default_factory=list)
+    #: a split's ratios of instructions, first part to second (a, b): the
+    #: second part's size along the split index the first's x b / a
+    ratios: list[tuple] = field(default_factory=list)
 
     @staticmethod
     def from_yaml(kind: str, entry: dict) -> "family":
@@ -139,12 +163,16 @@ class family:
                 if key in part:
                     pp[key] = part[key]
             pp.update(part.get("params") or {})
-            parts.append((pp, parse_sizes(part[split])))
+            # with split-ratios the second part's sizes follow the first's
+            parts.append((pp, parse_sizes(part[split]) if split in part else []))
         if parts and split not in ("m", "n"):
             raise ValueError(f"family {entry['family']}: split along m or n, not {split}")
+        ratios = parse_ratios(entry["split-ratios"]) if "split-ratios" in entry else []
+        if ratios and 2 != len(parts):
+            raise ValueError(f"family {entry['family']}: split-ratios relate two parts")
         return family(kind=kind, name=entry["family"], dtypes=list(entry.get("dtypes", ["FP64"])),
                       params=params, sizes=sizes, default=default, cases=cases,
-                      split=split, parts=parts)
+                      split=split, parts=parts, ratios=ratios)
 
 
 @dataclass
@@ -366,7 +394,7 @@ def build_split_gemm(isa: str, config_name: str, fam: family) -> tuple[list[kern
     other = "n" if "m" == split else "m"
     keys = list(dict.fromkeys(k for pp, _ in fam.parts for k in pp))
     for dt in fam.dtypes:
-        for combo in itertools.product(*[sizes for _, sizes in fam.parts]):
+        for combo in split_combos(fam):
             for o in fam.sizes.get(other, [1]):
                 params = {"isa": isa, "ukr": "gemm", "k": "1"}
                 params.update(fam.params)
@@ -400,3 +428,22 @@ def build_split_gemm(isa: str, config_name: str, fam: family) -> tuple[list[kern
                                     program=program,
                                     simd_size_c=getattr(ctx.gen, "c_simd_size_function", "")))
     return built, skipped
+
+
+def split_combos(fam: family) -> list[tuple]:
+    """
+    A split family's parts' sizes along the split index: with ratios, the
+    first part's sizes, the second's following each ratio a:b of their
+    instructions - both parts cover the other index alike, so m1 x n
+    instructions against m2 x n: m2 = m1 x b / a, where whole; else every
+    combination of the parts' sizes
+    """
+    import itertools
+    if not fam.ratios:
+        return list(itertools.product(*[sizes for _, sizes in fam.parts]))
+    combos = []
+    for first in fam.parts[0][1]:
+        for a, b in fam.ratios:
+            if 0 == (first * b) % a and (first, first * b // a) not in combos:
+                combos.append((first, first * b // a))
+    return combos

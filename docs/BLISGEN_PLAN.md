@@ -308,3 +308,10 @@ void bli_cntx_init_<config>( cntx_t* cntx )
   VL + elements. Symbols name every part: `bli_dgemm_<config>_sf_2vx4v_2x4v`.
   Defaults `2+2x4`. SME: 2vx4v fopa + 2x4v fma doubles, 2vx2v + 2x2v singles
   (one fopa per fma), exact through the BLIS wrapper at SVL 256 and 512.
+- `split-ratios: 1..2:1..3` (two parts): ratios a:b of the parts'
+  instructions - both cover the other index alike, so m1 x n against m2 x n -
+  those whole either way, each once (1:1, 1:2, 1:3, 2:1); for each size of
+  the first part the second's is m1 x b / a: 2vx4v + {2, 4, 6, 1}x4v. The
+  second part's own sizes are then optional. Sizes the registers can't hold
+  are skipped as always. `--tileop-vectorize` picks a preset's variant - the
+  index its tile operations vectorize - where C's contiguous index wouldn't.

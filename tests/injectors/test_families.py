@@ -131,6 +131,25 @@ class test_families(unittest.TestCase):
         self.assertEqual(1, loop_registers(**{"max-data-regs": {"A": 1}}))
         self.assertEqual(1, loop_registers(**{"max-preload": {"A": 0}}))
 
+    def test_split_ratios(self):
+        from ukrgen.injectors.blis.families import parse_ratios, split_combos
+        # whole ratios either way, each once: 2:2 is 1:1, 2:3 neither way whole
+        self.assertEqual([(1, 1), (1, 2), (1, 3), (2, 1)], parse_ratios("1..2:1..3"))
+        self.assertEqual([(1, 1), (3, 1)], parse_ratios(["1:1", "3:1", "2:2"]))
+        fam = family.from_yaml("gemm", {"family": "sf", "split": "m", "n": [4],
+                                        "split-ratios": "1..2:1..3",
+                                        "parts": [{"preset": "gemm_fopa_bc_vindex", "m": [2, 3]},
+                                                  {"preset": "gemm_fma_bc"}]})
+        # 2vx4v + {2, 4, 6, 1}x4v; 3v: 3, 6, 9 - 3:2 isn't whole
+        self.assertEqual([(2, 2), (2, 4), (2, 6), (2, 1), (3, 3), (3, 6), (3, 9)], split_combos(fam))
+        # without ratios: every combination
+        plain = family.from_yaml("gemm", {"family": "sf", "split": "m", "n": [4],
+                                          "parts": [{"m": [1, 2]}, {"m": [1, 2]}]})
+        self.assertEqual([(1, 1), (1, 2), (2, 1), (2, 2)], split_combos(plain))
+        with self.assertRaisesRegex(ValueError, "relate two parts"):
+            family.from_yaml("gemm", {"family": "sf", "split": "m", "split-ratios": "1:1",
+                                      "parts": [{"m": 1}, {"m": 1}, {"m": 1}]})
+
 
 if __name__ == "__main__":
     unittest.main()
