@@ -115,9 +115,11 @@ issue model for what pairs. An out-of-order core needs little - a short
 
 - The model is static: no pipeline beyond the slots, no memory latency.
   The cycles it reports are a lower bound for the order emitted.
-- Instructions the emitter writes on its own are not scheduled: today the
-  address arithmetic for offsets an access can't encode (RVV's vector
-  length multiples), slice loops' pointer walks and the case dispatch.
-  Moving them into the IR is planned.
+- The scheduler places IR operations; an operation the emitter writes as
+  several instructions counts as one. Address operations are one
+  instruction each - on RVV a pointer moving by k vector lengths is one add
+  of a register holding k vector lengths, computed at the kernel's start.
+  Slice loops' pointer walks and the case dispatch are written by the
+  emitter around the scheduled operations.
 - Straight-line blocks under a tight register budget may not reach every
   distance; the report says which.

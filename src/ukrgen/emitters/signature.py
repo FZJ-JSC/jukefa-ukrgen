@@ -166,6 +166,8 @@ class signature_emitter:
         # constant strides
         self.late_setup: list[str] = []
         self.vlb: dict[int, object] = {}
+        #: (element size, k) -> a register holding k vector lengths in bytes
+        self.vlm: dict[tuple, object] = {}
         self.masks: dict = {}
         self.indexes: dict = {}
         # setup-time values a previous emission found it needed: allocated
@@ -463,6 +465,10 @@ class signature_emitter:
             if ("VL",) == factors and not self.vector_length_kept:
                 # whole vectors, forward or back: incb or decb
                 lines.append(self.gen.add_greg_voff(reg=areg, offset=n, dt=dt))
+                continue
+            if ("VL",) == factors and n > 1:
+                # RVV: k vector lengths in a register of their own - one add
+                lines.append(self.gen.add_greg_greg(dst=areg, reg1=areg, reg2=self.vl_multiple(dt, n)))
                 continue
             if ("VL",) == factors:
                 # RVV: the vector length in a register, in bytes
@@ -1093,6 +1099,41 @@ class signature_emitter:
                                 self.gen.shift_greg_left(reg=reg, bit_count=esize.bit_length() - 1)]
         return self.vlb[esize]
 
+    def vl_multiple(self, dt, k: int):
+        """
+        A register holding k vector lengths in bytes (RVV): an address moves
+        by k vectors in one add - computed once, right after the ISA's setup
+        """
+        if 1 == k:
+            return self.vl_bytes(dt)
+        key = (adt_size(dt), k)
+        if key not in self.vlm:
+            self.recipes.append(("vl_multiple", (dt, k), self.regions_started))
+            base = self.vl_bytes(dt)
+            reg = self.greg()
+            self.vlm[key] = reg
+            if 0 == k & (k - 1):
+                self.late_setup += [self.gen.mov_greg(src=base, dst=reg),
+                                    self.gen.shift_greg_left(reg=reg, bit_count=k.bit_length() - 1)]
+            else:
+                self.late_setup += [self.gen.mov_greg(src=base, dst=reg)] + \
+                    [self.gen.add_greg_greg(dst=reg, reg1=reg, reg2=base) for _ in range(k - 1)]
+        return self.vlm[key]
+
+    def vector_multiple(self, amount, comp: str) -> int | None:
+        """
+        k where an amount of bytes is k whole vector lengths (k > 0) and the
+        ISA keeps the vector length in a register; else None
+        """
+        if not self.vector_length_kept:
+            return None
+        terms = list(amount.terms)
+        if 1 != len(terms) or ("VL",) != tuple(terms[0][0]):
+            return None
+        esize = adt_size(self.ctx.component_dts[comp])
+        coeff = terms[0][1]
+        return coeff // esize if coeff > 0 and 0 == coeff % esize else None
+
     def address(self, op: lsc_addr_compute) -> list[str]:
         """
         An address register set from another plus an offset
@@ -1103,8 +1144,16 @@ class signature_emitter:
         if dest_key not in self.aregs:
             self.aregs[dest_key] = self.greg()
         dest = self.aregs[dest_key]
-        lines = [] if src_key == dest_key else [self.gen.mov_greg(src=self.aregs[src_key], dst=dest)]
-        lines += self.add_bytes(dest, self.bytes_of(comp, op.delta), comp)
+        amount = self.bytes_of(comp, op.delta)
+        k = self.vector_multiple(amount, comp)
+        if src_key != dest_key and k is not None:
+            # k vectors on from another pointer: one add, as the scheduler counts it
+            dt = self.ctx.component_dts[comp]
+            lines = [self.gen.add_greg_greg(dst=dest, reg1=self.aregs[src_key],
+                                            reg2=self.vl_multiple(dt, k))]
+        else:
+            lines = [] if src_key == dest_key else [self.gen.mov_greg(src=self.aregs[src_key], dst=dest)]
+            lines += self.add_bytes(dest, amount, comp)
         self.positions[dest_key] = self.positions[src_key] + op.delta
         return lines
 
