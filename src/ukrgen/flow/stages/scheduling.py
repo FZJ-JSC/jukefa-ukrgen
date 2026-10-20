@@ -57,6 +57,14 @@ class schedule_stage(stage):
                 value=False, default=False, flag=True, required=False,
                 description="Schedule straight-line blocks within the registers there are - "
                             "the default; kept for older command lines")
+        self.params["sched-cycle-slots"] = stage_param(
+                value=None, required=False,
+                description="An issue model: what a core issues a cycle - \"[N:]slot,...\", "
+                            "each slot a class or classes joined by | (one of them a cycle), "
+                            "N the most a cycle; classes vl vs sl ss vf vi vp t f i addr br. "
+                            "\"2:vl|vs|vf,sl,i\": a vector load, store or FP operation, a "
+                            "scalar load and an integer one, two a cycle. Instructions placed "
+                            "cycle by cycle, the distances in cycles")
         self.params["mru-window"] = stage_param(
                 value=None, required=False,
                 description="With MRU: how far ahead of the first instruction not yet placed one "
@@ -92,7 +100,16 @@ class schedule_stage(stage):
         inflight = self.params["mru-inflight"].value
         reserve = int(self.params["mru-reserve"].value)
         gen = self.context.gen
-        scheduler = list_scheduler(specs)
+        slots = self.params["sched-cycle-slots"].value
+        if slots:
+            from ...schedulers.issue import issue_model
+            try:
+                model = issue_model(slots)
+            except ValueError as err:
+                raise stage_error(str(err)) from err
+        else:
+            model = None
+        scheduler = list_scheduler(specs, model)
         lines = []
 
         for program in self.context.programs:

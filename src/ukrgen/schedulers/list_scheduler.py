@@ -144,6 +144,8 @@ class schedule_report:
                for s, r, a, n in zip(self.specs, self.requested, self.achieved, self.short) if n]
         if self.over_budget:
             out.append(f"register budget exceeded by up to {self.over_budget}")
+        if getattr(self, "cycles", None):
+            out.append(f"{self.cycles} cycles as the issue model issues them")
         return out
 
 
@@ -195,8 +197,12 @@ class list_scheduler:
     :param specs: distance specifications
     """
 
-    def __init__(self, specs: list[distance_specification]):
+    def __init__(self, specs: list[distance_specification], model=None):
         self.specs = specs
+        #: an issue model (issue.issue_model): placed cycle by cycle, the
+        #: distances in cycles; None: one instruction after another
+        self.model = model
+        self.cycles = None
 
     def edges(self, ops: list, loop: bool, groups: dict | None = None) -> list[edge]:
         edges = dependencies(ops, loop, groups)
@@ -247,6 +253,81 @@ class list_scheduler:
         return (max(shorts or [0]), sum(shorts))
 
     def place(self, ops, intra, prio, budget, window=None) -> tuple[list[int], int]:
+        if self.model is not None:
+            return self.place_cycles(ops, intra, prio, budget, window)
+        return self.place_slots(ops, intra, prio, budget, window)
+
+    def place_cycles(self, ops, intra, prio, budget, window=None) -> tuple[list[int], int]:
+        """
+        Fill cycles one at a time, as the issue model lets a core issue them:
+        an instruction ready in the cycle its predecessors' cycles and the
+        distances allow (a RAW one at least the next), each cycle's slots
+        taken by the most critical ready - within the register budget
+        """
+        from .issue import classify
+        n = len(ops)
+        preds: dict[int, list[edge]] = {j: [] for j in range(n)}
+        consumers: dict[int, list[int]] = {j: [] for j in range(n)}
+        for e in intra:
+            preds[e.dst].append(e)
+            if dept.RAW == e.dep:
+                consumers[e.src].append(e.dst)
+        classes = [classify(op) for op in ops]
+        cycle_of: dict[int, int] = {}
+        order: list[int] = []
+        regs = _register_state(ops, budget) if budget else None
+        over = 0
+        cycle = 0
+        def earliest(j):
+            return max([cycle_of[e.src] + max(e.distance, 1 if dept.RAW == e.dep else 0)
+                        for e in preds[j]] or [0])
+        while len(order) < n:
+            used: set[int] = set()
+            while len(order) < n:
+                ready = [j for j in range(n) if j not in cycle_of
+                         and all(e.src in cycle_of for e in preds[j])]
+                if window is not None:
+                    low = next(j for j in range(n) if j not in cycle_of)
+                    ready = [j for j in ready if j < low + window] or ready
+                now = [j for j in ready if earliest(j) <= cycle]
+                candidates = now
+                if regs is not None and now:
+                    def admissible(j):
+                        if not regs.fits(j):
+                            return False
+                        if regs.relief(j) >= 0 or regs.free_after(j) >= 1:
+                            return True
+                        return any(regs.relief(k) > 0 for k in consumers[j])
+                    candidates = [j for j in now if admissible(j)]
+                    if not candidates and not used and len(now) == len(ready):
+                        # nothing fits: relieve the pressure most, and report it
+                        j = max(now, key=lambda j: (regs.relief(j), prio[j], -j))
+                        over = max(over, regs.excess(j))
+                        candidates = [j]
+                pick = None
+                for j in sorted(candidates, key=lambda j: (-prio[j], j)):
+                    slot = self.model.take(classes[j], used)
+                    if slot is not None:
+                        pick = j
+                        used.add(slot)
+                        break
+                if pick is None:
+                    break
+                cycle_of[pick] = cycle
+                order.append(pick)
+                if regs is not None:
+                    regs.place(pick)
+            if not used:
+                # nothing issues: on to the cycle the first ready one may
+                pending = [earliest(j) for j in range(n) if j not in cycle_of
+                           and all(e.src in cycle_of for e in preds[j])]
+                cycle = max(cycle + 1, min(pending)) if pending else cycle + 1
+            else:
+                cycle += 1
+        self.cycles = cycle
+        return order, over
+
+    def place_slots(self, ops, intra, prio, budget, window=None) -> tuple[list[int], int]:
         """
         Fill slots one at a time: of the instructions whose predecessors are all
         placed, take the most critical one meeting its distances, else the one
@@ -324,9 +405,11 @@ class list_scheduler:
             achieved[e.spec] = min(achieved[e.spec], reached)
             if reached < e.distance:
                 short[e.spec] += 1
-        return schedule_report(specs=[str(s) for s in self.specs],
+        report = schedule_report(specs=[str(s) for s in self.specs],
                                requested=[s.distance for s in self.specs],
                                achieved=achieved, short=short, over_budget=over)
+        report.cycles = self.cycles
+        return report
 
 
 class _register_state:

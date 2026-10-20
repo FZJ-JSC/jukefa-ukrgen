@@ -115,6 +115,16 @@ case of their own. `docs/BLISGEN_PLAN.md` has the details of each.
   bumps spread. Specs are `dependency:register type:register tag:op:op:distance`,
   an empty field matching any.
 - Out-of-order cores (AVX, NEON, SVE): `RAW:data:vreg:::4`.
+- An issue model, for in-order cores: `--sched-cycle-slots "[N:]slot,..."`
+  (family key `sched-cycle-slots` in `params`) - each slot a class or
+  classes joined by `|`, one of them a cycle, N the most issued a cycle.
+  Classes: `vl vs` vector loads and stores, `sl ss` scalar ones, `vf vi`
+  vector FP and integer arithmetic, `vp` permutes, `t` tile operations,
+  `f i` scalar FP and integer arithmetic, `addr` address arithmetic (else
+  `i`), `br` branches. The SpacemiT K1 (X60): `"2:vl|vs|vf,sl,i"` - a vector
+  load, store or FP operation, a scalar load beside it, two a cycle. The
+  scheduler then places instructions cycle by cycle, the distances in
+  cycles, and reports the cycles a block takes (`--print-schedule`).
 - Address registers by default: one each for A and B (`rotate`), two for C
   (`phase`: loads on one, stores on the other); the specializer keeps up to
   four column pointers per base, one more walking the rest.
