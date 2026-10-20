@@ -1,0 +1,31 @@
+# gemm_fma_bc_vindex: as gemm_fma_bc, C across vectors by gathers and scatters
+description: as gemm_fma_bc, C across vectors by gathers and scatters
+ukr: gemm
+variants:
+  m:
+    K: i=m, n=1, k*=1
+    T: i=m, n=1
+    V: A
+    S: B
+  n:
+    K: m=1, i=n, k*=1
+    T: m=1, i=n
+    V: B
+    S: A
+alternatives:
+  CL:
+  - direct
+  - gather
+  CS:
+  - direct
+  - scatter
+tileops:
+  mm: fma($V.VEC:direct, $S.VEC:bc_load, AB.VEC){$K}
+  betascale: fmul(C.VEC:$CL, beta.VEC:bc_load, C.VEC){$T}
+  alphascale: fma(AB.VEC, alpha.VEC:bc_load, C.VEC){$T}
+  store: C.VEC:$CS
+  alphamul: fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){$T}
+  add: fadd(AB.VEC, C.VEC:$CL, C.VEC){$T}
+  alphaadd: fma(AB.VEC, alpha.VEC:bc_load, C.VEC:$CL){$T}
+  betaadd: fma(C.VEC:$CL, beta.VEC:bc_load, AB.VEC){$T}
+  store_ab: AB.VEC:$CS

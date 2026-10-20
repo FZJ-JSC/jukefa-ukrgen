@@ -1,0 +1,31 @@
+# gemm_fma_vf: FMA with the broadcast operand an FP scalar (vector-scalar form, RVV's vfmacc.vf), alpha and beta too; C across vectors by strided loads and stores
+description: FMA with the broadcast operand an FP scalar (vector-scalar form, RVV's vfmacc.vf), alpha and beta too; C across vectors by strided loads and stores
+ukr: gemm
+variants:
+  m:
+    K: i=m, n=1, k*=1
+    T: i=m, n=1
+    V: A
+    S: B
+  n:
+    K: m=1, i=n, k*=1
+    T: m=1, i=n
+    V: B
+    S: A
+alternatives:
+  CL:
+  - direct
+  - strided
+  CS:
+  - direct
+  - strided
+tileops:
+  mm: fma[bdreg:VF]($V.VEC:direct, $S.FP:use_scalar, AB.VEC){$K}
+  betascale: fmul[bdreg:VF](C.VEC:$CL, beta.FP:use_scalar, C.VEC){$T}
+  alphascale: fma[bdreg:VF](AB.VEC, alpha.FP:use_scalar, C.VEC){$T}
+  store: C.VEC:$CS
+  alphamul: fmul[bdreg:VF](AB.VEC, alpha.FP:use_scalar, C.VEC){$T}
+  add: fadd(AB.VEC, C.VEC:$CL, C.VEC){$T}
+  alphaadd: fma[bdreg:VF](AB.VEC, alpha.FP:use_scalar, C.VEC:$CL){$T}
+  betaadd: fma[bdreg:VF](C.VEC:$CL, beta.FP:use_scalar, AB.VEC){$T}
+  store_ab: AB.VEC:$CS

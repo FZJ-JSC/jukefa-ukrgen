@@ -1,0 +1,27 @@
+# gemm_fopa_bc_vindex: SME: outer products into tiles; the epilogue slice by slice - columns where C is column-major, rows where row-major - alpha and beta broadcast from memory; C's vectors across its contiguous index by gathers
+description: 'SME: outer products into tiles; the epilogue slice by slice - columns where C is column-major, rows where row-major - alpha and beta broadcast from memory; C''s vectors across its contiguous
+  index by gathers'
+ukr: gemm
+variants:
+  m:
+    T: i=m, n=1
+    D: col
+    DU: COL
+  n:
+    T: m=1, i=n
+    D: row
+    DU: ROW
+alternatives:
+  CL:
+  - direct
+  - gather
+tileops:
+  mm: fopa(A.VEC:direct, B.VEC:direct, AB.TILE){i=m, j=n, k*=1}
+  store_ab: AB.TILE:slices_$D
+  alphamul: fmul(AB.TILE:slice_vec_$D[0:adreg:$DU], alpha.VEC:bc_load, C.TILE:>slice_vec_$D[0:bdreg:$DU]){$T}
+  betascale: fmul(C.VEC:$CL, beta.VEC:bc_load, C.TILE:>slice_vec_$D){$T}
+  add: fadd(AB.TILE:slice_vec_$D[0:adreg:$DU], C.VEC:$CL, C.TILE:>slice_vec_$D[0:bdreg:$DU]){$T}
+  alphaadd: fma(AB.TILE:slice_vec_$D[0:adreg:$DU], alpha.VEC:bc_load, C.TILE:direct>slice_vec_$D[0:bdreg:$DU]){$T}
+  betaadd: fma(C.VEC:$CL, beta.VEC:bc_load, AB.TILE:slice_vec_$D[0:adreg:$DU]>slice_vec_$D[0:bdreg:$DU]){$T}
+  alphascale: fma(AB.TILE:slice_vec_$D[0:adreg:$DU], alpha.VEC:bc_load, C.TILE:slice_vec_$D[0:adreg:$DU]>slice_vec_$D[0:bdreg:$DU]){$T}
+  store: C.TILE:slices_$D

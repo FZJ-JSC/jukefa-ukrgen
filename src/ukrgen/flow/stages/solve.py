@@ -289,6 +289,17 @@ class solve_stage(stage):
                         required=False,
                         multi=True)
 
+        self.params["tileop-preset"] = stage_param(
+                value=None, required=False,
+                description="Every STO's tile operation from a preset - a shorthand (gemm_fma_bc, "
+                            "gemm_fma_bc_vindex, gemm_fma_bc_blocks, gemm_fma_vf, "
+                            "gemm_fma_blocklane_vindex, gemm_fopa_bc_vindex) or a YAML file of "
+                            "the same form: for each STO the first of the preset's alternatives "
+                            "the ISA offers. --COMP-tileop given wins")
+        self.params["tileop-vectorize"] = stage_param(
+                value=None, required=False,
+                description="The index the preset's vectors run along (m, n): its variant. "
+                            "Not given: C's contiguous index first, then the others")
         self.params["list-tileop-candidates"] = stage_param(
                 value=False,
                 default=False,
@@ -513,6 +524,25 @@ class solve_stage(stage):
                     subtails[i][name] = chosen_to(encoding=enc, impl=impl)
         return subtails
 
+    def apply_preset(self, candidates: dict, order: list[str]):
+        """
+        The STOs given no tile operation take the preset's (--tileop-preset)
+        """
+        preset_name = self.params["tileop-preset"].value
+        if not preset_name:
+            return
+        from .. import presets
+        given = {n for n in order if self.params[f"{n}-tileop"].value}
+        try:
+            chosen = presets.select(presets.load(str(preset_name)),
+                                    {n: candidates[n] for n in order if n in candidates}, given,
+                                    vectorize=self.params["tileop-vectorize"].value,
+                                    contiguous=(self.context.component_layouts or {}).get("C"))
+        except ValueError as err:
+            raise stage_error(f"--tileop-preset {preset_name}: {err}") from err
+        for name, enc in chosen.items():
+            self.params[f"{name}-tileop"].value = [enc]
+
     def sto_operands(self, name: str) -> tuple[str, ...]:
         return self.context.composition.get_sto(name).operands
 
@@ -524,6 +554,7 @@ class solve_stage(stage):
 
         composition = self.context.composition
         order = composition.sto_order()
+        self.apply_preset(candidates, order)
 
         given = {name: self.params[f"{name}-tileop"].value or [] for name in order}
         nparts = max([len(values) for values in given.values()] + [1])

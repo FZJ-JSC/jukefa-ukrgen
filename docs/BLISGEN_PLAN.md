@@ -290,3 +290,11 @@ void bli_cntx_init_<config>( cntx_t* cntx )
   keeps four column pointers per component and base, one more walking the
   rest (C's 14 columns). 8x3v and 2vx14 unrolled 4 exact at VLEN 128 and
   256; the RVV configurations build every size of the old failures' list.
+- Tile operation presets (`--tileop-preset`, families' `preset:`): gemm_fma_bc,
+  gemm_fma_bc_vindex, gemm_fma_bc_blocks, gemm_fma_vf, gemm_fma_blocklane_vindex,
+  gemm_fopa_bc_vindex - YAML in `src/ukrgen/flow/presets`, or a file of the same
+  form. A variant per vectorized index (`--tileop-vectorize`, families'
+  `vectorize:`), C's contiguous index tried first; each STO the first of its
+  alternatives the ISA offers, C reached directly only along its contiguous
+  index. Native RVV: the full testsuite passes with the default (8x3v) and with
+  2vx14 / 16x14 chosen at run time.
