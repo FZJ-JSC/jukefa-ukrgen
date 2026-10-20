@@ -407,7 +407,7 @@ def gemm_one(isa: str, config_name: str, fam: family, dt: str, m: int, n: int,
     # unrolled along k once unless the family says otherwise
     params = {"isa": isa, "ukr": "gemm", "k": "1"}
     params.update(fam.params)
-    for comp in ("A", "B", "C", "AB", "alpha", "beta"):
+    for comp in ("A", "B", "C", "AB"):
         params[f"{comp}-data-type"] = dt
     params.update({"m": str(m), "n": str(n)})
     try:
@@ -499,7 +499,7 @@ def split_one(isa: str, config_name: str, fam: family, dt: str, combo: tuple, o:
     for key in keys:
         values = [pp.get(key) for pp, _ in fam.parts]
         params[key] = values if len(set(map(str, values))) > 1 else values[0]
-    for comp in ("A", "B", "C", "AB", "alpha", "beta"):
+    for comp in ("A", "B", "C", "AB"):
         params[f"{comp}-data-type"] = dt
     params[split] = [str(c) for c in combo]
     params[other] = str(o)
