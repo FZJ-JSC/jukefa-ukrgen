@@ -82,3 +82,23 @@ parameters. The examples' vec cases take P's leading dimension (`Y-layout:
 a x VL to a x VL + 16 - a split's `2*VL + 2` - and the reference the rows
 left (and a narrower panel's edge), so the gemms' MR and NR need no packm
 case of their own. `docs/BLISGEN_PLAN.md` has the details of each.
+
+## Tuning in the examples
+
+- Unroll along k: 1. Preload: on - an input's ring holds its tiles for the
+  next iteration where the registers allow (`max-preload` limits it).
+- Scheduling: MRU on - straight-line chains pulled together (the cluster
+  irmod), spread within a window of 12 under a register budget.
+- RVV (in-order cores): `schedule` keeps a vector register's value 13
+  instructions from what writes, reads or overwrites it
+  (`RAW/WAW/WAR:data:vreg:::13`) and an address bump 3 from its uses
+  (`RAW:address:greg:::3`); A and B each on two address registers taken in
+  turn (`max-addr-regs: {A: 2, B: 2}`, `addr-pattern: rotate`), so the
+  bumps spread. Specs are `dependency:register type:register tag:op:op:distance`,
+  an empty field matching any.
+- Out-of-order cores (AVX, NEON, SVE): `RAW:data:vreg:::4`.
+- Address registers by default: one each for A and B (`rotate`), two for C
+  (`phase`: loads on one, stores on the other); the specializer keeps up to
+  four column pointers per base, one more walking the rest.
+- AVX2 and AVX-512 packm: `kind: gather` cases - A row-major (lda 1), its
+  rows gathered into vectors along cdim - beside the vec cases.

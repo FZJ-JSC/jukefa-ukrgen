@@ -9,9 +9,12 @@ families:
   m: [6, 8, 12]
   n: 1..3
   params:
-    A-layout: &id001 ['m:c', 'k:p']
-    B-layout: &id002 ['n:c', 'k:p']
-    C-layout: &id003 ['m:c', 'n:s']
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    C-layout: ['m:c', 'n:s']
+  schedule: ['RAW:data:vreg:::13', 'WAW:data:vreg:::13', 'WAR:data:vreg:::13', 'RAW:address:greg:::3']
+  max-addr-regs: {A: 2, B: 2}
+  addr-pattern: {A: rotate, B: rotate}
   default: 8x3
 - family: vm
   preset: gemm_fma_vf
@@ -20,6 +23,9 @@ families:
   m: [2, 3]
   n: [4, 8, 12, 14]
   params:
-    A-layout: *id001
-    B-layout: *id002
-    C-layout: *id003
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    C-layout: ['m:c', 'n:s']
+  schedule: ['RAW:data:vreg:::13', 'WAW:data:vreg:::13', 'WAR:data:vreg:::13', 'RAW:address:greg:::3']
+  max-addr-regs: {A: 2, B: 2}
+  addr-pattern: {A: rotate, B: rotate}

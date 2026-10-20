@@ -1,5 +1,5 @@
 # FP32 packm, avx256: vectors along cdim - P's leading dimension a parameter, so a vec kernel packs the
-# vectors of any cdim up to 16 rows more (a split's 2*VL + 2), the reference the rest
+# vectors of any cdim up to 16 rows more (a split's 2*VL + 2), the reference the rest, and along the panel (trans)
 isa: avx256
 family: pk
 cases:
@@ -9,4 +9,11 @@ cases:
     pack-tileop: ['fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}']
     store-tileop: ['Y.VEC:direct']
     X-layout: ['m:c', 'n:s']
+    Y-layout: ['m:c', 'n:s']
+- kind: gather
+  m: 1..4
+  params:
+    pack-tileop: ['fmul(X.VEC:gather, kappa.VEC:bc_load, Y.VEC){i=m, n=1}']
+    store-tileop: ['Y.VEC:direct']
+    X-layout: ['n:c', 'm:s']
     Y-layout: ['m:c', 'n:s']

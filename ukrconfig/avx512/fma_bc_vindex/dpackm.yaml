@@ -10,6 +10,13 @@ cases:
     store-tileop: ['Y.VEC:direct']
     X-layout: ['m:c', 'n:s']
     Y-layout: ['m:c', 'n:s']
+- kind: gather
+  m: 1..4
+  params:
+    pack-tileop: ['fmul(X.VEC:gather, kappa.VEC:bc_load, Y.VEC){i=m, n=1}']
+    store-tileop: ['Y.VEC:direct']
+    X-layout: ['n:c', 'm:s']
+    Y-layout: ['m:c', 'n:s']
 - kind: trans
   m: 1..16
   unroll: 2

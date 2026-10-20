@@ -9,9 +9,10 @@ families:
   m: 2..6
   n: 1..3
   params:
-    A-layout: &id001 ['m:c', 'k:p']
-    B-layout: &id002 ['n:c', 'k:p']
-    C-layout: &id003 ['m:c', 'n:s']
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    C-layout: ['m:c', 'n:s']
+  schedule: ['RAW:data:vreg:::4']
   default: 4x3
 - family: vm
   preset: gemm_fma_bc_blocks
@@ -20,6 +21,7 @@ families:
   m: 1..3
   n: 2..6
   params:
-    A-layout: *id001
-    B-layout: *id002
-    C-layout: *id003
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    C-layout: ['m:c', 'n:s']
+  schedule: ['RAW:data:vreg:::4']

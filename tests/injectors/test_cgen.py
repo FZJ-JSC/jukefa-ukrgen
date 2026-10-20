@@ -354,6 +354,46 @@ int main( void )
         for out in outs:
             self.assertIn("7 runs, 1 by generated cases, 0 wrong", out)
 
+    @unittest.skipUnless("avx2" in open("/proc/cpuinfo").read() and shutil.which("gcc"), "needs an AVX2 CPU")
+    def test_packm_gather(self):
+        # A row-major (lda 1): its rows gathered into vectors along cdim (AVX2's
+        # gathers), the kernel of the whole size first, the reference the rest
+        from ukrgen.injectors.blis.families import build_packm
+        from ukrgen.injectors.blis.cgen import packm_dispatch
+        gather = {"pack-tileop": ["fmul(X.VEC:gather, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+                  "store-tileop": ["Y.VEC:direct"], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:s"]}
+        fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"],
+                                         "cases": [{"kind": "gather", "m": [1, 2], "params": gather}]})
+        built, skipped = build_packm("avx256", "ukrgen_avx2", fam)
+        self.assertEqual(2, len(built), skipped)
+        cases = ("{ vl, vl, 7, 9, 1, 0 }, { 2 * vl, 2 * vl, 5, 13, 1, 0 }, { 2 * vl + 3, 2 * vl + 3, 4, 17, 1, 1 }, "
+                 "{ vl, vl + 2, 3, 11, 1, 1 }, { vl, vl, 5, 1, vl + 3, 1 }, { vl - 1, vl - 1, 3, 5, 1, 1 }")
+        src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
+              vl_helpers(built, make_generator("avx256")) + \
+              "\n#define bli_ddpackm_ukrgen_avx2_ref REF\ntypedef int conj_t;\ntypedef int pack_t;\n" + \
+              "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
+              "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
+              packm_dispatch("ukrgen_avx2", "FP64", built) + \
+              "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( double ) ); }\n" + \
+              open(os.path.join(HERE, "packm_harness.c")).read() \
+              .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
+        cc = ["gcc", "-mavx2", "-mfma"]
+        with tempfile.TemporaryDirectory() as d:
+            objs = []
+            for i, k in enumerate(built):
+                with open(os.path.join(d, f"k{i}.s"), "w") as f:
+                    f.write(asm_source(k))
+                subprocess.run(cc + ["-c", os.path.join(d, f"k{i}.s"), "-o", os.path.join(d, f"k{i}.o")], check=True)
+                objs.append(os.path.join(d, f"k{i}.o"))
+            with open(os.path.join(d, "t.c"), "w") as f:
+                f.write(src)
+            r = subprocess.run(cc + ["-O1", f"-I{HERE}", f"-DCASES={cases}", "-DPACKM=bli_dpackm_ukrgen_avx2",
+                                     os.path.join(d, "t.c"), *objs, "-o", os.path.join(d, "run")],
+                               capture_output=True, text=True)
+            self.assertEqual(0, r.returncode, r.stderr)
+            out = subprocess.run([os.path.join(d, "run")], capture_output=True, text=True, timeout=60).stdout
+            self.assertIn("6 runs, 2 by generated cases, 0 wrong", out)
+
     def test_stack_and_family_header(self):
         fam, built = build("sve", "FP64", [2], [3])
         # 2 vectors by 3 doubles at 2048 bits: 64 x 3 x 8 bytes; at least BLIS's 2048

@@ -399,16 +399,19 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel]) -> str:
     # vec cases taking P's leading dimension: the vectors of any cdim from
     # theirs to theirs plus PACKM_REST, the reference the rows left - and a
     # narrower panel's edge - the most vectors first
-    strided = sorted([k for k in mine if "vec" == k.case and "stride(Y,n)" in k.params],
-                     key=lambda k: -split_size(k.mr)[0])
-    rows = []
+    strided = sorted([k for k in mine if k.case in ("vec", "gather") and "stride(Y,n)" in k.params],
+                     key=lambda k: tuple(-x for x in split_size(k.mr)))
+    bad = [k.symbol for k in mine if "gather" == k.case and k not in strided]
+    if bad:
+        raise ValueError(f"gather cases take P's leading dimension (Y-layout [m:c, n:s]): {bad}")
+    rows = {"vec": [], "gather": []}
     for k in strided:
         unknown = [p for p in k.params if p not in PACKM_ARGS]
         if unknown:
             raise ValueError(f"{k.symbol}: no BLIS argument for its parameters {unknown}")
         decls.append(f"void {asm_symbol(k)}( {', '.join(PACKM_ARGS[p][0] for p in k.params)} );")
         args = ", ".join(PACKM_ARGS[p][1].format(ctype=ctype) for p in k.params)
-        rows.append(f"""\
+        rows[k.case].append(f"""\
 		{{
 			const dim_t done = {c_expr(k.mr, ctype, k.vl_fn)};
 			if ( done <= cdim && cdim - done <= {PACKM_REST} )
@@ -421,7 +424,8 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel]) -> str:
 				return;
 			}}
 		}}""")
-    vectors_first = "\n".join(rows)
+    vectors_first = "\n".join(rows["vec"])
+    gathered_first = "\n".join(rows["gather"])
     mine = [k for k in mine if k not in strided]
     for k in mine:
         unknown = [p for p in k.params if p not in PACKM_ARGS]
@@ -464,6 +468,11 @@ void bli_{ch}packm_{config_name}
 	if ( cdim_bcast == 1 && n == n_max && inca == 1 )
 	{{
 {vectors_first}
+	}}
+	if ( cdim_bcast == 1 && n == n_max && lda == 1 )
+	{{
+		// A's rows inca apart, gathered into vectors along cdim
+{gathered_first}
 	}}
 	if ( cdim_bcast == 1 && cdim == cdim_max && n == n_max && ldp == cdim )
 	{{
