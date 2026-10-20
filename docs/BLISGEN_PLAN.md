@@ -298,3 +298,13 @@ void bli_cntx_init_<config>( cntx_t* cntx )
   alternatives the ISA offers, C reached directly only along its contiguous
   index. Native RVV: the full testsuite passes with the default (8x3v) and with
   2vx14 / 16x14 chosen at run time.
+- Split families (several tile operations per kernel): `split: m` (or n) and
+  `parts:`, each part a preset (`preset:`/`tileop-preset:`, a shorthand or a
+  file), optionally `vectorize:`, its own keys and params, and its sizes
+  along the split index; every combination of the parts' sizes is tried,
+  with the family's sizes along the other index. `--tileop-preset` and
+  `--tileop-vectorize` take one value per part. MR/NR the parts' sum along
+  the split index (`2*VL + 2`); the kernel table's blocksizes are vectors x
+  VL + elements. Symbols name every part: `bli_dgemm_<config>_sf_2vx4v_2x4v`.
+  Defaults `2+2x4`. SME: 2vx4v fopa + 2x4v fma doubles, 2vx2v + 2x2v singles
+  (one fopa per fma), exact through the BLIS wrapper at SVL 256 and 512.

@@ -111,21 +111,40 @@ class family:
     #: vectors, A contiguous along cdim), trans (cdim m elements, A
     #: contiguous along the panel's length)
     cases: list[tuple] = field(default_factory=list)
+    #: a split microtile: the index split, and per part its parameters and
+    #: sizes along that index
+    split: str | None = None
+    parts: list[tuple] = field(default_factory=list)
 
     @staticmethod
     def from_yaml(kind: str, entry: dict) -> "family":
         sizes = {idx: parse_sizes(entry[idx]) for idx in ("m", "n") if idx in entry}
         default = {}
         for dt, size in (entry.get("default") or {}).items():
-            default[dt] = tuple(parse_sizes(v)[0] for v in str(size).split("x"))
+            # 8x3, or a split's parts along an index: 2+2x4
+            default[dt] = tuple(parse_sizes(v)[0] for side in str(size).replace(" ", "").split("x")
+                                for v in side.split("+"))
         cases = [(case["kind"], parse_sizes(case["m"]),
                   {**key_params(kind, case), **dict(case.get("params") or {})})
                  for case in (entry.get("cases") or [])]
         # the keys first, explicit params over them
         params = key_params(kind, entry)
         params.update(entry.get("params") or {})
+        split = entry.get("split")
+        parts = []
+        for part in (entry.get("parts") or []):
+            # a part's preset: a shorthand or a file (preset: or tileop-preset:)
+            pp = key_params(kind, part)
+            for key in ("tileop-preset", "tileop-vectorize"):
+                if key in part:
+                    pp[key] = part[key]
+            pp.update(part.get("params") or {})
+            parts.append((pp, parse_sizes(part[split])))
+        if parts and split not in ("m", "n"):
+            raise ValueError(f"family {entry['family']}: split along m or n, not {split}")
         return family(kind=kind, name=entry["family"], dtypes=list(entry.get("dtypes", ["FP64"])),
-                      params=params, sizes=sizes, default=default, cases=cases)
+                      params=params, sizes=sizes, default=default, cases=cases,
+                      split=split, parts=parts)
 
 
 @dataclass
@@ -219,15 +238,28 @@ class kernel:
     loop_unit: str = ""
 
 
+def part_extent(ctx, part: int, idx: str) -> sym:
+    """
+    A part's extent along an index: its register tile's extent times its count
+    """
+    dims = (getattr(ctx, "part_dims", None) or [ctx.dims] * len(ctx.stos))[part]
+    for tiling in ctx.stos[part].values():
+        if idx in tiling.extents:
+            return sym.extent(tiling.extents[idx]) * dims[idx]
+    raise KeyError(idx)
+
+
 def extent_of(ctx, idx: str) -> sym:
     """
-    The microtile's extent along an index: the register tile's extent times
-    its count - as the model computes it
+    The microtile's extent along an index - as the model computes it: along a
+    split index the parts' extents summed
     """
-    for tiling in ctx.stos[0].values():
-        if idx in tiling.extents:
-            return sym.extent(tiling.extents[idx]) * ctx.dims[idx]
-    raise KeyError(idx)
+    if len(ctx.stos) > 1 and idx == getattr(ctx, "split_index", None):
+        total = part_extent(ctx, 0, idx)
+        for part in range(1, len(ctx.stos)):
+            total = total + part_extent(ctx, part, idx)
+        return total
+    return part_extent(ctx, 0, idx)
 
 
 def size_name(expr: str) -> str:
@@ -248,6 +280,8 @@ def build_gemm(isa: str, config_name: str, fam: family) -> tuple[list[kernel], l
     reason) for each it can't
     """
     built, skipped = [], []
+    if fam.parts:
+        return build_split_gemm(isa, config_name, fam)
     ms, ns = fam.sizes.get("m", [1]), fam.sizes.get("n", [1])
     for dt in fam.dtypes:
         for m in ms:
@@ -315,5 +349,54 @@ def build_packm(isa: str, config_name: str, fam: family) -> tuple[list[kernel], 
                 built.append(kernel(family=fam.name, dtype=dt, size=(m, 1), mr=cdim, nr="1",
                                     symbol=symbol, params=list(program.params), c_layout="col",
                                     program=program, case=case, loop_unit=unit,
+                                    simd_size_c=getattr(ctx.gen, "c_simd_size_function", "")))
+    return built, skipped
+
+
+def build_split_gemm(isa: str, config_name: str, fam: family) -> tuple[list[kernel], list[tuple]]:
+    """
+    A split family's kernels: every combination of its parts' sizes along the
+    split index, and the family's sizes along the other - each part's
+    parameters (its preset - a shorthand or a file - its vectorized index, its
+    own choices) a list of one value per part where they differ
+    """
+    import itertools
+    built, skipped = [], []
+    split = fam.split
+    other = "n" if "m" == split else "m"
+    keys = list(dict.fromkeys(k for pp, _ in fam.parts for k in pp))
+    for dt in fam.dtypes:
+        for combo in itertools.product(*[sizes for _, sizes in fam.parts]):
+            for o in fam.sizes.get(other, [1]):
+                params = {"isa": isa, "ukr": "gemm", "k": "1"}
+                params.update(fam.params)
+                for key in keys:
+                    values = [pp.get(key) for pp, _ in fam.parts]
+                    params[key] = values if len(set(map(str, values))) > 1 else values[0]
+                for comp in ("A", "B", "C", "AB", "alpha", "beta"):
+                    params[f"{comp}-data-type"] = dt
+                params[split] = [str(c) for c in combo]
+                params[other] = str(o)
+                size = combo + (o,) if "m" == split else (o,) + combo
+                try:
+                    ctx, result = run_flow(params)
+                except Exception as err:
+                    lines = [l.strip() for l in str(err).splitlines() if l.strip()]
+                    skipped.append((dt, size, lines[0] if lines else type(err).__name__))
+                    continue
+                if not getattr(result, "completed", False) or not ctx.emitted:
+                    skipped.append((dt, size, "the flow didn't complete"))
+                    continue
+                mr, nr = str(extent_of(ctx, "m")), str(extent_of(ctx, "n"))
+                layout = params.get("C-layout", ["m:c", "n:s"])
+                names = "_".join(f"{size_name(part_extent(ctx, p, 'm'))}x"
+                                 f"{size_name(part_extent(ctx, p, 'n'))}"
+                                 for p in range(len(ctx.stos)))
+                program = ctx.emitted[0]
+                built.append(kernel(family=fam.name, dtype=dt, size=size, mr=mr, nr=nr,
+                                    symbol=f"bli_{DT_CHAR[dt]}gemm_{config_name}_{fam.name}_{names}",
+                                    params=list(program.params),
+                                    c_layout="row" if str(layout[0]).startswith("n") else "col",
+                                    program=program,
                                     simd_size_c=getattr(ctx.gen, "c_simd_size_function", "")))
     return built, skipped

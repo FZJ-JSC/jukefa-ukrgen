@@ -278,6 +278,50 @@ int main( void )
                                          timeout=120).stdout
                     self.assertIn(f"{tile}: 81 runs, 0 wrong", out, k.symbol)
 
+    @needs_tools
+    def test_split_family(self):
+        # outer products and FMAs split along m, each part its preset: 2vx4v +
+        # 2x4v doubles, 2vx2v + 2x2v singles (one fopa per fma); MR the parts'
+        # sum, symbols naming both
+        cc = ["aarch64-linux-gnu-gcc", "-static", "-Wa,-march=armv9-a+sme+sme-f64f64"]
+        for dt, ctype, n, (m1, m2), symbol, tiles in (
+                ("FP64", "double", 4, (2, 2), "bli_dgemm_ukrgen_sme_sf_2vx4v_2x4v",
+                 ("mr 10 nr 16", "mr 18 nr 32")),
+                ("FP32", "float", 2, (2, 2), "bli_sgemm_ukrgen_sme_sf_2vx2v_2x2v",
+                 ("mr 18 nr 16", "mr 34 nr 32"))):
+            fam = family.from_yaml("gemm", {
+                "family": "sf", "dtypes": [dt], "split": "m", "n": [n],
+                "parts": [{"preset": "gemm_fopa_bc_vindex", "m": m1}, {"preset": "gemm_fma_bc", "m": m2}],
+                "default": {dt: f"{m1}+{m2}x{n}"},
+                "params": {"sme-F64F64": "on", "A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"],
+                           "C-layout": ["n:c", "m:s"]}})
+            self.assertEqual({dt: (m1, m2, n)}, fam.default)
+            built, skipped = build_gemm("sme", "ukrgen_sme", fam)
+            self.assertEqual(1, len(built), skipped)
+            k = built[0]
+            self.assertEqual((symbol, "2*VL + 2", f"{n}*VL"), (k.symbol, k.mr, k.nr))
+            # an older compiler knows no SME: the helper enables it itself
+            helper = vl_helpers([k], make_generator("sme")).replace(
+                '"smstart', '".arch_extension sme\\n\\tsmstart', 1)
+            src = "#include \"blis_stub.h\"\n" + helper + gemm_wrapper(k) + \
+                  f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, ctype, k.vl_fn)}; }}\n" \
+                  f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, ctype, k.vl_fn)}; }}\n" + \
+                  open(os.path.join(HERE, "wrapper_harness.c")).read()
+            with tempfile.TemporaryDirectory() as d:
+                with open(os.path.join(d, "k.s"), "w") as f:
+                    f.write(asm_source(k))
+                subprocess.run(cc + ["-c", os.path.join(d, "k.s"), "-o", os.path.join(d, "k.o")], check=True)
+                with open(os.path.join(d, "w.c"), "w") as f:
+                    f.write(src)
+                r = subprocess.run(cc + ["-O1", f"-I{HERE}", f"-DUKR={k.symbol}", f"-DWT={ctype}",
+                                         os.path.join(d, "w.c"), os.path.join(d, "k.o"), "-o",
+                                         os.path.join(d, "run")], capture_output=True, text=True)
+                self.assertEqual(0, r.returncode, r.stderr)
+                for svl, tile in zip((256, 512), tiles):
+                    out = subprocess.run([QEMU, "-cpu", f"max,sme=on,sme{svl}=on", os.path.join(d, "run")],
+                                         capture_output=True, text=True, timeout=120).stdout
+                    self.assertIn(f"{tile}: 81 runs, 0 wrong", out, k.symbol)
+
     def test_stack_and_family_header(self):
         fam, built = build("sve", "FP64", [2], [3])
         # 2 vectors by 3 doubles at 2048 bits: 64 x 3 x 8 bytes; at least BLIS's 2048

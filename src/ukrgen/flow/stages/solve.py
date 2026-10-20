@@ -533,15 +533,29 @@ class solve_stage(stage):
             return
         from .. import presets
         given = {n for n in order if self.params[f"{n}-tileop"].value}
-        try:
-            chosen = presets.select(presets.load(str(preset_name)),
-                                    {n: candidates[n] for n in order if n in candidates}, given,
-                                    vectorize=self.params["tileop-vectorize"].value,
-                                    contiguous=(self.context.component_layouts or {}).get("C"))
-        except ValueError as err:
-            raise stage_error(f"--tileop-preset {preset_name}: {err}") from err
-        for name, enc in chosen.items():
-            self.params[f"{name}-tileop"].value = [enc]
+        # one preset - and vectorized index - per part of a split microtile,
+        # or one for all
+        names = list(preset_name) if isinstance(preset_name, (list, tuple)) else [preset_name]
+        vectorize = self.params["tileop-vectorize"].value
+        vectorize = list(vectorize) if isinstance(vectorize, (list, tuple)) else [vectorize] * len(names)
+        if len(vectorize) != len(names):
+            raise stage_error(f"--tileop-vectorize has {len(vectorize)} values for "
+                              f"{len(names)} presets")
+        per_part = []
+        for name, vec in zip(names, vectorize):
+            try:
+                per_part.append(presets.select(
+                    presets.load(str(name)), {n: candidates[n] for n in order if n in candidates},
+                    given, vectorize=vec or None,
+                    contiguous=(self.context.component_layouts or {}).get("C")))
+            except ValueError as err:
+                raise stage_error(f"--tileop-preset {name}: {err}") from err
+        for sto in dict.fromkeys(k for chosen in per_part for k in chosen):
+            values = [chosen.get(sto) for chosen in per_part]
+            if None in values:
+                raise stage_error(f"--tileop-preset: the parts' presets don't all give {sto} "
+                                  f"a tile operation")
+            self.params[f"{sto}-tileop"].value = values if len(set(values)) > 1 else values[:1]
 
     def sto_operands(self, name: str) -> tuple[str, ...]:
         return self.context.composition.get_sto(name).operands

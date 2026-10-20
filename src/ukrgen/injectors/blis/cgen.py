@@ -118,15 +118,19 @@ void {k.symbol}
 
 def split_size(expr: str) -> tuple[int, int]:
     """
-    A blocksize as (count, vectors): 8 -> (8, 0), 2*VL -> (2, 1), VL -> (1, 1)
+    A blocksize as (vectors, elements): its value is vectors x VL + elements -
+    8 -> (0, 8), 2*VL -> (2, 0), VL -> (1, 0), a split's 2*VL + 2 -> (2, 2)
     """
-    text = str(expr).replace(" ", "")
-    if "VL" == text:
-        return 1, 1
-    if text.endswith("*VL"):
-        return int(text[:-3]), 1
-    return int(text), 0
-
+    vectors = elements = 0
+    for term in str(expr).replace(" ", "").replace("-", "+-").split("+"):
+        if not term:
+            continue
+        if term.endswith("VL"):
+            count = term[:-2].rstrip("*")
+            vectors += int(count) if count not in ("", "-") else (-1 if "-" == count else 1)
+        else:
+            elements += int(term)
+    return vectors, elements
 
 def gemm_table(dtype: str, kernels: list[kernel], default: tuple | None) -> str:
     """
@@ -141,9 +145,9 @@ def gemm_table(dtype: str, kernels: list[kernel], default: tuple | None) -> str:
     rows = []
     fallback = 0
     for i, k in enumerate(mine):
-        mc, mv = split_size(k.mr)
-        nc, nv = split_size(k.nr)
-        rows.append(f"\t{{ {mc}, {mv}, {nc}, {nv}, {k.symbol}, {'true' if 'row' == k.c_layout else 'false'}, "
+        mv, me = split_size(k.mr)
+        nv, ne = split_size(k.nr)
+        rows.append(f"\t{{ {mv}, {me}, {nv}, {ne}, {k.symbol}, {'true' if 'row' == k.c_layout else 'false'}, "
                     f"\"{k.family}_{k.symbol.rsplit('_', 1)[-1]}\", {k.vl_fn} }},")
         if default is not None and tuple(default) == tuple(k.size):
             fallback = i
@@ -162,8 +166,8 @@ static const ukrgen_gemm_entry* ukrgen_{ch}gemm_choose( dim_t mr, dim_t nr )
 	{{
 		const ukrgen_gemm_entry* e = &ukrgen_{ch}gemm_kernels[ i ];
 		const dim_t vl = e->vl( sizeof( {ctype} ) );
-		if ( ukrgen_size( e->mr_count, e->mr_vectors, vl ) == mr &&
-		     ukrgen_size( e->nr_count, e->nr_vectors, vl ) == nr ) return e;
+		if ( ukrgen_size( e->mr_vectors, e->mr_elements, vl ) == mr &&
+		     ukrgen_size( e->nr_vectors, e->nr_elements, vl ) == nr ) return e;
 	}}
 	return &ukrgen_{ch}gemm_kernels[ {fallback} ];
 }}
@@ -171,22 +175,23 @@ static const ukrgen_gemm_entry* ukrgen_{ch}gemm_choose( dim_t mr, dim_t nr )
 
 
 GEMM_TABLE_PRELUDE = """\
-// a gemm kernel: MR and NR as count * (vectors ? the vector length : 1)
+// a gemm kernel: MR and NR as vectors * the vector length + elements (a split
+// microtile's parts: 2*VL + 2)
 typedef struct
 {
-	dim_t       mr_count;
-	int         mr_vectors;
-	dim_t       nr_count;
-	int         nr_vectors;
+	dim_t       mr_vectors;
+	dim_t       mr_elements;
+	dim_t       nr_vectors;
+	dim_t       nr_elements;
 	gemm_ukr_ft ukr;
 	bool        row_pref;
 	const char* name;
 	dim_t       ( *vl )( size_t esize );
 } ukrgen_gemm_entry;
 
-static inline dim_t ukrgen_size( dim_t count, int vectors, dim_t vl )
+static inline dim_t ukrgen_size( dim_t vectors, dim_t elements, dim_t vl )
 {
-	return vectors ? count * vl : count;
+	return vectors * vl + elements;
 }
 """
 
@@ -228,8 +233,8 @@ def cntx_init(config_name: str, gen, kernels: list[kernel], defaults: dict, bloc
 	const ukrgen_gemm_entry* k_{ch} = ukrgen_{ch}gemm_choose( ukrgen_env( "BLIS_MR_{ch.upper()}" ),
 	                                                    ukrgen_env( "BLIS_NR_{ch.upper()}" ) );
 	const dim_t vl_{ch} = k_{ch}->vl( sizeof( {ctype} ) );
-	const dim_t mr_{ch} = ukrgen_size( k_{ch}->mr_count, k_{ch}->mr_vectors, vl_{ch} );
-	const dim_t nr_{ch} = ukrgen_size( k_{ch}->nr_count, k_{ch}->nr_vectors, vl_{ch} );
+	const dim_t mr_{ch} = ukrgen_size( k_{ch}->mr_vectors, k_{ch}->mr_elements, vl_{ch} );
+	const dim_t nr_{ch} = ukrgen_size( k_{ch}->nr_vectors, k_{ch}->nr_elements, vl_{ch} );
 	const dim_t mc_{ch} = {int(bs["mr-in-mc"])} * mr_{ch};
 	const dim_t nc_{ch} = {int(bs["nr-in-nc"])} * nr_{ch};
 	const dim_t kc_{ch} = {int(bs["kc"])};""")
@@ -315,10 +320,10 @@ def stack_buf_size(isa: str, gen, kernels: list[kernel], given: int | None = Non
     for k in kernels:
         esize = 4 if "FP32" == k.dtype else 8
         vl = LONGEST_VECTOR.get(isa, 0) // esize
-        mc, mv = split_size(k.mr)
-        nc, nv = split_size(k.nr)
-        mr = mc * (vl if mv else 1)
-        nr = nc * (vl if nv else 1)
+        mv, me = split_size(k.mr)
+        nv, ne = split_size(k.nr)
+        mr = mv * vl + me
+        nr = nv * vl + ne
         largest = max(largest, mr * nr * esize)
     return (largest + 63) // 64 * 64
 
