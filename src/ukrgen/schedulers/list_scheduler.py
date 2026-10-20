@@ -30,14 +30,20 @@ TAGS = {rgt.VEC: "vreg", rgt.FP: "freg", rgt.GP: "greg", rgt.TILE: "treg"}
 INF = float("inf")
 
 
-def _key(op, pos) -> tuple:
+def _key(op, pos, groups=None) -> tuple:
     """
     A register: its kind, component, number and type - a tile and a vector of
-    the same component and number are different registers
+    the same component and number are different registers. A grouped
+    register (a widening accumulator's pair) is its whole group: what touches
+    a member touches the group
     """
     idx = op.indices[pos]
     rtypes = getattr(op, "rtypes", None) or []
-    return (op.reg_types[pos], idx.component, idx.indices[0],
+    number = idx.indices[0]
+    group = (groups or {}).get(idx.component)
+    if group is not None and isinstance(number, int):
+        number -= number % group[0]
+    return (op.reg_types[pos], idx.component, number,
             rtypes[pos] if pos < len(rtypes) else None)
 
 
@@ -64,7 +70,7 @@ class edge:
     spec : int | None = None
 
 
-def dependencies(ops: list, loop: bool) -> list[edge]:
+def dependencies(ops: list, loop: bool, groups: dict | None = None) -> list[edge]:
     """
     Read-after-write, write-after-read and write-after-write dependencies; for
     a loop body also those from one iteration into the next
@@ -83,8 +89,8 @@ def dependencies(ops: list, loop: bool) -> list[edge]:
             edges.append(edge(src, dst, dep, key, tag, carried))
 
     for step, (i, op) in enumerate(seq):
-        reads = {_key(op, p): _tag(op, p) for p in op.reads}
-        writes = {_key(op, p): _tag(op, p) for p in op.writes}
+        reads = {_key(op, p, groups): _tag(op, p) for p in op.reads}
+        writes = {_key(op, p, groups): _tag(op, p) for p in op.writes}
         for key, tag in reads.items():
             if key in last_write:
                 add(*last_write[key], i, step, dept.RAW, key, tag)
@@ -152,7 +158,7 @@ class register_budget:
     live_out : set = field(default_factory=set)
 
 
-def cluster(ops: list) -> list:
+def cluster(ops: list, groups: dict | None = None) -> list:
     """
     Dependent instructions pulled together - the MRU's first half: each sink
     (an instruction nothing after it depends on), in order, right after what
@@ -162,7 +168,7 @@ def cluster(ops: list) -> list:
     emitter renames virtual registers onto the physical ones free - and the
     list scheduler pulls the chains apart again as far as registers allow
     """
-    edges = [e for e in dependencies(ops, False) if not e.carried]
+    edges = [e for e in dependencies(ops, False, groups) if not e.carried]
     preds: dict[int, list[int]] = {j: [] for j in range(len(ops))}
     succ = set()
     for e in edges:
@@ -192,8 +198,8 @@ class list_scheduler:
     def __init__(self, specs: list[distance_specification]):
         self.specs = specs
 
-    def edges(self, ops: list, loop: bool) -> list[edge]:
-        edges = dependencies(ops, loop)
+    def edges(self, ops: list, loop: bool, groups: dict | None = None) -> list[edge]:
+        edges = dependencies(ops, loop, groups)
         for e in edges:
             for i, spec in enumerate(self.specs):
                 if _applies(spec, e, ops) and spec.distance > e.distance:
@@ -202,10 +208,11 @@ class list_scheduler:
 
     def __call__(self, ops: list, loop: bool = False,
                  budget: register_budget | None = None,
-                 window: int | None = None) -> tuple[list, schedule_report]:
+                 window: int | None = None,
+                 groups: dict | None = None) -> tuple[list, schedule_report]:
         if len(ops) < 2:
-            return list(ops), self.report(ops, list(range(len(ops))), self.edges(ops, loop), 0)
-        edges = self.edges(ops, loop)
+            return list(ops), self.report(ops, list(range(len(ops))), self.edges(ops, loop, groups), 0)
+        edges = self.edges(ops, loop, groups)
         intra = [e for e in edges if not e.carried]
         # priority: the longest chain of required distances to the section's end
         prio = [0.0] * len(ops)

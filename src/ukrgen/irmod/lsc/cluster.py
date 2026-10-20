@@ -27,15 +27,11 @@ class cluster(lsc_irmod):
 
     def apply(self, program) -> int:
         changed = 0
-        if getattr(program, "groups", None):
-            # registers grouped (a widening accumulator's pair): the
-            # dependencies compare registers one by one, not yet a group's
-            # members with the group - left in the model's order
-            return 0
         for block in program.blocks + [b for c in program.cases for b in c.blocks]:
             if block.loop_index is not None or len(block.body) < 2:
                 continue
-            order = cluster_order(list(block.body))
+            # a grouped register's members are the group, for dependencies
+            order = cluster_order(list(block.body), getattr(program, "groups", None))
             if [id(op) for op in order] != [id(op) for op in block.body]:
                 block.body = order
                 changed += 1

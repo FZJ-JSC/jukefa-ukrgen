@@ -121,13 +121,15 @@ class schedule_stage(stage):
                         window = None
                         if budget is not None:
                             window = int(self.params["mru-window"].value or 12)
-                        order, report = scheduler(ops, loop=loop, budget=budget, window=window)
+                        order, report = scheduler(ops, loop=loop, budget=budget, window=window,
+                                                  groups=program.groups)
                         setattr(block, section, order)
                         # a loop's own block, as a loop body: a fused loop's
                         # tiles' chains, an unrolled one's copies, interleaved
                         for op in order:
                             if isinstance(op, lsc_loop) and op.block:
-                                inner, _ = scheduler(list(op.block), loop=True)
+                                inner, _ = scheduler(list(op.block), loop=True,
+                                                     groups=program.groups)
                                 op.block = inner
                                 op.refresh()
                         where = f"{(case.label + ': ') if case else ''}{block.name} {section}"
