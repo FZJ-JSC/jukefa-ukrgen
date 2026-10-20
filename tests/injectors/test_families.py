@@ -108,7 +108,7 @@ class test_families(unittest.TestCase):
                                         "max-preload": {"B": 1}, "max-addr-regs": {"C": 2},
                                         "addr-pattern": {"C": "phase"},
                                         "params": {"order": "nmk"}})
-        self.assertEqual({"k": "2", "order": "nmk", "sched-distance-specs": ["d(A,B)=2"],
+        self.assertEqual({"k": "2", "order": "nmk", "distances": ["d(A,B)=2"],
                           "A-max-data-regs": "2", "B-max-preload": "1", "C-addr-regs": "2",
                           "C-addr-pattern": "phase"}, fam.params)
         pack = family.from_yaml("packm", {"family": "pk", "unroll": 4, "cases": [

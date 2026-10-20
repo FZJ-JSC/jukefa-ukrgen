@@ -225,24 +225,54 @@ class list_scheduler:
         for i in range(len(ops) - 1, -1, -1):
             prio[i] = max([e.distance + prio[e.dst] for e in intra if e.src == i] or [0])
 
-        best, best_score, best_over = None, None, 0
+        best, best_score, best_over, best_cycles = None, None, 0, None
         bonus = [0.0] * len(ops)
-        for _ in range(4 if loop else 1):
+        rounds = (6 if self.model is not None else 4) if loop else 1
+        for _ in range(rounds):
             order, over = self.place(ops, intra, [p + b for p, b in zip(prio, bonus)], budget,
                                      window)
-            pos = {op: t for t, op in enumerate(order)}
-            score = self.score(edges, pos, len(ops))
+            if self.model is not None:
+                # in cycles: a carried dependency reaches across the loop's
+                # cycles - its producer's iteration's rest and the
+                # consumer's cycles into the next
+                cyc, length = dict(self.cycle_of), self.cycles
+                score = self.score_cycles(edges, cyc, length)
+            else:
+                pos = {op: t for t, op in enumerate(order)}
+                score = self.score(edges, pos, len(ops))
             if best is None or score < best_score:
                 best, best_score, best_over = order, score, over
+                best_cycles = self.cycles
             if not loop:
                 break
             for e in edges:
-                if e.carried:
+                if not e.carried:
+                    continue
+                if self.model is not None:
+                    short = e.distance - ((length - cyc[e.src]) + cyc[e.dst])
+                    if short > 0:
+                        # the producer earlier, the consumer later
+                        bonus[e.src] += short
+                        bonus[e.dst] -= short
+                else:
                     short = e.distance - ((len(ops) - pos[e.src]) + pos[e.dst])
                     if short > 0:
                         bonus[e.dst] += short
                         bonus[e.src] -= short
+        self.cycles = best_cycles
         return [ops[i] for i in best], self.report(ops, best, edges, best_over)
+
+    @staticmethod
+    def score_cycles(edges, cyc, length) -> tuple:
+        """
+        How far dependencies fall short of their distances, in cycles - the
+        worst, the total - and the cycles the block takes
+        """
+        shorts = []
+        for e in edges:
+            reached = (length - cyc[e.src]) + cyc[e.dst] if e.carried else cyc[e.dst] - cyc[e.src]
+            shorts.append(max(0, e.distance - reached))
+        return (max(shorts or [0]), sum(shorts), length)
 
     @staticmethod
     def score(edges, pos, n) -> tuple:
@@ -325,6 +355,7 @@ class list_scheduler:
             else:
                 cycle += 1
         self.cycles = cycle
+        self.cycle_of = cycle_of
         return order, over
 
     def place_slots(self, ops, intra, prio, budget, window=None) -> tuple[list[int], int]:

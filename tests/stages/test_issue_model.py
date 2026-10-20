@@ -47,6 +47,9 @@ class test_issue_model(unittest.TestCase):
         vm = copy.deepcopy(next(f for f in cfg.families if "vm" == f.name))
         vm.sizes = {"m": [2], "n": [14]}
         vm.params["sched-cycle-slots"] = "2:vl|vs|vf,sl,i"
+        # the issue model alone: without the configuration's distances, which
+        # hold loads 13 cycles ahead of their uses at the loop's start
+        vm.params.pop("distances", None)
         built, skipped = build_gemm("rvv", "ukrgen_rvv", vm)
         self.assertEqual(1, len(built), skipped)
         k = built[0]

@@ -40,12 +40,20 @@ def run_flow(params: dict) -> tuple[ukr_context, object]:
     One run of the flow with these parameters - a stage takes those it
     declares
     """
+    taken = set()
     def prolog(s):
         for name in s.get_parameter_names():
             if name in params:
                 s.set_param(name, params[name])
+                taken.add(name)
     ctx = ukr_context()
     result = stage_engine(PIPELINE, ctx, prolog=prolog).run()
+    if getattr(result, "completed", False):
+        # a parameter no stage took - a key misnamed - does nothing: say so
+        ignored = sorted(set(params) - taken)
+        if ignored:
+            import sys
+            print(f"warning: no stage takes {', '.join(ignored)}", file=sys.stderr)
     return ctx, result
 
 
@@ -87,7 +95,7 @@ def parse_sizes(value) -> list[int]:
 
 #: family keys and the ukrgen parameters they set
 KEYS = {"loop-order": "order", "resolve-order": "resolve-order",
-        "schedule": "sched-distance-specs", "preset": "tileop-preset",
+        "schedule": "distances", "cycle-slots": "sched-cycle-slots", "preset": "tileop-preset",
         "vectorize": "tileop-vectorize"}
 #: per component: {component: value}
 PER_COMPONENT = {"max-data-regs": "{c}-max-data-regs", "max-preload": "{c}-max-preload",
