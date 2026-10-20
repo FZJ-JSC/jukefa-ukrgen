@@ -77,4 +77,8 @@ family has `split:`, `parts:` (each with its preset and sizes along the
 split index) and optionally `split-ratios:`. A packm family lists `cases:`
 of `kind: vec` (cdim in vectors, A contiguous along it) and `kind: trans`
 (cdim in elements, A contiguous along the panel), each with its sizes and
-parameters. `docs/BLISGEN_PLAN.md` has the details of each.
+parameters. The examples' vec cases take P's leading dimension (`Y-layout:
+[m:c, n:s]`): a kernel of a vectors then packs the vectors of any cdim from
+a x VL to a x VL + 16 - a split's `2*VL + 2` - and the reference the rows
+left (and a narrower panel's edge), so the gemms' MR and NR need no packm
+case of their own. `docs/BLISGEN_PLAN.md` has the details of each.

@@ -357,7 +357,12 @@ PACKM_ARGS = {
     "base(kappa)": ("const void*", "kappa"),
     "stride(X,n)": ("inc_t", "lda * (inc_t)sizeof({ctype})"),
     "stride(X,m)": ("inc_t", "inca * (inc_t)sizeof({ctype})"),
+    "stride(Y,n)": ("inc_t", "ldp * (inc_t)sizeof({ctype})"),
 }
+
+#: rows a vec case's kernel leaves to the reference at most - cdim of the
+#: vectors plus a few: a split microtile's 2*VL + 2
+PACKM_REST = 16
 
 PACKM_SIGNATURE = """\
      (
@@ -391,6 +396,33 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel]) -> str:
     ctype, ch = CTYPE[dtype], DT_CHAR[dtype]
     mine = [k for k in kernels if dtype == k.dtype and k.case]
     decls, branches = [], {"vec": [], "trans": []}
+    # vec cases taking P's leading dimension: the vectors of any cdim from
+    # theirs to theirs plus PACKM_REST, the reference the rows left - and a
+    # narrower panel's edge - the most vectors first
+    strided = sorted([k for k in mine if "vec" == k.case and "stride(Y,n)" in k.params],
+                     key=lambda k: -split_size(k.mr)[0])
+    rows = []
+    for k in strided:
+        unknown = [p for p in k.params if p not in PACKM_ARGS]
+        if unknown:
+            raise ValueError(f"{k.symbol}: no BLIS argument for its parameters {unknown}")
+        decls.append(f"void {asm_symbol(k)}( {', '.join(PACKM_ARGS[p][0] for p in k.params)} );")
+        args = ", ".join(PACKM_ARGS[p][1].format(ctype=ctype) for p in k.params)
+        rows.append(f"""\
+		{{
+			const dim_t done = {c_expr(k.mr, ctype, k.vl_fn)};
+			if ( done <= cdim && cdim - done <= {PACKM_REST} )
+			{{
+				{asm_symbol(k)}( {args} );
+				if ( done < cdim_max )
+					bli_{ch}{ch}packm_{config_name}_ref( conja, schema, cdim - done, cdim_max - done,
+					    cdim_bcast, n, n_max, kappa, ( const {ctype}* )a + done * inca, inca, lda,
+					    ( {ctype}* )p + done, ldp, params, cntx );
+				return;
+			}}
+		}}""")
+    vectors_first = "\n".join(rows)
+    mine = [k for k in mine if k not in strided]
     for k in mine:
         unknown = [p for p in k.params if p not in PACKM_ARGS]
         if unknown:
@@ -429,6 +461,10 @@ void bli_{ch}{ch}packm_{config_name}_ref
 void bli_{ch}packm_{config_name}
 {PACKM_SIGNATURE}
 {{
+	if ( cdim_bcast == 1 && n == n_max && inca == 1 )
+	{{
+{vectors_first}
+	}}
 	if ( cdim_bcast == 1 && cdim == cdim_max && n == n_max && ldp == cdim )
 	{{
 		if ( inca == 1 )

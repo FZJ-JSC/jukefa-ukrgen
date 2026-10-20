@@ -322,6 +322,38 @@ int main( void )
                                          capture_output=True, text=True, timeout=120).stdout
                     self.assertIn(f"{tile}: 81 runs, 0 wrong", out, k.symbol)
 
+    @needs_tools
+    def test_packm_mixed_cdim(self):
+        # P's leading dimension a parameter: a vec kernel packs the vectors of
+        # a cdim up to PACKM_REST rows more - a split's 2*VL + 2 - the
+        # reference the rows left and a narrower panel's edge
+        from ukrgen.injectors.blis.families import build_packm
+        from ukrgen.injectors.blis.cgen import packm_dispatch
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+               "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
+        fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"],
+                                         "cases": [{"kind": "vec", "m": [1, 2, 4], "params": vec}]})
+        built, skipped = build_packm("sve", "ukrgen_sve", fam)
+        self.assertEqual(3, len(built), skipped)
+        self.assertIn("stride(Y,n)", built[0].params)
+        cases = ("{ 2 * vl + 2, 2 * vl + 2, 5, 1, 2 * vl + 7, 1 }, { 4 * vl, 4 * vl, 3, 1, 4 * vl + 1, 0 }, "
+                 "{ 2 * vl, 2 * vl + 3, 4, 1, 2 * vl + 5, 1 }, { vl + 5, vl + 5, 2, 1, vl + 6, 1 }, "
+                 "{ 4 * vl + 2, 4 * vl + 2, 3, 1, 4 * vl + 3, 1 }, { vl - 1, vl - 1, 3, 1, vl, 1 }, "
+                 "{ 2 * vl, 2 * vl, 3, 2, 1, 1 }")
+        src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
+              vl_helpers(built, make_generator("sve")) + \
+              "\n#define bli_ddpackm_ukrgen_sve_ref REF\ntypedef int conj_t;\ntypedef int pack_t;\n" + \
+              "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
+              "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
+              packm_dispatch("ukrgen_sve", "FP64", built) + \
+              "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( double ) ); }\n" + \
+              open(os.path.join(HERE, "packm_harness.c")).read() \
+              .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
+        outs = self.run_c("sve", src, built, [[QEMU, "-cpu", f"max,sve{v}=on"] for v in (256, 512)],
+                          [f"-DCASES={cases}", "-DPACKM=bli_dpackm_ukrgen_sve"])
+        for out in outs:
+            self.assertIn("7 runs, 1 by generated cases, 0 wrong", out)
+
     def test_stack_and_family_header(self):
         fam, built = build("sve", "FP64", [2], [3])
         # 2 vectors by 3 doubles at 2048 bits: 64 x 3 x 8 bytes; at least BLIS's 2048
