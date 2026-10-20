@@ -1,4 +1,5 @@
-# FP64 packm, avx256: vectors along cdim
+# FP64 packm, avx256: vectors along cdim - P's leading dimension a parameter, so a vec kernel packs the
+# vectors of any cdim up to 16 rows more (a split's 2*VL + 2), the reference the rest
 isa: avx256
 family: pk
 cases:
@@ -8,4 +9,4 @@ cases:
     pack-tileop: ['fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}']
     store-tileop: ['Y.VEC:direct']
     X-layout: ['m:c', 'n:s']
-    Y-layout: ['m:c', 'n:p']
+    Y-layout: ['m:c', 'n:s']

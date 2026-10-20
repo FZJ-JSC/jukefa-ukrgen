@@ -8,7 +8,7 @@ cases:
     pack-tileop: ['fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}']
     store-tileop: ['Y.VEC:direct']
     X-layout: ['m:c', 'n:s']
-    Y-layout: ['m:c', 'n:p']
+    Y-layout: ['m:c', 'n:s']
     sme-F64F64: 'on'
 - kind: trans
   m: 1..16
