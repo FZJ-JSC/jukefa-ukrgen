@@ -11,9 +11,9 @@ families:
   params:
     A-layout: ['m:c', 'k:p']
     B-layout: ['n:c', 'k:p']
-    C-layout: ['m:s', 'n:s']
   schedule: ['RAW:data:vreg:::4']
   default: 8x3
+  c-storage: [row, any]
 - family: vm
   preset: gemm_fma_bc_vindex
   vectorize: m

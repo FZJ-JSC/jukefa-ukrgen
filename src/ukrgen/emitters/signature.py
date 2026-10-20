@@ -1485,7 +1485,9 @@ class signature_emitter:
             bases=bases,
             registers={k: str(v) for k, v in self.phys.items()},
             code=self.control(blocks, cases),
-            params={n: str(r) for n, r in self.params.items()},
+            # the function's parameters: C's storages' aliases are C's
+            params={n: str(r) for n, r in self.params.items()
+                    if self.param_comp(n) not in getattr(self, "aliases", {})},
             entry=entry, exit=leave)
 
     # --- control flow ---------------------------------------------------------
@@ -1508,6 +1510,14 @@ class signature_emitter:
                 for term in dict(stride.terms):
                     factors.update(f for f in term if f.startswith("stride("))
         names += sorted(factors)
+        # C's storages' alias components take C's parameters: base(Cr) is
+        # base(C), stride(Cr,m) stride(C,m) - none of their own
+        self.aliases = dict(getattr(self.ctx.composition, "storage_aliases", {}) or {})
+        def canonical(name):
+            comp = self.param_comp(name)
+            return name.replace(f"({comp}", "(C", 1) if comp in self.aliases else name
+        given = list(names)
+        names = list(dict.fromkeys(canonical(n) for n in given))
         self.cc = self.gen.create_callconv()
         # the callee's registers last: no save and restore unless needed
         if hasattr(self.cc, "deprioritize_callee_saved"):
@@ -1517,6 +1527,8 @@ class signature_emitter:
         self.fn = fngen(gen=self.gen, rt=self.rt)
         self.fn.init_cc(cc=self.cc)
         self.params = {n: self.gen.greg(self.rt.aliased_regs["greg"][n]) for n in names}
+        for n in given:
+            self.params.setdefault(n, self.params[canonical(n)])
         self.live_params = set(names)
         # the boilerplate finds where parameters passed on the stack are
         # loaded through these aliases, which releasing a register drops
@@ -1529,9 +1541,12 @@ class signature_emitter:
         """
         Parameters no later region uses: their registers are free
         """
+        aliases = getattr(self, "aliases", {})
         for name in sorted(self.live_params):
             comp = self.param_comp(name)
-            needed = comp in later if comp is not None else name in later_loops
+            # C's parameters are its storages' aliases' too
+            needed = (comp in later or ("C" == comp and any(a in later for a in aliases))) \
+                if comp is not None else name in later_loops
             if not needed:
                 self.live_params.discard(name)
                 reg = self.params[name]
@@ -1584,7 +1599,21 @@ class signature_emitter:
 
         for i, c in enumerate(self.program.cases):
             following = f"ukr{self.dispatch_tag}_try{i + 1}"
-            for var, value in c.when.items():
+            for j, (var, value) in enumerate(c.when.items()):
+                if var.startswith("stride("):
+                    # C's storage: its stride along an index one element - in
+                    # bytes, as passed - tested in a general register
+                    comp = var[len("stride("):].split(",")[0]
+                    t = self.greg()
+                    ok = f"ukr{self.dispatch_tag}_ok{i}_{j}"
+                    lines.append(gen.mov_greg(src=self.params[var], dst=t))
+                    lines.append(gen.add_greg_imm(
+                        reg=t, imm=-int(value) * adt_size(self.ctx.component_dts[comp])))
+                    lines.append(gen.jzero(reg=t, label=ok))
+                    lines.append(gen.jump(label=following))
+                    lines.append(gen.label(label=ok))
+                    self.rt.unuse_reg("greg", t.idx)
+                    continue
                 dt = self.ctx.component_dts[var]
                 size = adt_size(dt)
                 v, k, t = freg(dt), freg(dt), self.greg()

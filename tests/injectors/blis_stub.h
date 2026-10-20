@@ -33,6 +33,11 @@ typedef float  s_ctype;
 	GEMM_UKR_SETUP_CT_PRE(ch,mr,nr,row_major,64); \
 	const bool _use_ct = ( row_major ? cs_c != 1 : rs_c != 1 ) || m != mr || n != nr; \
 	GEMM_UKR_SETUP_CT_POST(ch);
+/* a kernel for both orientations: the temporary where neither stride is 1 */
+#define GEMM_UKR_SETUP_CT_AMBI(ch,mr,nr,row_major) \
+	GEMM_UKR_SETUP_CT_PRE(ch,mr,nr,row_major,64); \
+	const bool _use_ct = ( cs_c != 1 && rs_c != 1 ) || m != mr || n != nr; \
+	GEMM_UKR_SETUP_CT_POST(ch);
 /* a kernel taking C of any storage: the temporary for edge cases only */
 #define GEMM_UKR_SETUP_CT_ANY(ch,mr,nr,row_major) \
 	GEMM_UKR_SETUP_CT_PRE(ch,mr,nr,row_major,64); \

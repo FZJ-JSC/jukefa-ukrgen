@@ -56,10 +56,14 @@ class layout_stage(stage):
     def __init__(self, context : ukr_context):
         super().__init__(context)
         self.indices = component_indices(context.composition)
+        aliases = getattr(context.composition, "storage_aliases", {})
         for comp, indices in self.indices.items():
             example = " ".join(f"{i}:{'c' if 0 == n else 'p'}" for n, i in enumerate(indices))
+            # an alias of C for one of its storages: that storage's layout
+            from .ukr.storage import LAYOUTS
+            preset = list(LAYOUTS[aliases[comp]]) if comp in aliases else None
             self.params[f"{comp}-layout"] = stage_param(
-                    value=None,
+                    value=preset, default=preset, required=preset is None,
                     description=f"Layout of {comp}: for each of {', '.join(indices)}, "
                                 f"c (contiguous), p (packed: slices follow each other) "
                                 f"or s (strided at run time), e.g. {example}",

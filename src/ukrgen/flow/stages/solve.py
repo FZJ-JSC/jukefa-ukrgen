@@ -542,12 +542,33 @@ class solve_stage(stage):
             raise stage_error(f"--tileop-vectorize has {len(vectorize)} values for "
                               f"{len(names)} presets")
         per_part = []
+        aliases = getattr(self.context.composition, "storage_aliases", {})
+        by_suffix = {storage[0]: alias for alias, storage in aliases.items()}
+        def with_copies(preset):
+            # a storage's copies of the epilogue STOs (store.r, ...) take their
+            # STO's entry, C renamed to the storage's alias of it
+            import re
+            tileops = dict(preset["tileops"])
+            for n in order:
+                if "." not in n:
+                    continue
+                base, suffix = n.split(".", 1)
+                alias = by_suffix.get(suffix)
+                if alias and base in tileops:
+                    rename = lambda t: re.sub(r"(?<![A-Za-z0-9_])C\.", f"{alias}.", t)
+                    t = tileops[base]
+                    tileops[n] = [rename(x) for x in t] if isinstance(t, list) else rename(t)
+            return dict(preset, tileops=tileops)
         for name, vec in zip(names, vectorize):
             try:
                 per_part.append(presets.select(
-                    presets.load(str(name)), {n: candidates[n] for n in order if n in candidates},
+                    with_copies(presets.load(str(name))), {n: candidates[n] for n in order if n in candidates},
                     given, vectorize=vec or None,
-                    contiguous=(self.context.component_layouts or {}).get("C")))
+                    # with C's storages as branches each STO's C - C or an
+                    # alias of it - has its own contiguous index
+                    contiguous=dict({c: (self.context.component_layouts or {}).get(c)
+                                     for c in ["C", *aliases]}, __by_suffix__=by_suffix) if aliases
+                    else (self.context.component_layouts or {}).get("C")))
             except ValueError as err:
                 raise stage_error(f"--tileop-preset {name}: {err}") from err
         for sto in dict.fromkeys(k for chosen in per_part for k in chosen):

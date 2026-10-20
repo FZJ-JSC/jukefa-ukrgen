@@ -30,6 +30,11 @@ class setup_stage(stage):
                 description="Microkernel to generate",
                 choices=list(ukr_composition_map.keys()),
                 required=False)
+        self.params["C-storage"] = stage_param(
+                value=None, required=False, multi=True,
+                description="C's storages (row, col, any) as branches of the epilogue, picked "
+                            "at run time by C's strides; the last the default, its layout "
+                            "--C-layout's")
 
     def progress(self):
         isa = self.params["isa"].value
@@ -39,6 +44,10 @@ class setup_stage(stage):
 
         composition = ukr_composition_map[ukr]
         composition.validate()
+        storages = self.params["C-storage"].value
+        if storages and len(storages) > 1:
+            from .ukr.storage import storage_branches
+            composition = storage_branches(composition, storages)
         self.context.composition = composition
 
         self.context.params.update(self.params)

@@ -90,12 +90,20 @@ def gemm_wrapper(k: kernel) -> str:
     proto = ", ".join(GEMM_ARGS[p][0] for p in k.params)
     args = ", ".join(GEMM_ARGS[p][1].format(ctype=ctype) for p in k.params)
     row = "true" if "row" == k.c_layout else "false"
-    # C of any storage: the temporary tile only for edge cases
-    setup = "GEMM_UKR_SETUP_CT_ANY" if "any" == k.c_layout else "GEMM_UKR_SETUP_CT"
+    # the temporary tile: for edge cases only where the kernel takes any C (a
+    # storage branch 'any', or both strides at run time); where it branches
+    # on row- and column-major C, also when neither stride is 1
+    storages = set(getattr(k, "c_storages", []) or [k.c_layout])
+    if "any" in storages:
+        setup = "GEMM_UKR_SETUP_CT_ANY"
+    elif {"row", "col"} <= storages:
+        setup = "GEMM_UKR_SETUP_CT_AMBI"
+    else:
+        setup = "GEMM_UKR_SETUP_CT"
     return f"""\
 void {asm_symbol(k)}( {proto} );
 
-// {k.family}: {k.mr} x {k.nr}, C {"of any storage" if "any" == k.c_layout else k.c_layout + "-major"}
+// {k.family}: {k.mr} x {k.nr}, C {" / ".join(getattr(k, "c_storages", []) or []) + " (branches)" if getattr(k, "c_storages", []) else ("of any storage" if "any" == k.c_layout else k.c_layout + "-major")}
 void {k.symbol}
      (
              dim_t      m,

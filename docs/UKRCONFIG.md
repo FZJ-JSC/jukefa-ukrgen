@@ -31,13 +31,17 @@ generator; the current blisgen doesn't read them.
 
 Every gemm file has two families where the ISA has two orientations: `vn`
 (vectors along n, A broadcast) and `vm` (vectors along m, B broadcast). `vm`
-takes column-major C (its vectors run down C's columns). `vn` reaches C
-across its vectors - the stride paths the configuration is named for - with
-both of C's strides at run time (`C-layout: [m:s, n:s]`): C of any storage,
-so BLIS copies C through a temporary tile only for edge cases
-(`GEMM_UKR_SETUP_CT_ANY`). The block-tree configurations keep `vn`'s C
-column-major: with strided rows too, their addresses exceed x86's general
-registers. Sizes are in the family's units: `8x3v` is
+takes column-major C (its vectors run down C's columns). `vn` branches on
+C's storage inside the kernel (`c-storage: [row, any]`): one k loop, an
+epilogue per storage and alpha/beta case, the branch picked by C's strides
+- row-major C (`cs_c == 1`) with plain vector loads and stores, any other
+through C's accesses across vectors (gathers, strided, lanes) - so BLIS
+copies C through a temporary tile only for edge cases
+(`GEMM_UKR_SETUP_CT_ANY`). The block-tree configurations branch on row- and
+column-major C (`[row, col]`, `GEMM_UKR_SETUP_CT_AMBI`): an any-storage
+branch's strided rows would exceed x86's general registers. `c-storage`
+takes `row`, `col` and `any`, the last the default branch
+(`docs/CSTORAGE_PLAN.md`). Sizes are in the family's units: `8x3v` is
 8 rows by 3 vectors, `2vx8` 2 vectors by 8 columns. Every size of a family
 the registers hold is built; the others are reported in
 `config/<name>/blisgen_report.txt`.

@@ -178,6 +178,14 @@ class family:
         # the keys first, explicit params over them
         params = key_params(kind, entry)
         params.update(entry.get("params") or {})
+        storages = entry.get("c-storage")
+        if storages:
+            # C's storages as branches of one kernel: its C the last one's -
+            # over a C-layout given, which can't agree with the branches
+            from ...flow.stages.ukr.storage import LAYOUTS
+            storages = [storages] if isinstance(storages, str) else list(storages)
+            params["C-storage"] = storages
+            params["C-layout"] = list(LAYOUTS[storages[-1]])
         split = entry.get("split")
         parts = []
         for part in (entry.get("parts") or []):
@@ -292,6 +300,8 @@ class kernel:
     loop_unit: str = ""
     #: its assembly where built in another process (the program stays there)
     asm: str = ""
+    #: C's storages its epilogue branches on (row, col, any), the last the default
+    c_storages: list = field(default_factory=list)
 
 
 def part_extent(ctx, part: int, idx: str) -> sym:
@@ -403,9 +413,11 @@ def gemm_one(isa: str, config_name: str, fam: family, dt: str, m: int, n: int,
     c_layout = c_storage(layout)
     symbol = f"bli_{DT_CHAR[dt]}gemm_{config_name}_{fam.name}_{size_name(mr)}x{size_name(nr)}"
     program = ctx.emitted[0]
+    storages = params.get("C-storage") or []
     return _done(kernel(family=fam.name, dtype=dt, size=(m, n), mr=mr, nr=nr, symbol=symbol,
                         params=list(program.params), c_layout=c_layout, program=program,
-                        simd_size_c=getattr(ctx.gen, "c_simd_size_function", "")), detach)
+                        simd_size_c=getattr(ctx.gen, "c_simd_size_function", ""),
+                        c_storages=list(storages) if len(storages) > 1 else []), detach)
 
 
 def build_gemm(isa: str, config_name: str, fam: family,

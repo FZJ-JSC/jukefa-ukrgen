@@ -75,18 +75,28 @@ def select(preset: dict, candidates: dict, given: set, vectorize: str | None = N
         if not variants:
             raise ValueError(f"the preset has no variant vectorizing {vectorize}: "
                              f"{', '.join(preset['variants'])}")
-    elif contiguous is not None:
+    elif contiguous is not None and not isinstance(contiguous, dict):
         variants.sort(key=lambda nv: nv[0] != contiguous)
     missing = []
     for name, variant in variants:
         # vectors across C's contiguous index reach C across vectors: not
         # directly - the alternatives after direct
-        alternatives = dict(preset.get("alternatives") or {})
-        if contiguous is not None and name != contiguous:
-            alternatives = {k: [o for o in v if "direct" != str(o)] or v
-                            for k, v in alternatives.items()}
+        base_alternatives = dict(preset.get("alternatives") or {})
+        def without_direct(alts):
+            return {k: [o for o in v if "direct" != str(o)] or v for k, v in alts.items()}
+        alternatives = base_alternatives
+        if contiguous is not None and not isinstance(contiguous, dict) and name != contiguous:
+            alternatives = without_direct(base_alternatives)
         chosen, lacking = {}, None
         for sto, templates in preset["tileops"].items():
+            if isinstance(contiguous, dict):
+                # C's storages as branches: the C this STO reaches decides - a
+                # copy's alias (store_ab.r: Cr), else C; the loop's mm reaches
+                # none (store_ab names only AB, which it stores into C)
+                reached = contiguous.get("__by_suffix__", {}).get(sto.split(".", 1)[1]) \
+                    if "." in sto else ("C" if "mm" != sto else None)
+                across = reached is not None and contiguous.get(reached) not in (None, name)
+                alternatives = without_direct(base_alternatives) if across else base_alternatives
             if sto not in candidates or sto in given:
                 continue
             options = [o for t in ([templates] if isinstance(templates, str) else templates)

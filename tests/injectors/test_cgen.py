@@ -429,6 +429,69 @@ int main( void )
             out = subprocess.run([os.path.join(d, "run")], capture_output=True, text=True, timeout=60).stdout
             self.assertIn("mr 8 nr 24: 81 runs, 0 wrong", out)
 
+    def storage_kernel(self, isa, preset, storages):
+        fam = family.from_yaml("gemm", {"family": "vn", "dtypes": ["FP64"], "m": [8], "n": [3],
+                                        "preset": preset, "vectorize": "n", "unroll": 4,
+                                        "c-storage": storages,
+                                        "params": {"A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"]}})
+        built, skipped = build_gemm(isa, f"ukrgen_{isa}", fam)
+        self.assertEqual(1, len(built), skipped)
+        k = built[0]
+        # one kernel, C's parameters only: the storages' aliases take C's
+        self.assertEqual(storages, k.c_storages)
+        self.assertEqual(["k", "base(A)", "base(B)", "base(C)", "base(alpha)", "base(beta)"],
+                         [p for p in k.params if not p.startswith("stride(")])
+        return k
+
+    def run_storage_kernel(self, isa, k, cc, runners):
+        src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator(isa)) + gemm_wrapper(k) + \
+              f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, 'double', k.vl_fn)}; }}\n" \
+              f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, 'double', k.vl_fn)}; }}\n" + \
+              open(os.path.join(HERE, "wrapper_harness.c")).read()
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "k.s"), "w") as fh:
+                fh.write(asm_source(k))
+            subprocess.run(cc + ["-c", os.path.join(d, "k.s"), "-o", os.path.join(d, "k.o")], check=True)
+            with open(os.path.join(d, "w.c"), "w") as fh:
+                fh.write(src)
+            r = subprocess.run(cc + ["-O1", f"-I{HERE}", f"-DUKR={k.symbol}", "-DWT=double",
+                                     os.path.join(d, "w.c"), os.path.join(d, "k.o"), "-o",
+                                     os.path.join(d, "run")], capture_output=True, text=True)
+            self.assertEqual(0, r.returncode, r.stderr)
+            return [subprocess.run(q + [os.path.join(d, "run")], capture_output=True, text=True,
+                                   timeout=200).stdout for q in runners]
+
+    @unittest.skipUnless("avx512f" in open("/proc/cpuinfo").read() and shutil.which("gcc"),
+                         "needs an AVX-512 CPU")
+    def test_storage_branches(self):
+        # C's storages as branches of one kernel: row-major C with plain
+        # vectors, any other gathered - or row- and column-major, the
+        # temporary where neither stride is 1
+        cc = ["gcc", "-mavx512f", "-mavx512dq", "-mavx512vl"]
+        for storages, setup in ((["row", "any"], "GEMM_UKR_SETUP_CT_ANY"),
+                                (["row", "col"], "GEMM_UKR_SETUP_CT_AMBI")):
+            k = self.storage_kernel("avx512", "gemm_fma_bc_vindex", storages)
+            self.assertIn(setup, gemm_wrapper(k))
+            src = asm_source(k)
+            # the row branch's plain stores beside the other's
+            self.assertTrue(any(l.strip().startswith("vmovupd %zmm") for l in src.splitlines()))
+            for out in self.run_storage_kernel("avx512", k, cc, [[]]):
+                self.assertIn("mr 8 nr 24: 81 runs, 0 wrong", out, storages)
+
+    @needs_tools
+    def test_storage_branches_vla(self):
+        for isa, preset, cc, runners, tiles in (
+                ("sve", "gemm_fma_bc_vindex", ["aarch64-linux-gnu-gcc", "-static", "-march=armv8-a+sve"],
+                 [[QEMU, "-cpu", f"max,sve{v}=on"] for v in (256, 512)], ("mr 8 nr 12", "mr 8 nr 24")),
+                ("rvv", "gemm_fma_vf", ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"],
+                 [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"] for v in (128, 256)],
+                 ("mr 8 nr 6", "mr 8 nr 12"))):
+            if not shutil.which(cc[0]):
+                continue
+            k = self.storage_kernel(isa, preset, ["row", "any"])
+            for out, tile in zip(self.run_storage_kernel(isa, k, cc, runners), tiles):
+                self.assertIn(f"{tile}: 81 runs, 0 wrong", out, isa)
+
     def test_stack_and_family_header(self):
         # what BLIS checks: MR x NR in double complex elements (16 bytes),
         # whatever the kernel's type - 2 vectors of 32 doubles (2048 bits) by 3
