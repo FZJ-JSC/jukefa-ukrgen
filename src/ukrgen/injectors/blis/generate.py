@@ -15,7 +15,8 @@ from .cgen import (asm_source, gemm_wrapper, cntx_init, family_header, stack_buf
                    vl_helpers, packm_dispatch)
 
 
-def generate(cfg: configuration, out_dir: str, stack_size: int | None = None) -> dict:
+def generate(cfg: configuration, out_dir: str, stack_size: int | None = None,
+             jobs: int = 1) -> dict:
     """
     Write the configuration's files under out_dir; stack_size (bytes)
     overrides the configuration's. Returns what was made: the kernels, the
@@ -28,7 +29,7 @@ def generate(cfg: configuration, out_dir: str, stack_size: int | None = None) ->
         build = {"gemm": build_gemm, "packm": build_packm}.get(fam.kind)
         if build is None:
             continue
-        built, missed = build(cfg.isa, cfg.name, fam)
+        built, missed = build(cfg.isa, cfg.name, fam, jobs)
         kernels += built
         skipped += [(fam.name,) + s for s in missed]
         for dt, size in fam.default.items():

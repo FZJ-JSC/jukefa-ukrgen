@@ -290,6 +290,8 @@ class kernel:
     case: str = ""
     #: its loop parameter counts chunks of a vector length ("VL"), not elements
     loop_unit: str = ""
+    #: its assembly where built in another process (the program stays there)
+    asm: str = ""
 
 
 def part_extent(ctx, part: int, idx: str) -> sym:
@@ -328,135 +330,179 @@ def size_name(expr: str) -> str:
     return text
 
 
-def build_gemm(isa: str, config_name: str, fam: family) -> tuple[list[kernel], list[tuple]]:
+def _skip(dt, size, err) -> tuple:
+    lines = [l.strip() for l in str(err).splitlines() if l.strip()]
+    return ("skipped", (dt, size, lines[0] if lines else type(err).__name__))
+
+
+def _done(k: "kernel", detach: bool) -> tuple:
+    """
+    A kernel built; for another process detached - its assembly rendered,
+    the program (not one for pickling) dropped
+    """
+    if detach:
+        k.asm = "\n".join(k.program.function(f"{k.symbol}_asm")) + "\n"
+        k.program = None
+    return ("built", k)
+
+
+def _call(item):
+    fn, args = item
+    return fn(*args, detach=True)
+
+
+def run_tasks(fn, tasks: list, jobs: int = 1) -> list:
+    """
+    The tasks - each one run of the flow, independent of the others - in
+    order: in this process, or across jobs processes
+    """
+    if jobs <= 1 or len(tasks) <= 1:
+        return [fn(*t, detach=False) for t in tasks]
+    from concurrent.futures import ProcessPoolExecutor
+    with ProcessPoolExecutor(max_workers=jobs) as pool:
+        return list(pool.map(_call, [(fn, t) for t in tasks]))
+
+
+def _collect(results: list) -> tuple[list, list]:
+    return ([r for kind, r in results if "built" == kind],
+            [r for kind, r in results if "skipped" == kind])
+
+
+def gemm_one(isa: str, config_name: str, fam: family, dt: str, m: int, n: int,
+             detach: bool = False) -> tuple:
+    """
+    One size of a gemm family: ("built", kernel) or ("skipped", (data type,
+    size, reason))
+    """
+    # unrolled along k once unless the family says otherwise
+    params = {"isa": isa, "ukr": "gemm", "k": "1"}
+    params.update(fam.params)
+    for comp in ("A", "B", "C", "AB", "alpha", "beta"):
+        params[f"{comp}-data-type"] = dt
+    params.update({"m": str(m), "n": str(n)})
+    try:
+        ctx, result, _ = run_unrolled(params, "k")
+    except Exception as err:
+        return _skip(dt, (m, n), err)
+    if not getattr(result, "completed", False) or not ctx.emitted:
+        return _skip(dt, (m, n), "the flow didn't complete")
+    mr, nr = str(extent_of(ctx, "m")), str(extent_of(ctx, "n"))
+    layout = params.get("C-layout", ["m:c", "n:s"])
+    c_layout = "row" if str(layout[0]).startswith("n") else "col"
+    symbol = f"bli_{DT_CHAR[dt]}gemm_{config_name}_{fam.name}_{size_name(mr)}x{size_name(nr)}"
+    program = ctx.emitted[0]
+    return _done(kernel(family=fam.name, dtype=dt, size=(m, n), mr=mr, nr=nr, symbol=symbol,
+                        params=list(program.params), c_layout=c_layout, program=program,
+                        simd_size_c=getattr(ctx.gen, "c_simd_size_function", "")), detach)
+
+
+def build_gemm(isa: str, config_name: str, fam: family,
+               jobs: int = 1) -> tuple[list[kernel], list[tuple]]:
     """
     Every size of a gemm family the ISA can build, and (data type, size,
-    reason) for each it can't
+    reason) for each it can't - the sizes across jobs processes
     """
-    built, skipped = [], []
     if fam.parts:
-        return build_split_gemm(isa, config_name, fam)
+        return build_split_gemm(isa, config_name, fam, jobs)
     ms, ns = fam.sizes.get("m", [1]), fam.sizes.get("n", [1])
-    for dt in fam.dtypes:
-        for m in ms:
-            for n in ns:
-                # unrolled along k once unless the family says otherwise
-                params = {"isa": isa, "ukr": "gemm", "k": "1"}
-                params.update(fam.params)
-                for comp in ("A", "B", "C", "AB", "alpha", "beta"):
-                    params[f"{comp}-data-type"] = dt
-                params.update({"m": str(m), "n": str(n)})
-                try:
-                    ctx, result, _ = run_unrolled(params, "k")
-                except Exception as err:
-                    lines = [l.strip() for l in str(err).splitlines() if l.strip()]
-                    skipped.append((dt, (m, n), lines[0] if lines else type(err).__name__))
-                    continue
-                if not getattr(result, "completed", False) or not ctx.emitted:
-                    skipped.append((dt, (m, n), "the flow didn't complete"))
-                    continue
-                mr, nr = str(extent_of(ctx, "m")), str(extent_of(ctx, "n"))
-                layout = params.get("C-layout", ["m:c", "n:s"])
-                c_layout = "row" if str(layout[0]).startswith("n") else "col"
-                symbol = f"bli_{DT_CHAR[dt]}gemm_{config_name}_{fam.name}_" \
-                         f"{size_name(mr)}x{size_name(nr)}"
-                program = ctx.emitted[0]
-                built.append(kernel(family=fam.name, dtype=dt, size=(m, n), mr=mr, nr=nr,
-                                    symbol=symbol, params=list(program.params), c_layout=c_layout,
-                                    program=program,
-                                    simd_size_c=getattr(ctx.gen, "c_simd_size_function", "")))
-    return built, skipped
+    tasks = [(isa, config_name, fam, dt, m, n) for dt in fam.dtypes for m in ms for n in ns]
+    return _collect(run_tasks(gemm_one, tasks, jobs))
 
 
-def build_packm(isa: str, config_name: str, fam: family) -> tuple[list[kernel], list[tuple]]:
+def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: int,
+              case_params: dict, detach: bool = False) -> tuple:
+    """
+    One case and size of a packm family
+    """
+    params = {"isa": isa, "ukr": "pack", "n": "1"}
+    params.update(fam.params)
+    params.update(case_params)
+    for comp in ("X", "Y", "kappa"):
+        params[f"{comp}-data-type"] = dt
+    params["m"] = str(m)
+    if fam.min_inflight:
+        # at least min_inflight vectors an iteration: m a copy
+        params["n"] = str(max(1, -(-fam.min_inflight // m)))
+    try:
+        ctx, result, _ = run_unrolled(params, "n")
+    except Exception as err:
+        return _skip(dt, (case, m), err)
+    if not getattr(result, "completed", False) or not ctx.emitted:
+        return _skip(dt, (case, m), "the flow didn't complete")
+    cdim = str(extent_of(ctx, "m"))
+    symbol = f"bli_{DT_CHAR[dt]}packm_{config_name}_{fam.name}_{case}{size_name(cdim)}"
+    program = ctx.emitted[0]
+    # a loop stepping by vectors counts chunks of a vector length
+    unit = "VL" if any(("VL",) in dict(getattr(b, "step", None).terms)
+                       for p in ctx.programs for b in p.blocks
+                       if getattr(b, "step", None) is not None) else ""
+    return _done(kernel(family=fam.name, dtype=dt, size=(m, 1), mr=cdim, nr="1", symbol=symbol,
+                        params=list(program.params), c_layout="col", program=program, case=case,
+                        loop_unit=unit, simd_size_c=getattr(ctx.gen, "c_simd_size_function", "")),
+                 detach)
+
+
+def build_packm(isa: str, config_name: str, fam: family,
+                jobs: int = 1) -> tuple[list[kernel], list[tuple]]:
     """
     Every case and size of a packm family the ISA builds - kernels packing
     a full panel of cdim (mr) rows, n long, scaled by kappa - and (data type,
     (case, size), reason) for each it can't
     """
-    built, skipped = [], []
-    for dt in fam.dtypes:
-        for case, ms, case_params in fam.cases:
-            for m in ms:
-                params = {"isa": isa, "ukr": "pack", "n": "1"}
-                params.update(fam.params)
-                params.update(case_params)
-                for comp in ("X", "Y", "kappa"):
-                    params[f"{comp}-data-type"] = dt
-                params["m"] = str(m)
-                if fam.min_inflight:
-                    # at least min_inflight vectors an iteration: m a copy
-                    params["n"] = str(max(1, -(-fam.min_inflight // m)))
-                try:
-                    ctx, result, _ = run_unrolled(params, "n")
-                except Exception as err:
-                    lines = [l.strip() for l in str(err).splitlines() if l.strip()]
-                    skipped.append((dt, (case, m), lines[0] if lines else type(err).__name__))
-                    continue
-                if not getattr(result, "completed", False) or not ctx.emitted:
-                    skipped.append((dt, (case, m), "the flow didn't complete"))
-                    continue
-                cdim = str(extent_of(ctx, "m"))
-                symbol = f"bli_{DT_CHAR[dt]}packm_{config_name}_{fam.name}_{case}{size_name(cdim)}"
-                program = ctx.emitted[0]
-                # a loop stepping by vectors counts chunks of a vector length
-                unit = "VL" if any(("VL",) in dict(getattr(b, "step", None).terms)
-                                   for p in ctx.programs for b in p.blocks
-                                   if getattr(b, "step", None) is not None) else ""
-                built.append(kernel(family=fam.name, dtype=dt, size=(m, 1), mr=cdim, nr="1",
-                                    symbol=symbol, params=list(program.params), c_layout="col",
-                                    program=program, case=case, loop_unit=unit,
-                                    simd_size_c=getattr(ctx.gen, "c_simd_size_function", "")))
-    return built, skipped
+    tasks = [(isa, config_name, fam, dt, case, m, case_params)
+             for dt in fam.dtypes for case, ms, case_params in fam.cases for m in ms]
+    return _collect(run_tasks(packm_one, tasks, jobs))
 
 
-def build_split_gemm(isa: str, config_name: str, fam: family) -> tuple[list[kernel], list[tuple]]:
+def split_one(isa: str, config_name: str, fam: family, dt: str, combo: tuple, o: int,
+              detach: bool = False) -> tuple:
+    """
+    One combination of a split family's parts' sizes
+    """
+    split = fam.split
+    other = "n" if "m" == split else "m"
+    keys = list(dict.fromkeys(k for pp, _ in fam.parts for k in pp))
+    params = {"isa": isa, "ukr": "gemm", "k": "1"}
+    params.update(fam.params)
+    for key in keys:
+        values = [pp.get(key) for pp, _ in fam.parts]
+        params[key] = values if len(set(map(str, values))) > 1 else values[0]
+    for comp in ("A", "B", "C", "AB", "alpha", "beta"):
+        params[f"{comp}-data-type"] = dt
+    params[split] = [str(c) for c in combo]
+    params[other] = str(o)
+    size = combo + (o,) if "m" == split else (o,) + combo
+    try:
+        ctx, result, _ = run_unrolled(params, "k")
+    except Exception as err:
+        return _skip(dt, size, err)
+    if not getattr(result, "completed", False) or not ctx.emitted:
+        return _skip(dt, size, "the flow didn't complete")
+    mr, nr = str(extent_of(ctx, "m")), str(extent_of(ctx, "n"))
+    layout = params.get("C-layout", ["m:c", "n:s"])
+    names = "_".join(f"{size_name(part_extent(ctx, p, 'm'))}x{size_name(part_extent(ctx, p, 'n'))}"
+                     for p in range(len(ctx.stos)))
+    program = ctx.emitted[0]
+    return _done(kernel(family=fam.name, dtype=dt, size=size, mr=mr, nr=nr,
+                        symbol=f"bli_{DT_CHAR[dt]}gemm_{config_name}_{fam.name}_{names}",
+                        params=list(program.params),
+                        c_layout="row" if str(layout[0]).startswith("n") else "col",
+                        program=program,
+                        simd_size_c=getattr(ctx.gen, "c_simd_size_function", "")), detach)
+
+
+def build_split_gemm(isa: str, config_name: str, fam: family,
+                     jobs: int = 1) -> tuple[list[kernel], list[tuple]]:
     """
     A split family's kernels: every combination of its parts' sizes along the
     split index, and the family's sizes along the other - each part's
     parameters (its preset - a shorthand or a file - its vectorized index, its
     own choices) a list of one value per part where they differ
     """
-    import itertools
-    built, skipped = [], []
-    split = fam.split
-    other = "n" if "m" == split else "m"
-    keys = list(dict.fromkeys(k for pp, _ in fam.parts for k in pp))
-    for dt in fam.dtypes:
-        for combo in split_combos(fam):
-            for o in fam.sizes.get(other, [1]):
-                params = {"isa": isa, "ukr": "gemm", "k": "1"}
-                params.update(fam.params)
-                for key in keys:
-                    values = [pp.get(key) for pp, _ in fam.parts]
-                    params[key] = values if len(set(map(str, values))) > 1 else values[0]
-                for comp in ("A", "B", "C", "AB", "alpha", "beta"):
-                    params[f"{comp}-data-type"] = dt
-                params[split] = [str(c) for c in combo]
-                params[other] = str(o)
-                size = combo + (o,) if "m" == split else (o,) + combo
-                try:
-                    ctx, result, _ = run_unrolled(params, "k")
-                except Exception as err:
-                    lines = [l.strip() for l in str(err).splitlines() if l.strip()]
-                    skipped.append((dt, size, lines[0] if lines else type(err).__name__))
-                    continue
-                if not getattr(result, "completed", False) or not ctx.emitted:
-                    skipped.append((dt, size, "the flow didn't complete"))
-                    continue
-                mr, nr = str(extent_of(ctx, "m")), str(extent_of(ctx, "n"))
-                layout = params.get("C-layout", ["m:c", "n:s"])
-                names = "_".join(f"{size_name(part_extent(ctx, p, 'm'))}x"
-                                 f"{size_name(part_extent(ctx, p, 'n'))}"
-                                 for p in range(len(ctx.stos)))
-                program = ctx.emitted[0]
-                built.append(kernel(family=fam.name, dtype=dt, size=size, mr=mr, nr=nr,
-                                    symbol=f"bli_{DT_CHAR[dt]}gemm_{config_name}_{fam.name}_{names}",
-                                    params=list(program.params),
-                                    c_layout="row" if str(layout[0]).startswith("n") else "col",
-                                    program=program,
-                                    simd_size_c=getattr(ctx.gen, "c_simd_size_function", "")))
-    return built, skipped
+    other = "n" if "m" == fam.split else "m"
+    tasks = [(isa, config_name, fam, dt, combo, o)
+             for dt in fam.dtypes for combo in split_combos(fam) for o in fam.sizes.get(other, [1])]
+    return _collect(run_tasks(split_one, tasks, jobs))
 
 
 def split_combos(fam: family) -> list[tuple]:

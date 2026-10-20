@@ -45,7 +45,8 @@ blisgen --sgemm-config ukrconfig/sve/fma_bc_vindex/sgemm.yaml \
         --spackm-config ukrconfig/sve/fma_bc_vindex/spackm.yaml \
         --dpackm-config ukrconfig/sve/fma_bc_vindex/dpackm.yaml \
         --from-dir <blis> --out-dir <blis-out> --author "<name>" \
-        [--config-name ukrgen_sve] [--stack-buf-size BYTES] [--parent-config-name <config>]
+        [--config-name ukrgen_sve] [--stack-buf-size BYTES] [--parent-config-name <config>] \
+        [-j JOBS]   # kernels built at once, each in its own process (default: the CPUs)
 cd <blis-out> && ./configure -t none ukrgen_sve && make -j && make testsuite-bin
 ```
 

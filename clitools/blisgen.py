@@ -42,6 +42,9 @@ def main():
                         help="the patched BLIS tree; without a BLIS source, the configuration's "
                              "files alone")
     parser.add_argument("--overwrite", action="store_true", help="replace --out-dir")
+    parser.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 1,
+                        help="kernels built at once - each one run of the flow, in its own "
+                             "process (default: the CPUs there are)")
     parser.add_argument("--author", required=True,
                         help="Author to insert in the copyright string")
     args = parser.parse_args()
@@ -63,7 +66,7 @@ def main():
 
     if not args.from_dir and not args.from_git:
         from ukrgen.injectors.blis.generate import generate
-        made = generate(cfg, args.out_dir, stack_size=args.stack_buf_size)
+        made = generate(cfg, args.out_dir, stack_size=args.stack_buf_size, jobs=args.jobs)
     else:
         from ukrgen.injectors.blis.patch import patch_blis
         blis_dir = args.from_dir
@@ -74,7 +77,7 @@ def main():
             Repo.clone_from("https://github.com/flame/blis", blis_dir)
         made = patch_blis(blis_dir, args.out_dir, cfg, args.author,
                           parent=args.parent_config_name, overwrite=args.overwrite,
-                          stack_size=args.stack_buf_size)
+                          stack_size=args.stack_buf_size, jobs=args.jobs)
     print(f"{cfg.name}: {len(made['kernels'])} kernels, {len(made['skipped'])} sizes skipped, "
           f"{len(made['files'])} files under {args.out_dir}")
     for fam, dt, (m, n), why in made["skipped"]:

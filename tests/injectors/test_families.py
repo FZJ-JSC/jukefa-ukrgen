@@ -169,6 +169,23 @@ class test_families(unittest.TestCase):
         built, skipped = build_packm("avx256", "ukrgen_avx2", fam)
         self.assertEqual(1, len(built), skipped)
 
+    def test_parallel_build(self):
+        # each size one run of the flow, independent: built across processes
+        # alike - the kernels' assembly rendered there, their programs kept there
+        from ukrgen.injectors.blis.families import build_packm
+        from ukrgen.injectors.blis.cgen import asm_source
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+               "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
+        fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64", "FP32"], "min-inflight": 8,
+                                         "cases": [{"kind": "vec", "m": [1, 2], "params": vec}]})
+        seq, skipped_seq = build_packm("sve", "ukrgen_sve", fam, jobs=1)
+        par, skipped_par = build_packm("sve", "ukrgen_sve", fam, jobs=2)
+        self.assertEqual(4, len(par))
+        self.assertEqual([k.symbol for k in seq], [k.symbol for k in par])
+        self.assertEqual([asm_source(k) for k in seq], [asm_source(k) for k in par])
+        self.assertTrue(all(k.program is None and k.asm for k in par))
+        self.assertEqual(skipped_seq, skipped_par)
+
 
 if __name__ == "__main__":
     unittest.main()

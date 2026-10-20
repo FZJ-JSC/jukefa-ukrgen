@@ -73,6 +73,8 @@ def asm_source(k: kernel) -> str:
     """
     The kernel's assembly, as a function under its assembly symbol
     """
+    if getattr(k, "asm", ""):
+        return k.asm
     return "\n".join(k.program.function(asm_symbol(k))) + "\n"
 
 
