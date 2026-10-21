@@ -339,6 +339,13 @@ class program_builder:
                             break
                         shares[c] += 1
                         left -= 1
+                # whole k steps: a share rounded down to its minimal ring's
+                # multiples - B's scalars in two sets of a step's, not a ring
+                # shifting through the registers - unless --COMP-max-data-regs says
+                for c in list(shares):
+                    unit = minimal.get(c, 1)
+                    if 1 < unit <= shares[c] < len(self.coords[c]) and c not in self.max_data_regs:
+                        shares[c] = shares[c] // unit * unit
                 return shares
             shares = {}
             for comps, _, _ in blocks:
