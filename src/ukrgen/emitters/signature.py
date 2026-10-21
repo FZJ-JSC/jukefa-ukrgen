@@ -139,6 +139,210 @@ class emitted_program:
         return "\n".join(lines)
 
 
+class offset_planner:
+    """
+    How an address offset is formed - every decision in one place: a
+    register holding the vector length in bytes or k of them, VL squared,
+    strides times the vector length or constants, computed once at the
+    kernel's start; an address moved by an amount - shifted adds for stride
+    multiples, one add of a register holding k vector lengths. The emitter
+    asks; the planner keeps what it allocated (docs/REG_USE_OPTIMIZATION.md:
+    step 2b - moved here as it was, to be extended)
+    """
+
+    def __init__(self, emitter):
+        self.e = emitter
+
+    def stride_reg(self, factor: str, setup: bool = False):
+        """
+        The register holding a run-time stride in bytes: its parameter's
+        """
+        return self.e.params[factor]
+
+    def add_scaled(self, areg, source, n: int) -> list[str]:
+        """
+        areg moved by n times a register's amount, n negative backwards: an
+        add or sub per set bit of n - shifted where the ISA shifts the operand
+        (AArch64 add x, x, y, LSL #s; x86 lea): 2*VL*VL one instruction off a
+        register holding VL*VL - plain adds or subs repeated where it doesn't
+        """
+        op = "sub" if n < 0 else "add"
+        plain = getattr(self.e.gen, f"{op}_greg_greg")
+        shifted = getattr(self.e.gen, f"{op}_greg_greg_shifted")
+        out, k, bit = [], abs(n), 0
+        while k:
+            if k & 1:
+                if not bit:
+                    out.append(plain(dst=areg, reg1=areg, reg2=source))
+                elif self.e.shifted_available(op, bit):
+                    out.append(shifted(dst=areg, reg1=areg, reg2=source, shift=bit))
+                else:
+                    out += [plain(dst=areg, reg1=areg, reg2=source)] * (1 << bit)
+            k >>= 1
+            bit += 1
+        return out
+
+    def add_bytes(self, areg, amount: sym, comp: str) -> list[str]:
+        """
+        Move an address register on by a number of bytes: constants as an
+        immediate; whole vectors with incb/decb where the ISA counts them so;
+        multiples of a register's amount - strides, the vector length (RVV),
+        vector lengths of strides or of vectors, each held in bytes - as
+        shifted or repeated adds and subs of it (add_scaled)
+        """
+        dt = self.e.ctx.component_dts[comp]
+        esize = adt_size(dt)
+        lines = []
+        for factors, coeff in amount.terms:
+            if not factors:
+                lines.append(self.e.gen.add_greg_imm(reg=areg, imm=coeff))
+                continue
+            if 0 != coeff % esize:
+                raise specialization_error(
+                    f"moving {comp}'s address by {amount} bytes: {coeff} isn't whole elements")
+            n = coeff // esize
+            if ("VL",) == factors and not self.e.vector_length_kept:
+                # whole vectors, forward or back: incb or decb
+                lines.append(self.e.gen.add_greg_voff(reg=areg, offset=n, dt=dt))
+                continue
+            if ("VL",) == factors and n > 1:
+                # RVV: k vector lengths in a register of their own - one add
+                lines.append(self.e.gen.add_greg_greg(dst=areg, reg1=areg, reg2=self.vl_multiple(dt, n)))
+                continue
+            if ("VL",) == factors:
+                # RVV: the vector length in a register, in bytes
+                source = self.vl_bytes(dt)
+            elif 1 == len(factors) and factors[0].startswith("stride("):
+                source = self.stride_reg(factors[0])
+            elif 2 == len(factors) and "VL" == factors[0] and factors[1].startswith("stride("):
+                # a vector length of strided elements, multiplied once
+                source = self.vl_stride(factors[1], dt)
+            elif ("VL", "VL") == factors:
+                # vector lengths of vectors: a packed layout's next tile
+                source = self.vl_squared(dt)
+            else:
+                raise specialization_error(
+                    f"moving {comp}'s address by {amount} bytes needs run-time arithmetic "
+                    f"(vector length), which is not specialized yet")
+            lines += self.add_scaled(areg, source, n)
+        return lines
+
+    # --- operations ----------------------------------------------------------
+
+    def vl_elements(self, dt):
+        """
+        A register holding the vector length in elements: RVV's vl, or read
+        once after the ISA's setup where the ISA doesn't keep it (SVE: cntd)
+        """
+        if self.e.vector_length_kept:
+            return self.e.gen.isa_setup().vector_length_register(rt=self.e.rt)
+        key = f"VL in {adt_size(dt)}-byte elements"
+        if key not in self.e.strides_in:
+            self.e.recipes.append(("vl_elements", (dt,), self.e.regions_started))
+            reg = self.e.greg()
+            try:
+                self.e.late_setup.append(self.e.gen.vlen_to_greg(reg=reg, dt=dt))
+            except (NotImplementedError, AttributeError) as err:
+                raise specialization_error(f"reading the vector length: {err}") from err
+            self.e.strides_in[key] = reg
+        return self.e.strides_in[key]
+
+    def vl_stride(self, factor: str, dt):
+        """
+        A register holding the vector length in elements times a stride in
+        bytes: a vector length of strided elements, multiplied once in setup
+        """
+        key = f"VL*{factor}"
+        if key not in self.e.strides_in:
+            self.e.recipes.append(("vl_stride", (factor, dt), self.e.regions_started))
+            vlreg = self.vl_elements(dt)
+            reg = self.e.greg()
+            self.e.strides_in[key] = reg
+            self.e.late_setup.append(self.e.gen.mul_greg_greg(
+                dst=reg, reg1=vlreg, reg2=self.stride_reg(factor, setup=True)))
+        return self.e.strides_in[key]
+
+    def constant_stride(self, nbytes: int):
+        """
+        A register holding a constant stride, loaded once in setup
+        """
+        key = f"constant stride {nbytes}"
+        if key not in self.e.strides_in:
+            self.e.recipes.append(("constant_stride", (nbytes,), self.e.regions_started))
+            reg = self.e.greg()
+            self.e.strides_in[key] = reg
+            self.e.late_setup.append(self.e.gen.mov_greg_imm(reg=reg, imm=nbytes))
+        return self.e.strides_in[key]
+
+    def vl_squared(self, dt):
+        """
+        A register holding the vector length squared, in elements, times the
+        element size in bytes: a vector length of vectors - the next tile
+        along a packed layout's outer index - multiplied once in setup
+        """
+        key = f"VL*VL:{adt_size(dt)}"
+        if key not in self.e.strides_in:
+            self.e.recipes.append(("vl_squared", (dt,), self.e.regions_started))
+            vlreg = self.vl_elements(dt)
+            reg = self.e.greg()
+            self.e.strides_in[key] = reg
+            self.e.late_setup += [self.e.gen.mul_greg_greg(dst=reg, reg1=vlreg, reg2=vlreg),
+                                self.e.gen.shift_greg_left(reg=reg,
+                                                         bit_count=adt_size(dt).bit_length() - 1)]
+        return self.e.strides_in[key]
+
+    def vl_bytes(self, dt):
+        """
+        A register holding the vector length in bytes, for ISAs keeping the
+        vector length in a register (RVV): computed once per element size,
+        right after the ISA's setup
+        """
+        esize = adt_size(dt)
+        if esize not in self.e.vlb:
+            self.e.recipes.append(("vl_bytes", (dt,), self.e.regions_started))
+            vlreg = self.e.gen.isa_setup().vector_length_register(rt=self.e.rt)
+            reg = self.e.greg()
+            self.e.vlb[esize] = reg
+            self.e.late_setup += [self.e.gen.mov_greg(src=vlreg, dst=reg),
+                                self.e.gen.shift_greg_left(reg=reg, bit_count=esize.bit_length() - 1)]
+        return self.e.vlb[esize]
+
+    def vl_multiple(self, dt, k: int):
+        """
+        A register holding k vector lengths in bytes (RVV): an address moves
+        by k vectors in one add - computed once, right after the ISA's setup
+        """
+        if 1 == k:
+            return self.vl_bytes(dt)
+        key = (adt_size(dt), k)
+        if key not in self.e.vlm:
+            self.e.recipes.append(("vl_multiple", (dt, k), self.e.regions_started))
+            base = self.vl_bytes(dt)
+            reg = self.e.greg()
+            self.e.vlm[key] = reg
+            if 0 == k & (k - 1):
+                self.e.late_setup += [self.e.gen.mov_greg(src=base, dst=reg),
+                                    self.e.gen.shift_greg_left(reg=reg, bit_count=k.bit_length() - 1)]
+            else:
+                self.e.late_setup += [self.e.gen.mov_greg(src=base, dst=reg)] + \
+                    [self.e.gen.add_greg_greg(dst=reg, reg1=reg, reg2=base) for _ in range(k - 1)]
+        return self.e.vlm[key]
+
+    def vector_multiple(self, amount, comp: str) -> int | None:
+        """
+        k where an amount of bytes is k whole vector lengths (k > 0) and the
+        ISA keeps the vector length in a register; else None
+        """
+        if not self.e.vector_length_kept:
+            return None
+        terms = list(amount.terms)
+        if 1 != len(terms) or ("VL",) != tuple(terms[0][0]):
+            return None
+        esize = adt_size(self.e.ctx.component_dts[comp])
+        coeff = terms[0][1]
+        return coeff // esize if coeff > 0 and 0 == coeff % esize else None
+
+
 class signature_emitter:
     """
     Turns one part's specialized IR program into assembly
@@ -168,6 +372,8 @@ class signature_emitter:
         self.vlb: dict[int, object] = {}
         #: (element size, k) -> a register holding k vector lengths in bytes
         self.vlm: dict[tuple, object] = {}
+        #: how address offsets are formed
+        self.offsets = offset_planner(self)
         self.masks: dict = {}
         self.indexes: dict = {}
         # setup-time values a previous emission found it needed: allocated
@@ -401,34 +607,11 @@ class signature_emitter:
     def bytes_of(self, component: str, elements: sym) -> sym:
         return elements * adt_size(self.ctx.component_dts[component])
 
-    def stride_reg(self, factor: str, setup: bool = False):
-        """
-        The register holding a run-time stride in bytes: its parameter's
-        """
-        return self.params[factor]
+    def stride_reg(self, *args, **kwargs):
+        return self.offsets.stride_reg(*args, **kwargs)
 
-    def add_scaled(self, areg, source, n: int) -> list[str]:
-        """
-        areg moved by n times a register's amount, n negative backwards: an
-        add or sub per set bit of n - shifted where the ISA shifts the operand
-        (AArch64 add x, x, y, LSL #s; x86 lea): 2*VL*VL one instruction off a
-        register holding VL*VL - plain adds or subs repeated where it doesn't
-        """
-        op = "sub" if n < 0 else "add"
-        plain = getattr(self.gen, f"{op}_greg_greg")
-        shifted = getattr(self.gen, f"{op}_greg_greg_shifted")
-        out, k, bit = [], abs(n), 0
-        while k:
-            if k & 1:
-                if not bit:
-                    out.append(plain(dst=areg, reg1=areg, reg2=source))
-                elif self.shifted_available(op, bit):
-                    out.append(shifted(dst=areg, reg1=areg, reg2=source, shift=bit))
-                else:
-                    out += [plain(dst=areg, reg1=areg, reg2=source)] * (1 << bit)
-            k >>= 1
-            bit += 1
-        return out
+    def add_scaled(self, *args, **kwargs):
+        return self.offsets.add_scaled(*args, **kwargs)
 
     def shifted_available(self, op: str, shift: int) -> bool:
         """
@@ -446,52 +629,8 @@ class signature_emitter:
                 known[(op, shift)] = False
         return known[(op, shift)]
 
-    def add_bytes(self, areg, amount: sym, comp: str) -> list[str]:
-        """
-        Move an address register on by a number of bytes: constants as an
-        immediate; whole vectors with incb/decb where the ISA counts them so;
-        multiples of a register's amount - strides, the vector length (RVV),
-        vector lengths of strides or of vectors, each held in bytes - as
-        shifted or repeated adds and subs of it (add_scaled)
-        """
-        dt = self.ctx.component_dts[comp]
-        esize = adt_size(dt)
-        lines = []
-        for factors, coeff in amount.terms:
-            if not factors:
-                lines.append(self.gen.add_greg_imm(reg=areg, imm=coeff))
-                continue
-            if 0 != coeff % esize:
-                raise specialization_error(
-                    f"moving {comp}'s address by {amount} bytes: {coeff} isn't whole elements")
-            n = coeff // esize
-            if ("VL",) == factors and not self.vector_length_kept:
-                # whole vectors, forward or back: incb or decb
-                lines.append(self.gen.add_greg_voff(reg=areg, offset=n, dt=dt))
-                continue
-            if ("VL",) == factors and n > 1:
-                # RVV: k vector lengths in a register of their own - one add
-                lines.append(self.gen.add_greg_greg(dst=areg, reg1=areg, reg2=self.vl_multiple(dt, n)))
-                continue
-            if ("VL",) == factors:
-                # RVV: the vector length in a register, in bytes
-                source = self.vl_bytes(dt)
-            elif 1 == len(factors) and factors[0].startswith("stride("):
-                source = self.stride_reg(factors[0])
-            elif 2 == len(factors) and "VL" == factors[0] and factors[1].startswith("stride("):
-                # a vector length of strided elements, multiplied once
-                source = self.vl_stride(factors[1], dt)
-            elif ("VL", "VL") == factors:
-                # vector lengths of vectors: a packed layout's next tile
-                source = self.vl_squared(dt)
-            else:
-                raise specialization_error(
-                    f"moving {comp}'s address by {amount} bytes needs run-time arithmetic "
-                    f"(vector length), which is not specialized yet")
-            lines += self.add_scaled(areg, source, n)
-        return lines
-
-    # --- operations ----------------------------------------------------------
+    def add_bytes(self, *args, **kwargs):
+        return self.offsets.add_bytes(*args, **kwargs)
 
     def slices(self, op) -> list[str]:
         """
@@ -1024,118 +1163,26 @@ class signature_emitter:
             return self.constant_stride(nbytes)
         return None
 
-    def vl_elements(self, dt):
-        """
-        A register holding the vector length in elements: RVV's vl, or read
-        once after the ISA's setup where the ISA doesn't keep it (SVE: cntd)
-        """
-        if self.vector_length_kept:
-            return self.gen.isa_setup().vector_length_register(rt=self.rt)
-        key = f"VL in {adt_size(dt)}-byte elements"
-        if key not in self.strides_in:
-            self.recipes.append(("vl_elements", (dt,), self.regions_started))
-            reg = self.greg()
-            try:
-                self.late_setup.append(self.gen.vlen_to_greg(reg=reg, dt=dt))
-            except (NotImplementedError, AttributeError) as err:
-                raise specialization_error(f"reading the vector length: {err}") from err
-            self.strides_in[key] = reg
-        return self.strides_in[key]
+    def vl_elements(self, *args, **kwargs):
+        return self.offsets.vl_elements(*args, **kwargs)
 
-    def vl_stride(self, factor: str, dt):
-        """
-        A register holding the vector length in elements times a stride in
-        bytes: a vector length of strided elements, multiplied once in setup
-        """
-        key = f"VL*{factor}"
-        if key not in self.strides_in:
-            self.recipes.append(("vl_stride", (factor, dt), self.regions_started))
-            vlreg = self.vl_elements(dt)
-            reg = self.greg()
-            self.strides_in[key] = reg
-            self.late_setup.append(self.gen.mul_greg_greg(
-                dst=reg, reg1=vlreg, reg2=self.stride_reg(factor, setup=True)))
-        return self.strides_in[key]
+    def vl_stride(self, *args, **kwargs):
+        return self.offsets.vl_stride(*args, **kwargs)
 
-    def constant_stride(self, nbytes: int):
-        """
-        A register holding a constant stride, loaded once in setup
-        """
-        key = f"constant stride {nbytes}"
-        if key not in self.strides_in:
-            self.recipes.append(("constant_stride", (nbytes,), self.regions_started))
-            reg = self.greg()
-            self.strides_in[key] = reg
-            self.late_setup.append(self.gen.mov_greg_imm(reg=reg, imm=nbytes))
-        return self.strides_in[key]
+    def constant_stride(self, *args, **kwargs):
+        return self.offsets.constant_stride(*args, **kwargs)
 
-    def vl_squared(self, dt):
-        """
-        A register holding the vector length squared, in elements, times the
-        element size in bytes: a vector length of vectors - the next tile
-        along a packed layout's outer index - multiplied once in setup
-        """
-        key = f"VL*VL:{adt_size(dt)}"
-        if key not in self.strides_in:
-            self.recipes.append(("vl_squared", (dt,), self.regions_started))
-            vlreg = self.vl_elements(dt)
-            reg = self.greg()
-            self.strides_in[key] = reg
-            self.late_setup += [self.gen.mul_greg_greg(dst=reg, reg1=vlreg, reg2=vlreg),
-                                self.gen.shift_greg_left(reg=reg,
-                                                         bit_count=adt_size(dt).bit_length() - 1)]
-        return self.strides_in[key]
+    def vl_squared(self, *args, **kwargs):
+        return self.offsets.vl_squared(*args, **kwargs)
 
-    def vl_bytes(self, dt):
-        """
-        A register holding the vector length in bytes, for ISAs keeping the
-        vector length in a register (RVV): computed once per element size,
-        right after the ISA's setup
-        """
-        esize = adt_size(dt)
-        if esize not in self.vlb:
-            self.recipes.append(("vl_bytes", (dt,), self.regions_started))
-            vlreg = self.gen.isa_setup().vector_length_register(rt=self.rt)
-            reg = self.greg()
-            self.vlb[esize] = reg
-            self.late_setup += [self.gen.mov_greg(src=vlreg, dst=reg),
-                                self.gen.shift_greg_left(reg=reg, bit_count=esize.bit_length() - 1)]
-        return self.vlb[esize]
+    def vl_bytes(self, *args, **kwargs):
+        return self.offsets.vl_bytes(*args, **kwargs)
 
-    def vl_multiple(self, dt, k: int):
-        """
-        A register holding k vector lengths in bytes (RVV): an address moves
-        by k vectors in one add - computed once, right after the ISA's setup
-        """
-        if 1 == k:
-            return self.vl_bytes(dt)
-        key = (adt_size(dt), k)
-        if key not in self.vlm:
-            self.recipes.append(("vl_multiple", (dt, k), self.regions_started))
-            base = self.vl_bytes(dt)
-            reg = self.greg()
-            self.vlm[key] = reg
-            if 0 == k & (k - 1):
-                self.late_setup += [self.gen.mov_greg(src=base, dst=reg),
-                                    self.gen.shift_greg_left(reg=reg, bit_count=k.bit_length() - 1)]
-            else:
-                self.late_setup += [self.gen.mov_greg(src=base, dst=reg)] + \
-                    [self.gen.add_greg_greg(dst=reg, reg1=reg, reg2=base) for _ in range(k - 1)]
-        return self.vlm[key]
+    def vl_multiple(self, *args, **kwargs):
+        return self.offsets.vl_multiple(*args, **kwargs)
 
-    def vector_multiple(self, amount, comp: str) -> int | None:
-        """
-        k where an amount of bytes is k whole vector lengths (k > 0) and the
-        ISA keeps the vector length in a register; else None
-        """
-        if not self.vector_length_kept:
-            return None
-        terms = list(amount.terms)
-        if 1 != len(terms) or ("VL",) != tuple(terms[0][0]):
-            return None
-        esize = adt_size(self.ctx.component_dts[comp])
-        coeff = terms[0][1]
-        return coeff // esize if coeff > 0 and 0 == coeff % esize else None
+    def vector_multiple(self, *args, **kwargs):
+        return self.offsets.vector_multiple(*args, **kwargs)
 
     def address(self, op: lsc_addr_compute) -> list[str]:
         """
