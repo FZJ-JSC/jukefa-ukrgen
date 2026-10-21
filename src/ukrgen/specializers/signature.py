@@ -448,11 +448,55 @@ class signature_specializer:
                 raise specialization_error(f"the ISA has no move for {op.rsln}")
         return [op]
 
+    def rebase(self, block: ir_block, rebased: dict) -> list:
+        """
+        After a preloading prologue: each register of a preloaded component
+        moved to its first access in the body, so the loop's offsets start
+        at 0 - where none of its accesses there goes negative (x86 takes no
+        negative offset) and the move is constant or in vector lengths
+        """
+        shift = getattr(block, "preload_shift", None) or {}
+        if not any(shift.values()):
+            return []
+        db, firsts, lows = self.program.offsets, {}, {}
+        for op in block.body:
+            if not isinstance(op, (lsc_load, lsc_store)):
+                continue
+            comp, reg = op.indices[0].component, op.indices[0].indices[0]
+            if not shift.get(comp) or (comp, reg) not in self.positions:
+                continue
+            rel = db.elements_offset(op.offset, self.program.strides.get(comp, {})) - self.positions[(comp, reg)]
+            firsts.setdefault((comp, reg), rel)
+            lows.setdefault((comp, reg), []).append(rel)
+        out = []
+        for (comp, reg), delta in firsts.items():
+            terms = dict(delta.terms)
+            if any(f and ("VL",) != f for f in terms) or not any(terms.values()):
+                continue
+            # none of the register's accesses below it after the move
+            if any(dict((r - delta).terms).get((), 0) < 0 or dict((r - delta).terms).get(("VL",), 0) < 0
+                   for r in lows[(comp, reg)]):
+                continue
+            out.append(lsc_addr_compute(comp, reg, reg, delta, scalar_tile))
+            self.positions[(comp, reg)] = self.positions[(comp, reg)] + delta
+            rebased[(comp, reg)] = delta
+        return out
+
     def adapt_block(self, block: ir_block):
+        rebased = {}
         for section in ("prologue", "body", "epilogue", "tail", "subtail"):
             ops = []
             for op in getattr(block, section):
                 ops += self.adapt(op)
+            if "prologue" == section:
+                # the loop's offsets from 0: registers moved past the preload
+                ops += self.rebase(block, rebased)
+            if "epilogue" == section:
+                # and back after the last iteration: the tail starts where it
+                # does when the loop (and its prologue) didn't run
+                for (comp, reg), delta in rebased.items():
+                    ops.append(lsc_addr_compute(comp, reg, reg, sym.const(0) - delta, scalar_tile))
+                    self.positions[(comp, reg)] = self.positions[(comp, reg)] - delta
             setattr(block, section, ops)
             # column pointers are computed per section, in the same registers;
             # a scratch address placed in one section isn't relied on in the next
