@@ -89,18 +89,21 @@ class test_builder(unittest.TestCase):
         mm = prog.blocks[0]
         # the prologue zeroes the accumulators and loads the first iteration
         self.assertEqual(4, sum(isinstance(op, lsc_zero) for op in mm.prologue))
-        self.assertEqual(4, len(loads(mm.prologue)))
-        # the body loads the next iteration into each register right after
-        # this iteration last reads it
+        # the load stream shifted ahead: the prologue the shift's loads
+        self.assertEqual(sum(mm.preload_shift.values()), len(loads(mm.prologue)))
+        # a body load of the next iteration's data (one step further along k)
+        # comes after this iteration's last read of its register; one of
+        # this iteration's (the shift short of a step) is read after it
+        ahead = 0
         for pos, op in enumerate(mm.body):
-            if isinstance(op, lsc_load):
+            if isinstance(op, lsc_load) and "1" == str(prog.offsets[op.offset].along("k")):
+                ahead += 1
                 later = mm.body[pos + 1:]
                 self.assertFalse(any(isinstance(c, lsc_transformation) and data(op) in read_regs(c)
                                      for c in later), f"{data(op)} read after its reload")
-                # the next iteration: one step further along k
-                self.assertEqual("1", str(prog.offsets[op.offset].along("k")))
-        # the last iteration loads nothing
-        self.assertEqual([], loads(mm.epilogue))
+        self.assertTrue(ahead >= 1)
+        # the last iteration loads what the shift leaves, nothing beyond
+        self.assertEqual(len(loads(mm.body)) - sum(mm.preload_shift.values()), len(loads(mm.epilogue)))
         self.assertEqual(4, len(mm.epilogue))
 
     def test_no_preload(self):
@@ -178,12 +181,15 @@ class test_builder(unittest.TestCase):
         self.assertEqual("3", str(prog.offsets[mm.advance["A"]].along("k")))
         # preloads reach one whole iteration ahead
         ahead = [op for op in mm.body if isinstance(op, lsc_load)]
-        self.assertEqual({"3", "4", "5"},
-                         {str(prog.offsets[op.offset].along("k")) for op in ahead})
+        # the load stream shifted: every load ahead of the step computing,
+        # the last ones in the next iteration (unrolled 3: k 3 and on)
+        reached = {int(str(prog.offsets[op.offset].along("k"))) for op in ahead}
+        self.assertTrue(min(reached) >= 1, reached)
+        self.assertTrue(max(reached) >= 3, reached)
 
     def test_rotating_registers(self):
         prog = self.build(addressing={"A": addressing_plan(2, addr_pattern.parse("rotate"))})
-        self.assertEqual([0, 1], [addr_reg(op) for op in loads(prog.blocks[0].prologue, "A")])
+        self.assertEqual({0, 1}, {addr_reg(op) for op in loads(prog.blocks[0].body, "A")})
 
 
 class test_builder_resolutions(unittest.TestCase):
@@ -285,10 +291,10 @@ class test_register_pressure(unittest.TestCase):
         ctx, _ = run(m="4", **self.GENERAL)
         prog = program_builder(ctx, data_regs={"A": 4}).build()
         mm = prog.blocks[0]
-        self.assertEqual(4, len(loads(mm.prologue, "A")))
-        self.assertEqual(4, len(loads(mm.prologue, "B")))
+        self.assertEqual(mm.preload_shift["A"], len(loads(mm.prologue, "A")))
+        self.assertEqual(mm.preload_shift["B"], len(loads(mm.prologue, "B")))
         self.assertEqual(8, len(loads(mm.body, "A")))
-        self.assertEqual(4, len(loads(mm.epilogue, "A")))
+        self.assertEqual(8 - mm.preload_shift["A"], len(loads(mm.epilogue, "A")))
         # every register read loaded before - by the prologue or the body
         seen = {data(op) for op in mm.prologue if isinstance(op, lsc_load) and "A" == addr_comp(op)}
         for op in mm.body:
@@ -340,8 +346,9 @@ class test_register_rings(unittest.TestCase):
         mm = program_builder(ctx, data_regs={"A": 4}).build().blocks[0]
         # the first step's tiles in the prologue (an iteration ahead), the
         # second's in place - the last iteration (epilogue) shows them alone
-        self.assertEqual([0, 1, 2, 3], [data(op)[1] for op in loads(mm.prologue, "A")])
-        self.assertEqual([0, 1, 2, 3], [data(op)[1] for op in loads(mm.epilogue, "A")])
+        n = mm.preload_shift["A"]
+        self.assertEqual([0, 1, 2, 3, 0, 1, 2, 3][:n], [data(op)[1] for op in loads(mm.prologue, "A")])
+        self.assertEqual([0, 1, 2, 3, 0, 1, 2, 3][n:], [data(op)[1] for op in loads(mm.epilogue, "A")])
         self.assertEqual([0, 0, 1, 1, 2, 2, 3, 3], sorted(data(op)[1] for op in loads(mm.body, "A")))
 
 

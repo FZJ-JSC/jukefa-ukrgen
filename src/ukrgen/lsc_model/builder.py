@@ -1163,72 +1163,82 @@ class program_builder:
         if not (self.preload and block.preload):
             out.body = _flatten(items)
         else:
-            # The prologue loads the first iteration's streamed data. The body
-            # then loads the next iteration's into each register as soon as
-            # this iteration has last read it; the epilogue is the last
-            # iteration, loading nothing ahead.
-            last_read: dict[vreg, int] = {}
+            # Preloads as ukrgen v1 placed them, correct by construction: per
+            # component its first n streamed loads - the first iteration's -
+            # move into the prologue; the body keeps every other load where
+            # it is and ends with the next iteration's first n loads, a
+            # pointer only advancing (the schedulers move them up to their
+            # registers' last reads); the last iteration is the body
+            # without them. The first n loads must go to distinct registers
+            # (two ahead into one would overwrite each other): n stops
+            # before a register's second occupancy, counts a register's
+            # lanes whole, and asks for a step of k (--COMP-max-preload
+            # steps), as far as that allows.
+            streams: dict[str, list[int]] = {}
             for pos, item in enumerate(items):
-                if isinstance(item, compute_item):
-                    for reg in item.reads:
-                        last_read[reg] = pos
-            #
-            # A register's first load in the iteration is the one whose value
-            # before it belongs to the last iteration: that load moves - the
-            # first iteration's into the prologue, the next's after this
-            # iteration's last read of the register. A component with a
-            # register per tile of the iteration moves every load so; one
-            # reusing registers within the iteration (a ring a step or two
-            # deep, the loop unrolled further) moves its registers' first
-            # loads, the later ones staying for the scheduler to move up to
-            # their register's previous last read.
-            #
-            # Where general registers are few (x86's 16) the next iteration's
-            # addresses of a reused register's loads don't fit: there, a
-            # component moves its loads only with a register per tile.
-            first_load: set[int] = set()
-            loaded: set = set()
-            for item in items:
-                if isinstance(item, access_group) and item.streamed and item.reg not in loaded:
-                    loaded.add(item.reg)
-                    first_load.add(id(item))
-            try:
-                gregs = len(self.gen.get_reg_tracker().available_regs.get("greg", []))
-            except Exception:
-                gregs = 32
-            tiles: dict[str, set] = {}
-            for item in items:
                 if isinstance(item, access_group) and item.streamed:
-                    tiles.setdefault(item.component, set()).add(item.coord)
-            per_tile = {c for c, t in tiles.items()
-                        if self.data_regs.get(c, len(self.coords[c])) >= len(t)}
-
-            def lanes(item):
-                return any(getattr(op, "properties", {}).get("lane") is not None for op in item.ops)
-
-            def preloaded(item):
-                if not (isinstance(item, access_group) and item.streamed):
-                    return False
-                # lane by lane loads (fused by lanefuse where contiguous)
-                # keep together: moved only with a register per tile
-                if gregs <= 16 or lanes(item):
-                    return item.component in per_tile
-                return id(item) in first_load
-
-            ahead: dict[int, list[access_group]] = {}
-            for item in items:
-                if preloaded(item):
-                    out.prologue += item.ops
-                    ahead.setdefault(last_read.get(item.reg, len(items) - 1), []).append(item)
+                    streams.setdefault(item.component, []).append(pos)
+            shift: dict[str, int] = {}
+            for comp, stream in streams.items():
+                # occupancies: a register's loads with no read of it between
+                # them fill one value (its lanes); a load after the register
+                # was read is its next occupancy
+                def whole(r):
+                    # a register's lanes are elements of it (B0.el1): the
+                    # register itself
+                    return str(r).split(".el")[0]
+                bounds, seen, prev, prev_pos, lanes_in = [], set(), None, None, set()
+                for q, pos in enumerate(stream):
+                    reg = whole(items[pos].reg)
+                    # a load into one lane (ld1 {v.d}[1]) - not a dup from a
+                    # lane, which writes the whole register
+                    from ..models.load_store_operations import ldst_modifier
+                    lane = next((op.properties.get("lane") for op in items[pos].ops
+                                 if isinstance(op, lsc_load)
+                                 and ldst_modifier.lane in getattr(op, "mods", ())), None)
+                    full = (reg, lane)
+                    if lane is not None:
+                        # a lane: disjoint from the register's other lanes - a
+                        # new occupancy only where a lane repeats
+                        new = reg != prev or full in lanes_in
+                    else:
+                        new = reg != prev or any(
+                            whole(r) == reg for p in range(prev_pos + 1, pos)
+                            for r in getattr(items[p], "reads", ()))
+                    if new:
+                        if reg in seen:
+                            break
+                        seen.add(reg)
+                        bounds.append(q)
+                        lanes_in = set()
+                    lanes_in.add(full)
+                    prev, prev_pos = reg, pos
+                else:
+                    q = len(stream)
+                limit = q if bounds else 0
+                want = self.tiles_per_step(comp) * int(self.max_preload.get(comp, 1))
+                # whole occupancies up to what's asked
+                ends = [b for b in bounds[1:]] + [limit]
+                n = 0
+                for end in ends:
+                    if end <= max(want, ends[0]) and end <= limit:
+                        n = end
+                shift[comp] = n
+            out.preload_shift = dict(shift)
+            ahead_pos = {pos for comp, stream in streams.items() for pos in stream[:shift[comp]]}
+            for comp, stream in streams.items():
+                for pos in stream[:shift[comp]]:
+                    out.prologue += items[pos].ops
             for pos, item in enumerate(items):
-                if preloaded(item):
+                if pos in ahead_pos:
                     continue
                 ops = _flatten([item])
                 out.body += ops
                 # its own copies: the schedulers rename registers in place
                 out.epilogue += [_clone(o) for o in ops]
-                for group in ahead.get(pos, []):
-                    out.body += [self.shifted(op, k, iteration) for op in group.ops]
+            for comp, stream in streams.items():
+                for pos in stream[:shift[comp]]:
+                    out.body += [self.shifted(op, k, iteration) for op in items[pos].ops]
 
         # The tail runs the main implementation one operation at a time along
         # the loop index, for what the unrolled loop leaves over. With an
