@@ -1888,10 +1888,13 @@ class signature_emitter:
         ez, nz = comparison.EZ, comparison.NZ
 
         def counted(reg, label, part, done):
+            # the count decremented first: the branch at the end reads a value
+            # an iteration old - no wait on the decrement before it (the body
+            # doesn't read the counter; every ISA's branch tests the register)
             code.extend(lines(gen.cb(reg1=reg, reg2=None, cmp=ez, label=done)))
             code.extend(lines(gen.label(label=label)))
-            code.extend(part)
             code.extend(lines(gen.add_greg_imm(reg=reg, imm=-1)))
+            code.extend(part)
             code.extend(lines(gen.cb(reg1=reg, reg2=None, cmp=nz, label=label)))
             code.extend(lines(gen.label(label=done)))
 
