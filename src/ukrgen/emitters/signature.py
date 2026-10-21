@@ -147,7 +147,7 @@ class signature_emitter:
     :param program: the program to specialize
     """
 
-    def __init__(self, ctx, program: ir_program, preallocate=()):
+    def __init__(self, ctx, program: ir_program, preallocate=(), keep_params=()):
         self.ctx = ctx
         self.gen = ctx.gen
         self.program = program
@@ -173,6 +173,9 @@ class signature_emitter:
         # setup-time values a previous emission found it needed: allocated
         # before any region, in the tracker every region inherits
         self.preallocate = list(preallocate)
+        #: stack parameters needed before the dispatch (setup's values):
+        #: loaded at entry, not deferred
+        self.keep_params = set(keep_params)
         self.recipes: list[tuple[str, tuple, bool]] = []
         self.regions_started = False
         self.region_loads: list[str] = []
@@ -1490,7 +1493,18 @@ class signature_emitter:
             self.release_params(later, set(loops[i + 1:]))
             self.release_indexes(set().union(*[self.index_keys([x]) for x in prefix[i + 1:]],
                                              *[self.index_keys(c.blocks) for c in self.program.cases]))
-        self.dispatch_code = self.dispatch() if self.program.cases else []
+        # the deferred stack parameters into registers of their own, right
+        # before the dispatch: their offsets once the save area is known
+        loads = []
+        self.deferred_regs = {}
+        for name, (off, named) in getattr(self, "deferred", {}).items():
+            reg = self.greg()
+            for n in named:
+                self.params[n] = reg
+            self.live_params.add(name)
+            self.deferred_regs[name] = (off, reg)
+            loads.append(f"@@loadparam {name}@@")
+        self.dispatch_code = loads + (self.dispatch() if self.program.cases else [])
         # every case starts with the registers where the dispatch leaves them;
         # the cases exclude each other, so they share the registers left, and
         # a parameter's register can become an address register in each
@@ -1524,6 +1538,11 @@ class signature_emitter:
         for tag, regs in getattr(isa, "clobbers", dict)().items():
             self.cc.add_clobber(tag, regs)
         save, load, restore = self.fn.get_boilerplate(cc=self.cc)
+        shift = getattr(self.fn, "sp_shift", 0)
+        loaded = {f"@@loadparam {name}@@": [l.strip() for l in self.gen.load_greg(
+                      areg=self.gen.greg(self.cc.spreg), offset=off + shift, dst=reg).splitlines()
+                      if l.strip()]
+                  for name, (off, reg) in getattr(self, "deferred_regs", {}).items()}
         # what emission found it needs: right after the ISA's setup
         late = [l.strip() for chunk in self.late_setup for l in chunk.splitlines() if l.strip()]
         setup = setup[:self.isa_setup_lines] + late + setup[self.isa_setup_lines:]
@@ -1533,7 +1552,7 @@ class signature_emitter:
             teardown=lines(isa.teardown(rt=self.rt, dt=dt)), data=lines(isa.data()),
             bases=bases,
             registers={k: str(v) for k, v in self.phys.items()},
-            code=self.control(blocks, cases),
+            code=[x for l in self.control(blocks, cases) for x in loaded.get(l.strip(), [l])],
             # the function's parameters: C's storages' aliases are C's
             params={n: str(r) for n, r in self.params.items()
                     if self.param_comp(n) not in getattr(self, "aliases", {})},
@@ -1582,6 +1601,29 @@ class signature_emitter:
         # the boilerplate finds where parameters passed on the stack are
         # loaded through these aliases, which releasing a register drops
         self.param_aliases = {n: self.rt.aliased_regs["greg"][n] for n in names}
+        # parameters passed on the stack no block before the cases uses
+        # (beta's and C's on x86): loaded at the dispatch - outside any loop,
+        # where the epilogue first needs them - not held from entry
+        self.deferred = {}
+        if self.program.cases:
+            used = self.memory_comps(self.program.blocks)
+            for name, (tag, off) in list(getattr(self.fn, "required_loads", {}).items()):
+                comp = self.param_comp(name)
+                if "greg" != tag or comp is None or comp in used or name not in self.params \
+                        or name in self.keep_params:
+                    continue
+                reg = self.params[name]
+                idx = self.rt.aliased_regs["greg"].pop(name, None)
+                if idx is None:
+                    continue
+                self.rt.unuse_reg("greg", idx)
+                self.param_aliases.pop(name, None)
+                del self.fn.required_loads[name]
+                named = [n for n, r in self.params.items() if str(r) == str(reg)]
+                for n in named:
+                    del self.params[n]
+                self.live_params.discard(name)
+                self.deferred[name] = (off, named)
 
     def param_comp(self, name: str):
         return name[name.index("(") + 1:].split(",")[0].rstrip(")") if "(" in name else None
@@ -1840,12 +1882,26 @@ def emit_program(ctx, program: ir_program) -> emitted_program:
     emission first needed one inside a region, emit again with every such
     value allocated before the regions
     """
-    emitter = signature_emitter(ctx, program)
-    out = emitter.emit()
+    keep: set[str] = set()
+
+    def emit_once(preallocate=()):
+        # a stack parameter deferred to the dispatch but needed earlier (a
+        # stride setup computes with): emitted again, that one from entry
+        while True:
+            emitter = signature_emitter(ctx, program, preallocate=preallocate, keep_params=keep)
+            try:
+                return emitter, emitter.emit()
+            except KeyError as err:
+                name = err.args[0] if err.args else None
+                deferred = getattr(emitter, "deferred", {})
+                key = next((k for k, (_, named) in deferred.items() if name == k or name in named), None)
+                if key is None or key in keep:
+                    raise
+                keep.add(key)
+
+    emitter, out = emit_once()
     for _ in range(3):
         if not any(late for _, _, late in emitter.recipes):
             return out
-        emitter = signature_emitter(ctx, program,
-                                    preallocate=[(n, a) for n, a, _ in emitter.recipes])
-        out = emitter.emit()
+        emitter, out = emit_once([(n, a) for n, a, _ in emitter.recipes])
     raise specialization_error("setup's registers kept changing between emissions")
