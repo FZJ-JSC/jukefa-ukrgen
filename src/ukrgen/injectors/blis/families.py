@@ -449,7 +449,7 @@ def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: in
     params = {"isa": isa, "ukr": "pack", "n": "1"}
     params.update(fam.params)
     params.update(case_params)
-    for comp in ("X", "Y", "kappa"):
+    for comp in ("X", "Y"):
         params[f"{comp}-data-type"] = dt
     params["m"] = str(m)
     if fam.min_inflight:
