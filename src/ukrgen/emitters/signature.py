@@ -1054,6 +1054,10 @@ class signature_emitter:
         areg = self.aregs[(comp, reg)]
         elements = self.program.offsets.elements_offset(op.offset, self.program.strides.get(comp, {}))
         rel = dict((elements - self.positions[(comp, reg)]).terms)
+        scaled = op.properties.get("scaled_index")
+        if scaled is not None:
+            # the stride times its count through the index register
+            rel.pop((scaled[0],), None)
         vl = rel.pop(("VL",), 0)
         if vl:
             line = self._mem(op, self.reg(op.indices[1], op.rtypes[1]), areg, 0, voffset=vl)
@@ -1228,10 +1232,23 @@ class signature_emitter:
         """
         dt = self.ctx.component_dts[op.indices[0].component]
         lane = op.properties.get("lane")
+        scaled = op.properties.get("scaled_index")
         for sig in sorted(_sigs(op.sigs), key=lambda s: len(s.modifiers)):
             mods = {m.name for m in sig.modifiers} - {"MASK", "STRUCT"}
             kwargs = {}
-            if voffset is not None:
+            if scaled is not None:
+                # base + the stride's register x its count (+ the immediate)
+                name, count = scaled
+                if not {"GOFFSET", "SCALEOFFSET"} <= mods \
+                        or mods - {"GOFFSET", "SCALEOFFSET", "IOFFSET"} \
+                        or (bool(immediate) != ("IOFFSET" in mods)) \
+                        or sig.structural_params.get("scale_factor") != count \
+                        or voffset is not None or increment is not None:
+                    continue
+                kwargs.update(offreg=self.params[name], scale_factor=count)
+                if immediate:
+                    kwargs["ioffset"] = immediate
+            elif voffset is not None:
                 if {"VOFFSET"} != mods:
                     continue
                 kwargs["voffset"] = voffset

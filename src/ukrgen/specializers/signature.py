@@ -252,6 +252,16 @@ class signature_specializer:
                 elif 1 == len(strided) and 1 == len(singles):
                     lane_factor = singles[0]
             lane_count = strided.pop((lane_factor,)) if lane_factor is not None else None
+            # a stride times a count the ISA scales an index register by (x86:
+            # 1, 2, 4, 8): the base pointer and the stride's register as
+            # index - no pointer of its own (docs/REG_USE_OPTIMIZATION.md, 2c)
+            if lane_factor is None and not vl and 1 == len(strided):
+                (factors, count), = strided.items()
+                scales = {s.structural_params.get("scale_factor") for s in usable
+                          if "SCALEOFFSET" in {m.name for m in s.modifiers}}
+                if 1 == len(factors) and count in scales:
+                    op.properties["scaled_index"] = (factors[0], count)
+                    strided = {}
             key = (comp, reg, tuple(sorted(strided.items())))
             columns = [k for k in self.pointer_regs if k[:2] == (comp, reg) and "walk" != k[2]]
             if strided and key not in self.pointer_regs and len(columns) >= self.column_pointers():
