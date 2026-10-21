@@ -195,8 +195,12 @@ class list_scheduler:
     :param specs: distance specifications
     """
 
-    def __init__(self, specs: list[distance_specification], model=None):
+    def __init__(self, specs: list[distance_specification], model=None, buckets=None):
         self.specs = specs
+        #: per class a bucket's size (--sched-buckets "vf:5"): a cycle issuing
+        #: one of the class fills it by one, a cycle without drains it by one;
+        #: the class is preferred while it isn't full and waits while it is
+        self.buckets = dict(buckets or {})
         #: an issue model (issue.issue_model): placed cycle by cycle, the
         #: distances in cycles; None: one instruction after another
         self.model = model
@@ -307,11 +311,13 @@ class list_scheduler:
         regs = _register_state(ops, budget) if budget else None
         over = 0
         cycle = 0
+        levels = {c: 0 for c in self.buckets}
         def earliest(j):
             return max([cycle_of[e.src] + max(e.distance, 1 if dept.RAW == e.dep else 0)
                         for e in preds[j]] or [0])
         while len(order) < n:
             used: set[int] = set()
+            issued: set[str] = set()
             while len(order) < n:
                 ready = [j for j in range(n) if j not in cycle_of
                          and all(e.src in cycle_of for e in preds[j])]
@@ -334,11 +340,23 @@ class list_scheduler:
                         over = max(over, regs.excess(j))
                         candidates = [j]
                 pick = None
-                for j in sorted(candidates, key=lambda j: (-prio[j], j)):
-                    slot = self.model.take(classes[j], used)
+                # buckets: a class not full first, a full one only where no
+                # other instruction issues this cycle
+                full = {c for c, size in self.buckets.items() if levels[c] >= size}
+                filling = {c for c in self.buckets if c not in full}
+                order_key = lambda j: (classes[j] not in filling, -prio[j], j)
+                ranked = sorted(candidates, key=order_key)
+                if full and any(classes[j] not in full for j in ranked):
+                    ranked = [j for j in ranked if classes[j] not in full] + \
+                             ([j for j in ranked if classes[j] in full] if not used and not issued
+                              and not any(self.model.take(classes[k], used, issued) is not None
+                                          for k in ranked if classes[k] not in full) else [])
+                for j in ranked:
+                    slot = self.model.take(classes[j], used, issued)
                     if slot is not None:
                         pick = j
                         used.add(slot)
+                        issued.add(classes[j])
                         break
                 if pick is None:
                     break
@@ -346,6 +364,8 @@ class list_scheduler:
                 order.append(pick)
                 if regs is not None:
                     regs.place(pick)
+            for c, size in self.buckets.items():
+                levels[c] = min(size, levels[c] + 1) if c in issued else max(0, levels[c] - 1)
             if not used:
                 # nothing issues: on to the cycle the first ready one may
                 pending = [earliest(j) for j in range(n) if j not in cycle_of

@@ -83,6 +83,17 @@ budget and the window hold as before. The instructions are emitted cycle
 after cycle; the distances are cycles; carried dependencies are measured
 across the loop's cycles.
 
+Forbidden pairs follow a `;`: `"2:vl|vs|vf,sl,i;vf-sl"` - a vector FP
+operation and a scalar load never in the same cycle, though each has a slot.
+
+Buckets (`--sched-buckets "vf:5"`, family key `buckets`) model a back end's
+queue: a cycle issuing an instruction of the class fills its bucket by one,
+a cycle without drains it by one; the class goes first while its bucket
+isn't full and waits while it is (unless nothing else issues).
+
+Classes come from the registers' machine types (`rtypes`: VEC, FP, GP,
+TILE) - a `vfmacc.vf` is `vf`, a `vle` `vl`, an `fld` `sl`.
+
 Examples:
 
     "2:vl|vs|vf,sl,i"        SpacemiT K1 (X60): a vector load, store or FP

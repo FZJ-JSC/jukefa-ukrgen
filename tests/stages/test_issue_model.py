@@ -34,6 +34,32 @@ class test_issue_model(unittest.TestCase):
         self.assertEqual(7, issue_model("vl,vl,sl,vf,vf,vi,i").width)
         with self.assertRaisesRegex(ValueError, "classes are"):
             issue_model("2:vl|xx,sl")
+        # forbidden pairs: a scalar load never beside a vector FP operation
+        m = issue_model("2:vl|vs|vf,sl,i;vf-sl")
+        self.assertIsNone(m.take("sl", {0}, {"vf"}))
+        self.assertEqual(1, m.take("sl", {0}, {"vl"}))
+
+    def test_classes(self):
+        # by the registers' machine types: the K1 loop's vfmacc.vf a vector FP
+        # operation, its vle a vector load, its fld a scalar one
+        from ukrgen.injectors.blis.families import configuration, build_gemm
+        import ukrgen.schedulers.list_scheduler as L
+        from ukrgen.schedulers.issue import classify
+        seen = set()
+        orig = L.list_scheduler.place_cycles
+        def spy(sched, ops, *a, **kw):
+            seen.update(classify(op) for op in ops)
+            return orig(sched, ops, *a, **kw)
+        L.list_scheduler.place_cycles = spy
+        try:
+            cfg = configuration.from_files({("gemm", "FP64"): os.path.join(ROOT, "ukrconfig/rvv/fma_vf/dgemm.yaml")})
+            vm = copy.deepcopy(next(f for f in cfg.families if "vm" == f.name))
+            vm.sizes = {"m": [2], "n": [14]}
+            vm.params["sched-cycle-slots"] = "2:vl|vs|vf,sl,i"
+            build_gemm("rvv", "ukrgen_rvv", vm)
+        finally:
+            L.list_scheduler.place_cycles = orig
+        self.assertTrue({"vf", "vl", "sl"} <= seen, seen)
 
     @unittest.skipUnless(shutil.which("riscv64-linux-gnu-gcc") and shutil.which("qemu-riscv64-static"),
                          "needs the RISC-V cross toolchain and qemu")

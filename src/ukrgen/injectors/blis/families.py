@@ -95,7 +95,7 @@ def parse_sizes(value) -> list[int]:
 
 #: family keys and the ukrgen parameters they set
 KEYS = {"loop-order": "order", "resolve-order": "resolve-order",
-        "schedule": "distances", "cycle-slots": "sched-cycle-slots", "preset": "tileop-preset",
+        "schedule": "distances", "cycle-slots": "sched-cycle-slots", "buckets": "sched-buckets", "preset": "tileop-preset",
         "vectorize": "tileop-vectorize"}
 #: per component: {component: value}
 PER_COMPONENT = {"max-data-regs": "{c}-max-data-regs", "max-preload": "{c}-max-preload",

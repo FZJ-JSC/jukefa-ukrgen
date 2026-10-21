@@ -28,6 +28,16 @@ class issue_model:
 
     def __init__(self, spec: str):
         text = spec.replace(" ", "")
+        # ";a-b,c-d": classes never issued in the same cycle - the K1's vector
+        # FP operation and scalar load, say, though each has a slot
+        self.conflicts: set[frozenset] = set()
+        if ";" in text:
+            text, pairs = text.split(";", 1)
+            for pair in filter(None, pairs.split(",")):
+                a, _, b = pair.partition("-")
+                if a not in CLASSES or b not in CLASSES:
+                    raise ValueError(f"--sched-cycle-slots: conflict {pair} - classes are {', '.join(CLASSES)}")
+                self.conflicts.add(frozenset((a, b)))
         width = None
         if ":" in text.split(",")[0]:
             head, text = text.split(":", 1)
@@ -57,12 +67,15 @@ class issue_model:
             return list(range(len(self.slots)))
         return sorted(named, key=lambda s: len(self.slots[s]))
 
-    def take(self, cls: str, used: set[int]) -> int | None:
+    def take(self, cls: str, used: set[int], issued: set[str] = frozenset()) -> int | None:
         """
         The slot an instruction takes in a cycle whose slots used are used, or
-        None where none is left or the cycle is full
+        None where none is left, the cycle is full, or a class it can't
+        issue beside is in it
         """
         if len(used) >= self.width:
+            return None
+        if any(frozenset((cls, other)) in self.conflicts for other in issued):
             return None
         return next((s for s in self.accepts(cls) if s not in used), None)
 
@@ -71,7 +84,9 @@ def classify(op) -> str:
     """
     An instruction's class: by its operation and its registers
     """
-    types = set(getattr(op, "reg_types", None) or [])
+    # the registers' machine types (rtypes: GP, FP, VEC, TILE) - reg_types
+    # holds their roles in the IR (address, data)
+    types = {t for t in (getattr(op, "rtypes", None) or []) if t is not None}
     vector = bool(types & {rgt.VEC})
     tile = bool(types & {rgt.TILE})
     if isinstance(op, lsc_load):

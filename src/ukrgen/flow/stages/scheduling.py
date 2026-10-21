@@ -65,6 +65,12 @@ class schedule_stage(stage):
                             "\"2:vl|vs|vf,sl,i\": a vector load, store or FP operation, a "
                             "scalar load and an integer one, two a cycle. Instructions placed "
                             "cycle by cycle, the distances in cycles")
+        self.params["sched-buckets"] = stage_param(
+                value=None, required=False,
+                description="With an issue model: per class a bucket - \"vf:5,vl:2\" - a cycle "
+                            "issuing one of the class fills it by one, a cycle without drains it; "
+                            "the class preferred while it isn't full, waiting while it is (a "
+                            "vector unit's queue kept fed, not overfed)")
         self.params["mru-window"] = stage_param(
                 value=None, required=False,
                 description="With MRU: how far ahead of the first instruction not yet placed one "
@@ -109,7 +115,11 @@ class schedule_stage(stage):
                 raise stage_error(str(err)) from err
         else:
             model = None
-        scheduler = list_scheduler(specs, model)
+        buckets = {}
+        for item in filter(None, (self.params["sched-buckets"].value or "").replace(" ", "").split(",")):
+            cls, _, size = item.partition(":")
+            buckets[cls] = int(size or 1)
+        scheduler = list_scheduler(specs, model, buckets)
         lines = []
 
         for program in self.context.programs:
