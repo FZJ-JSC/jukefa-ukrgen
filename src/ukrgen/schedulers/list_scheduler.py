@@ -144,8 +144,6 @@ class schedule_report:
                for s, r, a, n in zip(self.specs, self.requested, self.achieved, self.short) if n]
         if self.over_budget:
             out.append(f"register budget exceeded by up to {self.over_budget}")
-        if getattr(self, "cycles", None):
-            out.append(f"{self.cycles} cycles as the issue model issues them")
         return out
 
 

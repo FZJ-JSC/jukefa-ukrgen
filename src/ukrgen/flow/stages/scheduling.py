@@ -150,9 +150,14 @@ class schedule_stage(stage):
                                 op.block = inner
                                 op.refresh()
                         where = f"{(case.label + ': ') if case else ''}{block.name} {section}"
+                        # what fell short is expected where registers are few
+                        # (straight-line code): --debug or --print-schedule
                         for warning in report.warnings():
-                            self.log.warning(f"{where}: {warning}")
+                            self.log.debug(f"{where}: {warning}")
                             lines.append(f"// {where}: {warning}")
+                        if getattr(report, "cycles", None):
+                            lines.append(f"// {where}: {report.cycles} cycles as the issue model "
+                                         f"issues them")
                         if ops and specs:
                             lines.append(f"// {where}: " + ", ".join(
                                 f"{s} reached {a}" for s, a in zip(report.specs, report.achieved)
