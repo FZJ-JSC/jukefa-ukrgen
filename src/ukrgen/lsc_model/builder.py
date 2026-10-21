@@ -1216,7 +1216,11 @@ class program_builder:
                 else:
                     q = len(stream)
                 limit = q if bounds else 0
-                want = self.tiles_per_step(comp) * int(self.max_preload.get(comp, 1))
+                # a step of k's loads (tiles_per_step counts the unrolled
+                # iteration's), --COMP-max-preload steps of them
+                steps = max(1, int(self.ctx.dims.get(block.loop_index, 1) or 1))
+                per_step = max(1, -(-self.tiles_per_step(comp) // steps))
+                want = per_step * int(self.max_preload.get(comp, 1))
                 # whole occupancies up to what's asked
                 ends = [b for b in bounds[1:]] + [limit]
                 n = 0
