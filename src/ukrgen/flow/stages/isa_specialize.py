@@ -30,11 +30,21 @@ class isa_specialize_stage(stage):
         self.params["print-specialized-ir"] = stage_param(
                 value=False, default=False, flag=True, required=False,
                 description="Print the IR specialized for the ISA and exit")
+        self.params["max-imm-offset"] = stage_param(
+                value=None, required=False,
+                description="Largest immediate offset in bytes, either sign, a load or store "
+                            "uses (the number in the instruction on RISC-V and x86; AArch64 "
+                            "encodes it divided by the access size): beyond it the access's "
+                            "address register walks forward - the K1 seems to pay for fld "
+                            "offsets above ~104 bytes")
 
     def progress(self):
         try:
             for program in self.context.programs:
-                signature_specializer(self.context, program).specialize()
+                sp = signature_specializer(self.context, program)
+                limit = self.params["max-imm-offset"].value
+                sp.max_imm_offset = None if limit in (None, "") else int(limit)
+                sp.specialize()
         except specialization_error as err:
             raise stage_error(f"specializing for the ISA: {err}") from err
         text = "\n\n".join(p.render() for p in self.context.programs)

@@ -143,14 +143,17 @@ def _vl_form(sig) -> bool:
     return {m.name for m in sig.modifiers} - {"MASK"} == {"VOFFSET"} and "voffset" in sig.operands
 
 
-def _takes(sig, immediate: int) -> bool:
+def _takes(sig, immediate: int, limit: int | None = None) -> bool:
     """
     Whether a load or store signature takes an access at this immediate offset
+    - within limit bytes, either sign, where one is given (--max-imm-offset)
     """
     form = _offset_forms(sig)
     if "plain" == form:
         return 0 == immediate
     if "ioffset" == form:
+        if limit is not None and abs(immediate) > limit:
+            return False
         return _accepts(sig, "ioffset", immediate)
     return False
 
@@ -216,6 +219,7 @@ class signature_specializer:
 
     def adapt_access(self, op) -> list:
         comp, reg = op.indices[0].component, op.indices[0].indices[0]
+        assigned = reg
         db, strides = self.program.offsets, self.program.strides.get(comp, {})
         sigs = _sigs(op.sigs)
         usable = [s for s in sigs if _usable(self.ctx, s)]
@@ -319,6 +323,13 @@ class signature_specializer:
                 self.walking[wkey] = (ptr, lane_count)
                 reg = walker
 
+        if reg != assigned:
+            # the access goes through a column or walking pointer: what is
+            # left is from where that pointer stands - its walks included
+            now = dict((db.elements_offset(op.offset, strides) - self.positions[(comp, reg)]).terms)
+            if not [f for f in now if f and ("VL",) != f]:
+                vl = now.pop(("VL",), 0)
+                rel = now
         const = rel.get((), 0)
         immediate = const * adt_size(self.ctx.component_dts[comp])
 
@@ -341,7 +352,8 @@ class signature_specializer:
                 rvl, rconst = rest.pop(("VL",), 0), rest.pop((), 0)
                 if not rest and ((not rconst and (not rvl or vl_taken(rvl))) or
                                  (not rvl and any(_takes(s, rconst * adt_size(
-                                     self.ctx.component_dts[comp])) for s in usable))):
+                                     self.ctx.component_dts[comp]),
+                                     getattr(self, "max_imm_offset", None)) for s in usable))):
                     op.indices[0] = lsc_reg_index(comp, [scratch])
                     return inserted + [op]
             # placed at the constant only where a signature takes the vector
@@ -360,16 +372,18 @@ class signature_specializer:
             op.indices[0] = lsc_reg_index(comp, [scratch])
             return inserted + [op]
 
-        if not any(_takes(s, immediate) for s in usable):
+        if not any(_takes(s, immediate, getattr(self, "max_imm_offset", None)) for s in usable):
             if not any(_takes(s, 0) for s in usable):
                 raise specialization_error(
                     f"no {op.step.op} signature for {db[op.offset]} takes a plain address")
-            if comp not in self.scratch:
-                self.scratch[comp] = self.new_reg(comp)
-            scratch = self.scratch[comp]
-            inserted.append(lsc_addr_compute(comp, reg, scratch, sym.const(const), scalar_tile))
-            self.positions[(comp, scratch)] = self.positions[(comp, reg)] + sym.const(const)
-            reg = scratch
+            # the access's own register walks to it: later accesses resolved
+            # from there (offsets until the limit, then a bump, as v1 did); the
+            # section moves it back at its end
+            inserted.append(lsc_addr_compute(comp, reg, reg, sym.const(const), scalar_tile))
+            self.positions[(comp, reg)] = self.positions[(comp, reg)] + sym.const(const)
+            walked = getattr(self, "walked_by", {})
+            walked[(comp, reg)] = walked.get((comp, reg), sym.const(0)) + sym.const(const)
+            self.walked_by = walked
         op.indices[0] = lsc_reg_index(comp, [reg])
         return inserted + [op]
 
@@ -488,6 +502,13 @@ class signature_specializer:
             ops = []
             for op in getattr(block, section):
                 ops += self.adapt(op)
+            # registers walked in this section back where it found them: the
+            # next section (or iteration) starts from the same positions
+            for (comp, reg), moved in getattr(self, "walked_by", {}).items():
+                if any(dict(moved.terms).values()):
+                    ops.append(lsc_addr_compute(comp, reg, reg, sym.const(0) - moved, scalar_tile))
+                    self.positions[(comp, reg)] = self.positions[(comp, reg)] - moved
+            self.walked_by = {}
             if "prologue" == section:
                 # the loop's offsets from 0: registers moved past the preload
                 ops += self.rebase(block, rebased)

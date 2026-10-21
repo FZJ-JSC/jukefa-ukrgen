@@ -99,8 +99,12 @@ class ldinc(lsc_irmod):
                 src = op.indices[0].indices[0]
                 offset = dict(op.delta.terms).get((), 0)
                 prev = chains.get(key)
+                # a walk (a = a + c) moves by its own delta: that is the
+                # increment; a scratch computation (s = a + c) by the distance
+                # from the previous one
+                walk = op.indices[0].indices == op.indices[1].indices
                 if prev is not None and prev[2] == src:
-                    gap = offset - prev[1]
+                    gap = offset if walk else offset - prev[1]
                     if self.check(prev[0], gap * adt_size(self.ctx.component_dts[comp])):
                         self.post_increment(prev[0], gap)
                         out.append(nxt)

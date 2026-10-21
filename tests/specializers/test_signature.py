@@ -113,6 +113,10 @@ class test_signature_specializer(unittest.TestCase):
         self.assertTrue(scratch)
         for pos, op in enumerate(loop.body):
             if isinstance(op, lsc_addr_compute):
+                if pos + 1 == len(loop.body) or not isinstance(loop.body[pos + 1], lsc_load):
+                    # a walked register moved back at the section's end
+                    self.assertEqual(op.indices[0].indices, op.indices[1].indices)
+                    continue
                 nxt = loop.body[pos + 1]
                 self.assertIsInstance(nxt, lsc_load)
                 self.assertEqual(op.indices[1].indices, nxt.indices[0].indices)
