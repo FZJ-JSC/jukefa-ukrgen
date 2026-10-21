@@ -279,17 +279,18 @@ class test_register_pressure(unittest.TestCase):
                "store_ab-tileop": ["AB.VEC:scatter"]}
 
     def test_fewer_registers_load_in_place(self):
-        # A in 8 registers: each holds two tiles per iteration, so A cannot be
-        # loaded an iteration ahead - its loads stay in the body. B still is.
+        # A in 4 registers, two tiles each an iteration: each register's first
+        # load is the next iteration's, an iteration ahead (the prologue the
+        # first's), its second stays in place. B is all ahead.
         ctx, _ = run(m="4", **self.GENERAL)
         prog = program_builder(ctx, data_regs={"A": 4}).build()
         mm = prog.blocks[0]
-        self.assertEqual([], loads(mm.prologue, "A"))
+        self.assertEqual(4, len(loads(mm.prologue, "A")))
         self.assertEqual(4, len(loads(mm.prologue, "B")))
         self.assertEqual(8, len(loads(mm.body, "A")))
-        self.assertEqual(8, len(loads(mm.epilogue, "A")))
-        # no register loaded twice before its first use
-        seen = set()
+        self.assertEqual(4, len(loads(mm.epilogue, "A")))
+        # every register read loaded before - by the prologue or the body
+        seen = {data(op) for op in mm.prologue if isinstance(op, lsc_load) and "A" == addr_comp(op)}
         for op in mm.body:
             if isinstance(op, lsc_load) and "A" == addr_comp(op):
                 seen.add(data(op))
@@ -337,7 +338,11 @@ class test_register_rings(unittest.TestCase):
         # get one register each, instead of alternating between two
         ctx, _ = run(m="4", **test_register_pressure.GENERAL)
         mm = program_builder(ctx, data_regs={"A": 4}).build().blocks[0]
-        self.assertEqual([0, 1, 2, 3, 0, 1, 2, 3], [data(op)[1] for op in loads(mm.body, "A")])
+        # the first step's tiles in the prologue (an iteration ahead), the
+        # second's in place - the last iteration (epilogue) shows them alone
+        self.assertEqual([0, 1, 2, 3], [data(op)[1] for op in loads(mm.prologue, "A")])
+        self.assertEqual([0, 1, 2, 3], [data(op)[1] for op in loads(mm.epilogue, "A")])
+        self.assertEqual([0, 0, 1, 1, 2, 2, 3, 3], sorted(data(op)[1] for op in loads(mm.body, "A")))
 
 
 class test_branches(unittest.TestCase):

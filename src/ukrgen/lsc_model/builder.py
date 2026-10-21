@@ -1173,19 +1173,47 @@ class program_builder:
                     for reg in item.reads:
                         last_read[reg] = pos
             #
-            # That needs each register to hold one tile per iteration. A
-            # component given fewer data registers than tiles reuses them
-            # within the iteration, so its loads stay where they are.
+            # A register's first load in the iteration is the one whose value
+            # before it belongs to the last iteration: that load moves - the
+            # first iteration's into the prologue, the next's after this
+            # iteration's last read of the register. A component with a
+            # register per tile of the iteration moves every load so; one
+            # reusing registers within the iteration (a ring a step or two
+            # deep, the loop unrolled further) moves its registers' first
+            # loads, the later ones staying for the scheduler to move up to
+            # their register's previous last read.
+            #
+            # Where general registers are few (x86's 16) the next iteration's
+            # addresses of a reused register's loads don't fit: there, a
+            # component moves its loads only with a register per tile.
+            first_load: set[int] = set()
+            loaded: set = set()
+            for item in items:
+                if isinstance(item, access_group) and item.streamed and item.reg not in loaded:
+                    loaded.add(item.reg)
+                    first_load.add(id(item))
+            try:
+                gregs = len(self.gen.get_reg_tracker().available_regs.get("greg", []))
+            except Exception:
+                gregs = 32
             tiles: dict[str, set] = {}
             for item in items:
                 if isinstance(item, access_group) and item.streamed:
                     tiles.setdefault(item.component, set()).add(item.coord)
-            hoisted = {c for c, t in tiles.items()
-                       if self.data_regs.get(c, len(self.coords[c])) >= len(t)}
+            per_tile = {c for c, t in tiles.items()
+                        if self.data_regs.get(c, len(self.coords[c])) >= len(t)}
+
+            def lanes(item):
+                return any(getattr(op, "properties", {}).get("lane") is not None for op in item.ops)
 
             def preloaded(item):
-                return isinstance(item, access_group) and item.streamed \
-                    and item.component in hoisted
+                if not (isinstance(item, access_group) and item.streamed):
+                    return False
+                # lane by lane loads (fused by lanefuse where contiguous)
+                # keep together: moved only with a register per tile
+                if gregs <= 16 or lanes(item):
+                    return item.component in per_tile
+                return id(item) in first_load
 
             ahead: dict[int, list[access_group]] = {}
             for item in items:

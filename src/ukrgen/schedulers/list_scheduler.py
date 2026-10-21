@@ -216,6 +216,7 @@ class list_scheduler:
                  groups: dict | None = None) -> tuple[list, schedule_report]:
         if len(ops) < 2:
             return list(ops), self.report(ops, list(range(len(ops))), self.edges(ops, loop, groups), 0)
+        self.cycles = None
         edges = self.edges(ops, loop, groups)
         intra = [e for e in edges if not e.carried]
         # priority: the longest chain of required distances to the section's end
