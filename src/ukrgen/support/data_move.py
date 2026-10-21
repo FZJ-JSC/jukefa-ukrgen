@@ -492,6 +492,9 @@ def filter_by_step_requirements(
     :return: filtered list of signatures
     """
 
+    # register-offset forms (GOFFSET, SCALEOFFSET) resolve no data movement:
+    # the specializer chooses them for an access, the emitter adds them
+    sigs = [s for s in sigs if not ({m.name for m in s.modifiers} & {"GOFFSET", "SCALEOFFSET"})]
     # NOTE: having ONE target_dt excludes something like an
     #       fcvt z0.d, p0/m, z1.s. Maybe something to support in the future
 

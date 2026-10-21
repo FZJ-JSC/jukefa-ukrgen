@@ -1236,17 +1236,19 @@ class signature_emitter:
         for sig in sorted(_sigs(op.sigs), key=lambda s: len(s.modifiers)):
             mods = {m.name for m in sig.modifiers} - {"MASK", "STRUCT"}
             kwargs = {}
+            call_mods = set(sig.modifiers)
             if scaled is not None:
-                # base + the stride's register x its count (+ the immediate)
+                # base + the stride's register x its count (+ the immediate):
+                # the access's plain or immediate form, the index added - the
+                # ISA's own signatures checking it
+                from asmgen.asmblocks.op import opmem_modifier as omod
                 name, count = scaled
-                if not {"GOFFSET", "SCALEOFFSET"} <= mods \
-                        or mods - {"GOFFSET", "SCALEOFFSET", "IOFFSET"} \
-                        or (bool(immediate) != ("IOFFSET" in mods)) \
-                        or sig.structural_params.get("scale_factor") != count \
-                        or voffset is not None or increment is not None:
+                if mods - {"IOFFSET"} or voffset is not None or increment is not None:
                     continue
+                call_mods = (call_mods - {omod.IOFFSET}) | {omod.GOFFSET, omod.SCALEOFFSET}
                 kwargs.update(offreg=self.params[name], scale_factor=count)
                 if immediate:
+                    call_mods.add(omod.IOFFSET)
                     kwargs["ioffset"] = immediate
             elif voffset is not None:
                 if {"VOFFSET"} != mods:
@@ -1288,7 +1290,7 @@ class signature_emitter:
             try:
                 return "".join(prefix) + getattr(self.gen, op.step.op)(
                     dregs=self.members(op, data, sig), areg=areg, dt=dt,
-                    modifiers=set(sig.modifiers),
+                    modifiers=call_mods,
                     operand_modifiers={n: set(s.modifiers) for n, s in sig.operands.items()
                                        if s.modifiers},
                     **kwargs)

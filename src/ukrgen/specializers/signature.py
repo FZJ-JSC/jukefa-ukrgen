@@ -257,9 +257,18 @@ class signature_specializer:
             # index - no pointer of its own (docs/REG_USE_OPTIMIZATION.md, 2c)
             if lane_factor is None and not vl and 1 == len(strided):
                 (factors, count), = strided.items()
-                scales = {s.structural_params.get("scale_factor") for s in usable
-                          if "SCALEOFFSET" in {m.name for m in s.modifiers}}
-                if 1 == len(factors) and count in scales:
+                # the ISA's own forms - the operation's signatures, chosen for
+                # its resolution, hold none with a register offset
+                dt = self.ctx.component_dts[comp]
+                full = getattr(getattr(self.ctx.gen, op.step.op, None), "get_signatures", lambda: [])()
+                scales = {s.structural_params.get("scale_factor") for s in full
+                          if "SCALEOFFSET" in {m.name for m in s.modifiers}
+                          and getattr(s.operands.get("adreg"), "dt", dt) == dt}
+                # the access's own plain or immediate form, which the index
+                # extends (a gather or scatter has none)
+                plain = any(not ({m.name for m in s.modifiers} - {"IOFFSET", "MASK", "STRUCT"})
+                            for s in usable)
+                if 1 == len(factors) and count in scales and plain:
                     op.properties["scaled_index"] = (factors[0], count)
                     strided = {}
             key = (comp, reg, tuple(sorted(strided.items())))
