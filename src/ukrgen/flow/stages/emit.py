@@ -30,6 +30,11 @@ class emit_stage(stage):
         self.params["print-asm"] = stage_param(
                 value=False, default=False, flag=True, required=False,
                 description="Print the emitted assembly and exit")
+        self.params["loop-align"] = stage_param(
+                value=None, required=False,
+                description="Loops' heads on a boundary of this many bytes (a power of two): "
+                            ".balign before each loop's label - the code falling into the loop "
+                            "runs the padding's nops once")
         self.params["loop-gregs"] = stage_param(
                 value=None, required=False,
                 description="General registers a loop over tiles' slices may take beyond what "
@@ -45,6 +50,10 @@ class emit_stage(stage):
             raise stage_error(f"--loop-gregs takes at least 2 (a counter and a slice index), "
                               f"got {value}")
         self.context.loop_gregs = int(value) if value is not None else None
+        align = self.params["loop-align"].value
+        if align not in (None, "") and (int(align) <= 0 or int(align) & (int(align) - 1)):
+            raise stage_error(f"--loop-align {align}: a power of two")
+        self.context.loop_align = int(align) if align not in (None, "") else None
         try:
             self.context.emitted = [emit_program(self.context, p)
                                     for p in self.context.programs]

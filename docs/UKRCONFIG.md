@@ -139,3 +139,10 @@ and `.space` before the kernel, so the placement survives linking.
 `blisgen --align 64:8` does it for every family without its own key. On a
 core sensitive to where code lies (the K1), `ukropt-sweep --align` measures
 which placement a kernel prefers.
+
+`loop-align: 8` (a flow parameter, under `params`) puts each loop's head on
+an 8-byte boundary: `.balign` before the loop's label, its padding nops run
+once by the code falling into the loop (RISC-V's linker settles the padding
+when it relaxes, so the boundary holds in the linked library).
+`blisgen --loop-align 8` sets it for every family without its own;
+`--ukr-align` is the kernels' placement above (`--align` its old name).

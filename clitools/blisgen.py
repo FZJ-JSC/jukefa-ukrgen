@@ -45,10 +45,13 @@ def main():
     parser.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 1,
                         help="kernels built at once - each one run of the flow, in its own "
                              "process (default: the CPUs there are)")
-    parser.add_argument("--align", default=None,
+    parser.add_argument("--ukr-align", "--align", dest="align", default=None,
                         help="where kernels' code starts, for families without their own align "
                              "key: BOUNDARY[:OFFSET] - 64:8 is 8 bytes past a 64-byte boundary, "
                              "as ukropt-sweep --align measures")
+    parser.add_argument("--loop-align", type=int, default=None,
+                        help="loops' heads on a boundary of this many bytes, for families "
+                             "without their own loop-align in params (a power of two)")
     parser.add_argument("--author", required=True,
                         help="Author to insert in the copyright string")
     args = parser.parse_args()
@@ -72,7 +75,7 @@ def main():
     if not args.from_dir and not args.from_git:
         from ukrgen.injectors.blis.generate import generate
         made = generate(cfg, args.out_dir, stack_size=args.stack_buf_size, jobs=args.jobs,
-                        align=parse_align(args.align))
+                        align=parse_align(args.align), loop_align=args.loop_align)
     else:
         from ukrgen.injectors.blis.patch import patch_blis
         blis_dir = args.from_dir
@@ -84,7 +87,7 @@ def main():
         made = patch_blis(blis_dir, args.out_dir, cfg, args.author,
                           parent=args.parent_config_name, overwrite=args.overwrite,
                           stack_size=args.stack_buf_size, jobs=args.jobs,
-                          align=parse_align(args.align))
+                          align=parse_align(args.align), loop_align=args.loop_align)
     print(f"{cfg.name}: {len(made['kernels'])} kernels, {len(made['skipped'])} sizes skipped, "
           f"{len(made['files'])} files under {args.out_dir}")
     for fam, dt, (m, n), why in made["skipped"]:

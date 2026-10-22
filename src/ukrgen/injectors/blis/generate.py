@@ -16,7 +16,8 @@ from .cgen import (asm_source, gemm_wrapper, cntx_init, family_header, stack_buf
 
 
 def generate(cfg: configuration, out_dir: str, stack_size: int | None = None,
-             jobs: int = 1, align: tuple | None = None) -> dict:
+             jobs: int = 1, align: tuple | None = None,
+             loop_align: int | None = None) -> dict:
     """
     Write the configuration's files under out_dir; stack_size (bytes)
     overrides the configuration's. Returns what was made: the kernels, the
@@ -29,6 +30,8 @@ def generate(cfg: configuration, out_dir: str, stack_size: int | None = None,
         build = {"gemm": build_gemm, "packm": build_packm}.get(fam.kind)
         if build is None:
             continue
+        if loop_align and "loop-align" not in fam.params:
+            fam.params["loop-align"] = loop_align
         built, missed = build(cfg.isa, cfg.name, fam, jobs)
         # where each kernel's code starts: its family's, else the default
         for k in built:

@@ -1899,6 +1899,9 @@ class signature_emitter:
             # an iteration old - no wait on the decrement before it (the body
             # doesn't read the counter; every ISA's branch tests the register)
             code.extend(lines(gen.cb(reg1=reg, reg2=None, cmp=ez, label=done)))
+            if getattr(self.ctx, "loop_align", None):
+                # the loop's head on a boundary: nops padding, run once
+                code.append(f".balign {self.ctx.loop_align}")
             code.extend(lines(gen.label(label=label)))
             code.extend(lines(gen.add_greg_imm(reg=reg, imm=-1)))
             code.extend(part)
