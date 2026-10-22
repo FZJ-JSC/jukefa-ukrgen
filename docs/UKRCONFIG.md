@@ -130,3 +130,12 @@ case of their own. `docs/BLISGEN_PLAN.md` has the details of each.
   four column pointers per base, one more walking the rest.
 - AVX2 and AVX-512 packm: `kind: gather` cases - A row-major (lda 1), its
   rows gathered into vectors along cdim - beside the vec cases.
+
+## Where kernels start: `align`
+
+A family key, `align: "64:8"`, places each of the family's kernels 8 bytes
+past a 64-byte boundary (`"64"` alone: on one) - blisgen writes `.balign`
+and `.space` before the kernel, so the placement survives linking.
+`blisgen --align 64:8` does it for every family without its own key. On a
+core sensitive to where code lies (the K1), `ukropt-sweep --align` measures
+which placement a kernel prefers.

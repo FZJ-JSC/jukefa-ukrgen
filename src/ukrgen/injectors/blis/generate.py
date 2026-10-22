@@ -16,7 +16,7 @@ from .cgen import (asm_source, gemm_wrapper, cntx_init, family_header, stack_buf
 
 
 def generate(cfg: configuration, out_dir: str, stack_size: int | None = None,
-             jobs: int = 1) -> dict:
+             jobs: int = 1, align: tuple | None = None) -> dict:
     """
     Write the configuration's files under out_dir; stack_size (bytes)
     overrides the configuration's. Returns what was made: the kernels, the
@@ -30,6 +30,9 @@ def generate(cfg: configuration, out_dir: str, stack_size: int | None = None,
         if build is None:
             continue
         built, missed = build(cfg.isa, cfg.name, fam, jobs)
+        # where each kernel's code starts: its family's, else the default
+        for k in built:
+            k.align = fam.align or align
         kernels += built
         skipped += [(fam.name,) + s for s in missed]
         for dt, size in fam.default.items():
@@ -43,7 +46,12 @@ def generate(cfg: configuration, out_dir: str, stack_size: int | None = None,
         written.append(rel)
     kdir = f"kernels/{cfg.name}/3"
     for k in kernels:
-        write(f"{'kernels/' + cfg.name + '/1m' if k.case else kdir}/{k.symbol}.S", asm_source(k))
+        text = asm_source(k)
+        if getattr(k, "align", None):
+            # the object's text from a boundary, the kernel offset bytes past it
+            boundary, offset = k.align
+            text = f".text\n.balign {boundary}\n" + (f".space {offset}\n" if offset else "") + text
+        write(f"{'kernels/' + cfg.name + '/1m' if k.case else kdir}/{k.symbol}.S", text)
     helpers = vl_helpers(kernels, gen)
     write(f"{kdir}/bli_gemm_{cfg.name}.c",
           "#include \"blis.h\"\n\n" + helpers + "\n" +

@@ -144,6 +144,20 @@ def parse_ratios(value) -> list[tuple[int, int]]:
     return out
 
 
+def parse_align(spec) -> tuple | None:
+    """
+    A kernel's placement: "64:8" - 8 bytes past a 64-byte boundary; "64"
+    (or 64) - on one. None where not given
+    """
+    if spec is None or "" == spec:
+        return None
+    boundary, _, offset = str(spec).partition(":")
+    boundary, offset = int(boundary), int(offset or 0)
+    if boundary <= 0 or boundary & (boundary - 1) or not 0 <= offset < boundary or offset % 2:
+        raise ValueError(f"align {spec!r}: a power-of-two boundary and an even offset below it")
+    return (boundary, offset)
+
+
 @dataclass
 class family:
     """
@@ -171,6 +185,9 @@ class family:
     #: packm: vectors a case keeps in flight at least - its unroll along the
     #: panel, a case of m vectors (rows, trans) unrolled ceil(min_inflight / m)
     min_inflight: int | None = None
+    #: where the kernels' code starts: (boundary, offset) - offset bytes past
+    #: a boundary-byte boundary (the family key align: "64:8")
+    align: tuple | None = None
 
     @staticmethod
     def from_yaml(kind: str, entry: dict) -> "family":
@@ -214,7 +231,8 @@ class family:
         return family(kind=kind, name=entry["family"], dtypes=list(entry.get("dtypes", ["FP64"])),
                       params=params, sizes=sizes, default=default, cases=cases,
                       split=split, parts=parts, ratios=ratios,
-                      min_inflight=int(inflight) if inflight is not None else None)
+                      min_inflight=int(inflight) if inflight is not None else None,
+                      align=parse_align(entry.get("align")))
 
 
 @dataclass

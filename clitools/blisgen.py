@@ -45,6 +45,10 @@ def main():
     parser.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 1,
                         help="kernels built at once - each one run of the flow, in its own "
                              "process (default: the CPUs there are)")
+    parser.add_argument("--align", default=None,
+                        help="where kernels' code starts, for families without their own align "
+                             "key: BOUNDARY[:OFFSET] - 64:8 is 8 bytes past a 64-byte boundary, "
+                             "as ukropt-sweep --align measures")
     parser.add_argument("--author", required=True,
                         help="Author to insert in the copyright string")
     args = parser.parse_args()
@@ -65,8 +69,10 @@ def main():
                                    stack_buf_size=args.stack_buf_size)
 
     if not args.from_dir and not args.from_git:
+        from ukrgen.injectors.blis.families import parse_align
         from ukrgen.injectors.blis.generate import generate
-        made = generate(cfg, args.out_dir, stack_size=args.stack_buf_size, jobs=args.jobs)
+        made = generate(cfg, args.out_dir, stack_size=args.stack_buf_size, jobs=args.jobs,
+                        align=parse_align(args.align))
     else:
         from ukrgen.injectors.blis.patch import patch_blis
         blis_dir = args.from_dir
