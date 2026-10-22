@@ -83,6 +83,12 @@ budget and the window hold as before. The instructions are emitted cycle
 after cycle; the distances are cycles; carried dependencies are measured
 across the loop's cycles.
 
+A slot ending in `/n` is taken at most once every n cycles - a port's
+rate: `sl/2`, a scalar load every other cycle at most. A class in a slot
+marked `*n` holds the slot n cycles: `vl*2|vs|vf`, a vector load keeps
+anything else from the vector slot the next cycle. The K1, from its
+measured rates: `"2:vl*2|vs|vf,sl/2,addr|i"`.
+
 Forbidden pairs follow a `;`: `"2:vl|vs|vf,sl,i;vf-sl"` - a vector FP
 operation and a scalar load never in the same cycle, though each has a slot.
 

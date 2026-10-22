@@ -311,6 +311,9 @@ class list_scheduler:
         regs = _register_state(ops, budget) if budget else None
         over = 0
         cycle = 0
+        # per slot: the cycle it was last taken, the last cycle it is held
+        last_use: dict[int, int] = {}
+        busy_until: dict[int, int] = {}
         levels = {c: 0 for c in self.buckets}
         def earliest(j):
             return max([cycle_of[e.src] + max(e.distance, 1 if dept.RAW == e.dep else 0)
@@ -318,6 +321,11 @@ class list_scheduler:
         while len(order) < n:
             used: set[int] = set()
             issued: set[str] = set()
+            # slots a rate or an earlier instruction's occupancy keeps from
+            # this cycle
+            blocked = {s for s, n in self.model.rate.items()
+                       if s in last_use and cycle - last_use[s] < n} | \
+                      {s for s, until in busy_until.items() if cycle <= until}
             while len(order) < n:
                 ready = [j for j in range(n) if j not in cycle_of
                          and all(e.src in cycle_of for e in preds[j])]
@@ -352,10 +360,14 @@ class list_scheduler:
                               and not any(self.model.take(classes[k], used, issued) is not None
                                           for k in ranked if classes[k] not in full) else [])
                 for j in ranked:
-                    slot = self.model.take(classes[j], used, issued)
+                    slot = self.model.take(classes[j], used, issued, blocked)
                     if slot is not None:
                         pick = j
                         used.add(slot)
+                        last_use[slot] = cycle
+                        held = self.model.holds(slot, classes[j])
+                        if held > 1:
+                            busy_until[slot] = cycle + held - 1
                         issued.add(classes[j])
                         break
                 if pick is None:

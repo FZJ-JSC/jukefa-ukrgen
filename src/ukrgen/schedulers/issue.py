@@ -43,8 +43,25 @@ class issue_model:
             head, text = text.split(":", 1)
             width = int(head)
         self.slots = []
+        #: a slot taken at most once every n cycles ("sl/2"): a port's rate
+        self.rate: dict[int, int] = {}
+        #: an instruction of a class holding its slot n cycles ("vl*2"): what
+        #: it occupies, nothing else issuing there meanwhile
+        self.occupy: dict[tuple, int] = {}
         for slot in text.split(","):
-            classes = frozenset(slot.split("|"))
+            index = len(self.slots)
+            if "/" in slot:
+                slot, _, n = slot.rpartition("/")
+                if int(n) > 1:
+                    self.rate[index] = int(n)
+            names = []
+            for c in slot.split("|"):
+                if "*" in c:
+                    c, _, n = c.partition("*")
+                    if int(n) > 1:
+                        self.occupy[(index, c)] = int(n)
+                names.append(c)
+            classes = frozenset(names)
             unknown = classes - set(CLASSES)
             if unknown or not slot:
                 raise ValueError(f"--sched-cycle-slots: {sorted(unknown) or 'an empty slot'} - "
@@ -67,7 +84,8 @@ class issue_model:
             return list(range(len(self.slots)))
         return sorted(named, key=lambda s: len(self.slots[s]))
 
-    def take(self, cls: str, used: set[int], issued: set[str] = frozenset()) -> int | None:
+    def take(self, cls: str, used: set[int], issued: set[str] = frozenset(),
+             blocked: set[int] = frozenset()) -> int | None:
         """
         The slot an instruction takes in a cycle whose slots used are used, or
         None where none is left, the cycle is full, or a class it can't
@@ -77,7 +95,14 @@ class issue_model:
             return None
         if any(frozenset((cls, other)) in self.conflicts for other in issued):
             return None
-        return next((s for s in self.accepts(cls) if s not in used), None)
+        return next((s for s in self.accepts(cls) if s not in used and s not in blocked), None)
+
+    def holds(self, slot: int, cls: str) -> int:
+        """
+        The cycles an instruction of a class holds the slot it takes (1 but
+        where the slot's spec gives it a *n)
+        """
+        return self.occupy.get((slot, self.alias.get(cls, cls)), 1)
 
 
 def classify(op) -> str:

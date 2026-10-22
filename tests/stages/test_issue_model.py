@@ -109,5 +109,42 @@ class test_issue_model(unittest.TestCase):
                 self.assertIn(f"{tile}: 81 runs, 0 wrong", out)
 
 
+    def test_rates_and_occupancy(self):
+        # "sl/2": the slot at most once every two cycles; "vl*2": a vector
+        # load holds the vector slot two cycles
+        m = issue_model("2:vl*2|vs|vf,sl/2,addr|i")
+        self.assertEqual({1: 2}, m.rate)
+        self.assertEqual(2, m.holds(0, "vl"))
+        self.assertEqual(1, m.holds(0, "vf"))
+        self.assertIsNone(m.take("sl", set(), set(), {1}))
+        self.assertEqual(1, m.take("sl", set(), set(), set()))
+        # placed so on the K1's 2vx14 loop
+        from ukrgen.injectors.blis.families import configuration, build_gemm
+        import ukrgen.schedulers.list_scheduler as L
+        from ukrgen.schedulers.issue import classify
+        seen = []
+        orig = L.list_scheduler.place_cycles
+        def spy(sched, ops, *a, **kw):
+            out = orig(sched, ops, *a, **kw)
+            if len(ops) > 100:
+                seen.append(({j: classify(op) for j, op in enumerate(ops)}, dict(sched.cycle_of)))
+            return out
+        L.list_scheduler.place_cycles = spy
+        try:
+            cfg = configuration.from_files({("gemm", "FP64"): os.path.join(ROOT, "ukrconfig/rvv/fma_vf/dgemm.yaml")})
+            vm = copy.deepcopy(next(f for f in cfg.families if "vm" == f.name))
+            vm.sizes = {"m": [2], "n": [14]}
+            vm.params["sched-cycle-slots"] = "2:vl*2|vs|vf,sl/2,addr|i"
+            build_gemm("rvv", "ukrgen_rvv", vm)
+        finally:
+            L.list_scheduler.place_cycles = orig
+        self.assertTrue(seen)
+        classes, cycle = seen[-1]
+        sl = sorted(cycle[j] for j, c in classes.items() if "sl" == c and j in cycle)
+        self.assertTrue(all(b - a >= 2 for a, b in zip(sl, sl[1:])), sl[:12])
+        after_vl = {cycle[j] + 1 for j, c in classes.items() if "vl" == c and j in cycle}
+        self.assertFalse([j for j, c in classes.items()
+                          if c in ("vf", "vl", "vs") and cycle.get(j) in after_vl])
+
 if __name__ == "__main__":
     unittest.main()
