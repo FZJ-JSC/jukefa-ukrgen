@@ -1208,7 +1208,10 @@ class signature_emitter:
         else:
             lines = [] if src_key == dest_key else [self.gen.mov_greg(src=self.aregs[src_key], dst=dest)]
             lines += self.add_bytes(dest, amount, comp)
-        self.positions[dest_key] = self.positions[src_key] + op.delta
+        # a loop's advance moves to the next iteration: offsets are measured
+        # within one, so that part isn't a move of the register
+        advance = (getattr(op, "properties", None) or {}).get("advance")
+        self.positions[dest_key] = self.positions[src_key] + op.delta - (advance or sym.const(0))
         return lines
 
     def members(self, op, data, sig) -> list:
@@ -1480,13 +1483,17 @@ class signature_emitter:
 
     def _advances(self, block: ir_block, out: emitted_block) -> emitted_block:
         db, strides = self.program.offsets, self.program.strides
+        # the advance in the IR already (schedulable, walks merged): the tail's
+        # alone here
+        in_ir = getattr(block, "advance_in_ir", False)
         for comp, oid in block.advance.items():
             step = self.bytes_of(comp, db.elements_offset(oid, strides.get(comp, {})))
             # the address registers the model set up: pointers and scratch
             # addresses are recomputed from them each iteration
             for (c, reg), areg in sorted(self.aregs.items(), key=lambda x: x[0]):
                 if c == comp and (c, reg) in self.program.addr_setup:
-                    out.advance += [l.strip() for l in self.add_bytes(areg, step, comp)]
+                    if not in_ir:
+                        out.advance += [l.strip() for l in self.add_bytes(areg, step, comp)]
                     if block.tail_step is not None:
                         one = db.add(comp, {block.loop_index: block.tail_step})
                         out.tail_advance += self._strip(self.add_bytes(

@@ -82,7 +82,8 @@ class test_signature_specializer(unittest.TestCase):
         loop = self.spec.blocks[0]
         self.assertEqual("mm", loop.name)
         self.assertTrue(any(l.startswith("fmla") for l in loop.sections["body"]))
-        self.assertTrue(loop.advance)
+        # the advance to the next iteration: in the body now, scheduled
+        self.assertTrue(loop.advance or any(l.startswith("add") for l in loop.sections["body"]))
 
     def test_column_pointer(self):
         # C is strided along n: column 1 goes through a pointer computed once
@@ -150,9 +151,13 @@ class test_signature_specializer(unittest.TestCase):
         body = "\n".join(p.blocks[0].sections["body"])
         self.assertIn("p0/m", body)
         self.assertRegex(body, r"ld1d \{z\d+\.d\}, p0/z, \[x\d+, #\d+, MUL VL\]")
-        self.assertTrue(any(l.startswith("incb") for l in p.blocks[0].advance))
-        # only the model's address registers advance
-        self.assertEqual(2, len(p.blocks[0].advance))
+        self.assertTrue(any(l.startswith("incb")
+                            for l in p.blocks[0].advance + p.blocks[0].sections["body"]))
+        # only the model's address registers advance - as text after the
+        # body, or as the body's advance operations
+        advances = [op for op in ctx.programs[0].blocks[0].body
+                    if (getattr(op, "properties", None) or {}).get("advance") is not None]
+        self.assertEqual(2, len(p.blocks[0].advance) or len(advances))
         if shutil.which("aarch64-linux-gnu-as"):
             ok, err = assembles(p.instructions(), arch="armv8-a+sve")
             self.assertTrue(ok, err)

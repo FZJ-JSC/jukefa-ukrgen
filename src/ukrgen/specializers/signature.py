@@ -496,6 +496,21 @@ class signature_specializer:
             rebased[(comp, reg)] = delta
         return out
 
+    def loop_advances(self, block: ir_block) -> dict:
+        """
+        A loop's advance to its next iteration, per address register the model
+        set up: what the emitter otherwise appends as text after the body
+        """
+        if block.loop_index is None or not getattr(block, "advance", None):
+            return {}
+        db, out = self.program.offsets, {}
+        for comp, oid in block.advance.items():
+            step = db.elements_offset(oid, self.program.strides.get(comp, {}))
+            for (c, reg) in list(self.positions):
+                if c == comp and (c, reg) in getattr(self.program, "addr_setup", {}):
+                    out[(c, reg)] = step
+        return out
+
     def adapt_block(self, block: ir_block):
         rebased = {}
         for section in ("prologue", "body", "epilogue", "tail", "subtail"):
@@ -503,11 +518,24 @@ class signature_specializer:
             for op in getattr(block, section):
                 ops += self.adapt(op)
             # registers walked in this section back where it found them: the
-            # next section (or iteration) starts from the same positions
-            for (comp, reg), moved in getattr(self, "walked_by", {}).items():
+            # next section (or iteration) starts from the same positions - and
+            # in a loop's body and last iteration, merged with the advance to
+            # the next iteration: one add a register, placed by the schedulers
+            walked = getattr(self, "walked_by", {})
+            advances = self.loop_advances(block) if section in ("body", "epilogue") else {}
+            for key in list(walked) + [k for k in advances if k not in walked]:
+                comp, reg = key
+                moved = walked.get(key, sym.const(0))
+                step = advances.get(key)
                 if any(dict(moved.terms).values()):
                     ops.append(lsc_addr_compute(comp, reg, reg, sym.const(0) - moved, scalar_tile))
-                    self.positions[(comp, reg)] = self.positions[(comp, reg)] - moved
+                if step is not None and any(dict(step.terms).values()):
+                    op = lsc_addr_compute(comp, reg, reg, step, scalar_tile)
+                    op.properties = dict(getattr(op, "properties", None) or {}, advance=step)
+                    ops.append(op)
+                self.positions[key] = self.positions[key] - moved
+            if advances:
+                block.advance_in_ir = True
             self.walked_by = {}
             if "prologue" == section:
                 # the loop's offsets from 0: registers moved past the preload
