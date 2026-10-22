@@ -68,8 +68,8 @@ def main():
     cfg = configuration.from_files(files, name=args.config_name,
                                    stack_buf_size=args.stack_buf_size)
 
+    from ukrgen.injectors.blis.families import parse_align
     if not args.from_dir and not args.from_git:
-        from ukrgen.injectors.blis.families import parse_align
         from ukrgen.injectors.blis.generate import generate
         made = generate(cfg, args.out_dir, stack_size=args.stack_buf_size, jobs=args.jobs,
                         align=parse_align(args.align))
@@ -83,7 +83,8 @@ def main():
             Repo.clone_from("https://github.com/flame/blis", blis_dir)
         made = patch_blis(blis_dir, args.out_dir, cfg, args.author,
                           parent=args.parent_config_name, overwrite=args.overwrite,
-                          stack_size=args.stack_buf_size, jobs=args.jobs)
+                          stack_size=args.stack_buf_size, jobs=args.jobs,
+                          align=parse_align(args.align))
     print(f"{cfg.name}: {len(made['kernels'])} kernels, {len(made['skipped'])} sizes skipped, "
           f"{len(made['files'])} files under {args.out_dir}")
     for fam, dt, (m, n), why in made["skipped"]:

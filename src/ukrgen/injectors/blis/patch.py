@@ -78,7 +78,8 @@ def apply_pr960(out_dir: str):
 
 def patch_blis(blis_dir: str, out_dir: str, cfg: configuration, author: str,
                parent: str | None = None, overwrite: bool = False,
-               stack_size: int | None = None, jobs: int = 1) -> dict:
+               stack_size: int | None = None, jobs: int = 1,
+               align: tuple | None = None) -> dict:
     """
     out_dir: a copy of the BLIS tree at blis_dir with the configuration in
     it. parent names a configuration whose kernels it inherits (registry:
@@ -95,7 +96,7 @@ def patch_blis(blis_dir: str, out_dir: str, cfg: configuration, author: str,
               "archflags": isa_flags[cfg.isa]}
     params["license"] = Template(T.components["license"]).render(**params)
     register(out_dir, params)
-    made = generate(cfg, out_dir, stack_size=stack_size, jobs=jobs)
+    made = generate(cfg, out_dir, stack_size=stack_size, jobs=jobs, align=align)
     def write(rel, text):
         path = os.path.join(out_dir, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
