@@ -270,7 +270,7 @@ class resolution_registry:
         # or writes it directly. This is what being in a register means rather
         # than a choice a provider makes, and the solver relies on it for the
         # temporaries between the operations of a chain - without it, every
-        # fmul;fadd chain would be dropped. So every registry has it.
+        # mul;add chain would be dropped. So every registry has it.
         for rtype in (rgt.VEC, rgt.TILE, rgt.FP, rgt.GP, rgt.MASK):
             for ddir in (dm_direction.IN, dm_direction.OUT):
                 for tfs in (frozenset({tf.NONE}), frozenset()):

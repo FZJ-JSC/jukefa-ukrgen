@@ -157,8 +157,8 @@ def generate_op_supports(gen : asmgen,
 class op_support_builder:
 
     ast_op_map = {
-        HW_FADD_AST:  'fadd',
-        HW_FMUL_AST:  'fmul',
+        HW_FADD_AST:  'add',
+        HW_FMUL_AST:  'mul',
         HW_FMA_AST:   'fma',
         HW_FDOTA_AST: 'fdota',
         HW_FOPA_AST:  'fopa',

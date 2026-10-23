@@ -44,7 +44,7 @@ class composition_stage(stage):
         #     - loop
         #   - mm (C, beta, C)
         #     - m n x n n + m n
-        #     - fmul
+        #     - mul
         #     - bands(0,0)
         #   - mm (AB, alpha, C)
         #     - m n x n n + m n

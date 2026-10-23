@@ -18,9 +18,9 @@ alternatives:
 tileops:
   mm: fopa(A.VEC:direct, B.VEC:direct, AB.TILE){i=m, j=n, k*=1}
   store_ab: AB.TILE:slices_$D
-  alphamul: fmul(AB.TILE:slice_vec_$D[0:adreg:$DU], alpha.VEC:bc_load, C.TILE:>slice_vec_$D[0:bdreg:$DU]){$T}
-  betascale: fmul(C.VEC:$CL, beta.VEC:bc_load, C.TILE:>slice_vec_$D){$T}
-  add: fadd(AB.TILE:slice_vec_$D[0:adreg:$DU], C.VEC:$CL, C.TILE:>slice_vec_$D[0:bdreg:$DU]){$T}
+  alphamul: mul(AB.TILE:slice_vec_$D[0:adreg:$DU], alpha.VEC:bc_load, C.TILE:>slice_vec_$D[0:bdreg:$DU]){$T}
+  betascale: mul(C.VEC:$CL, beta.VEC:bc_load, C.TILE:>slice_vec_$D){$T}
+  add: add(AB.TILE:slice_vec_$D[0:adreg:$DU], C.VEC:$CL, C.TILE:>slice_vec_$D[0:bdreg:$DU]){$T}
   alphaadd: fma(AB.TILE:slice_vec_$D[0:adreg:$DU], alpha.VEC:bc_load, C.TILE:direct>slice_vec_$D[0:bdreg:$DU]){$T}
   betaadd: fma(C.VEC:$CL, beta.VEC:bc_load, AB.TILE:slice_vec_$D[0:adreg:$DU]>slice_vec_$D[0:bdreg:$DU]){$T}
   alphascale: fma(AB.TILE:slice_vec_$D[0:adreg:$DU], alpha.VEC:bc_load, C.TILE:slice_vec_$D[0:adreg:$DU]>slice_vec_$D[0:bdreg:$DU]){$T}

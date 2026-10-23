@@ -21,11 +21,11 @@ alternatives:
   - strided
 tileops:
   mm: fma[bdreg:VF]($V.VEC:direct, $S.FP:use_scalar, AB.VEC){$K}
-  betascale: fmul[bdreg:VF](C.VEC:$CL, beta.FP:use_scalar, C.VEC){$T}
+  betascale: mul[bdreg:VF](C.VEC:$CL, beta.FP:use_scalar, C.VEC){$T}
   alphascale: fma[bdreg:VF](AB.VEC, alpha.FP:use_scalar, C.VEC){$T}
   store: C.VEC:$CS
-  alphamul: fmul[bdreg:VF](AB.VEC, alpha.FP:use_scalar, C.VEC){$T}
-  add: fadd(AB.VEC, C.VEC:$CL, C.VEC){$T}
+  alphamul: mul[bdreg:VF](AB.VEC, alpha.FP:use_scalar, C.VEC){$T}
+  add: add(AB.VEC, C.VEC:$CL, C.VEC){$T}
   alphaadd: fma[bdreg:VF](AB.VEC, alpha.FP:use_scalar, C.VEC:$CL){$T}
   betaadd: fma[bdreg:VF](C.VEC:$CL, beta.FP:use_scalar, AB.VEC){$T}
   store_ab: AB.VEC:$CS

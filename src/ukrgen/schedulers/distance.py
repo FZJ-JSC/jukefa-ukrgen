@@ -117,7 +117,8 @@ class distance_specification:
         op_types = {
             "trf" : lsc_transformation,
             "fma" : lsc_transformation,
-            "fmul" : lsc_transformation,
+            "mul" : lsc_transformation,
+            "fmul" : lsc_transformation,    # before asmgen 0.6
             "dota" : lsc_transformation,
             "opa" : lsc_transformation,
             "mma" : lsc_transformation,

@@ -21,11 +21,11 @@ alternatives:
   - scatter
 tileops:
   mm: fma($V.VEC:direct, $S.VEC:bc_load, AB.VEC){$K}
-  betascale: fmul(C.VEC:$CL, beta.VEC:bc_load, C.VEC){$T}
+  betascale: mul(C.VEC:$CL, beta.VEC:bc_load, C.VEC){$T}
   alphascale: fma(AB.VEC, alpha.VEC:bc_load, C.VEC){$T}
   store: C.VEC:$CS
-  alphamul: fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){$T}
-  add: fadd(AB.VEC, C.VEC:$CL, C.VEC){$T}
+  alphamul: mul(AB.VEC, alpha.VEC:bc_load, C.VEC){$T}
+  add: add(AB.VEC, C.VEC:$CL, C.VEC){$T}
   alphaadd: fma(AB.VEC, alpha.VEC:bc_load, C.VEC:$CL){$T}
   betaadd: fma(C.VEC:$CL, beta.VEC:bc_load, AB.VEC){$T}
   store_ab: AB.VEC:$CS
