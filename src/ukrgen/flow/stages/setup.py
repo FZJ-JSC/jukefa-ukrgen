@@ -36,7 +36,16 @@ class setup_stage(stage):
                             "at run time by C's strides; the last the default, its layout "
                             "--C-layout's")
 
+        self.params["hooks"] = stage_param(
+                value=None, required=False, multi=True,
+                description="Scripts run around stages, each 'WHEN STAGE SCRIPT [FUNCTION] "
+                            "[KEY=VALUE ...]' (WHEN before or after): FUNCTION(ctx, stage, "
+                            "KEY=VALUE, ...) sees and may change what the stages built "
+                            "(ukrgen.flow.hooks)")
+
     def progress(self):
+        from .. import hooks
+        self.context.hooks = [hooks.parse(h) for h in (self.params["hooks"].value or [])]
         isa = self.params["isa"].value
         ukr = self.params["ukr"].value
 

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Type, Callable
 
 from .stages.stage import stage, early_exit
+from . import hooks
 
 from .ukr_context import ukr_context
 
@@ -52,6 +53,7 @@ class stage_engine:
 
         :return: whether the run completed, and what an early exit produced
         """
+        ran = []
         for stage_ctr in self.stages:
             stage_deque = deque([stage_ctr])
             while stage_deque:
@@ -66,6 +68,7 @@ class stage_engine:
                             s.params[pname].required:
                         raise ValueError(f"Parameter {pname} is required!")
 
+                hooks.run(self.ctx, s, "before")
                 try:
                     spawned = s.progress()
                 except early_exit as ex:
@@ -76,5 +79,8 @@ class stage_engine:
 
                 stage_deque.extend(spawned or [])
                 self.epilog(s)
+                hooks.run(self.ctx, s, "after")
+                ran.append(type(s).__name__)
 
+        hooks.report_unused(self.ctx, ran)
         return engine_result(completed=True)

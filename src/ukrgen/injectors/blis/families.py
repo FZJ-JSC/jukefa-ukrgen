@@ -72,6 +72,13 @@ def run_unrolled(params: dict, key: str):
     for unroll in tries:
         try:
             ctx, result = run_flow(dict(params, **{key: str(unroll)}))
+            if error is not None and params.get("hooks"):
+                # a hook's change may be what failed: an unroll silently
+                # smaller would measure something else than asked
+                import sys
+                print(f"warning: with the hooks, unroll {tries[0]} didn't build "
+                      f"({type(error).__name__}: {str(error)[:120]}): unroll {unroll}",
+                      file=sys.stderr)
             return ctx, result, unroll
         except Exception as err:
             error = err

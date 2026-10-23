@@ -73,4 +73,6 @@ class ukr_context:
         self.order           : tuple[str,...] = tuple()
         self.irs             : dict[str,list[lsc_operation]] = dict()
         self.asmblocks       : dict[str,str] = dict()
+        #: hooks run around stages (flow.hooks), parsed by the setup stage
+        self.hooks           : list = list()
 

@@ -126,6 +126,38 @@ A graph-based scheduler and/or an ILP-solver-based scheduler could potentially p
 The [codegen_stage](https://github.com/linedot/ukrgen/blob/fix_lineno_for_doc/src/ukrgen/composers/stages/codegen.py) handles transforming the IR into ASM, arranging the resulting ASM blocks in the correct order, [placing them in loops](https://github.com/linedot/ukrgen/blob/fix_lineno_for_doc/src/ukrgen/composers/stages/codegen.py#L65-L72), as well as generating the [ASM function boilerplate](https://github.com/linedot/ukrgen/blob/fix_lineno_for_doc/src/ukrgen/composers/stages/codegen.py#L56-L62)
 
 
+## Hooks
+
+A hook runs a script's function before or after a stage, with the flow's
+context: what the stages have built so far - `ctx.stos` (the tilings),
+`ctx.programs` (the IR: `ir_program`s and their `ir_block`s, each with a
+prologue, body, epilogue and tail, scheduled once `schedule` ran),
+`ctx.emitted` (the assembly, once `emit` ran) and the rest of `ukr_context`.
+It may look, or change: an ablation takes a kind of instruction out of a
+kernel's loop to measure what that kind costs.
+
+Hooks are a flow parameter, set like any other - `params: {hooks: [...]}` in
+a family, a key of a ukropt-sweep grid, `--hooks` to `ukrgen` - each a
+string
+
+    WHEN STAGE SCRIPT [FUNCTION] [KEY=VALUE ...]
+
+`WHEN` is `before` or `after`; `STAGE` a stage's name, with or without
+`_stage` (`sto`, `isa_specialize`, `schedule`, `emit`, ...); `FUNCTION`
+(`hook` if not given) is called as `FUNCTION(ctx, stage, KEY=VALUE, ...)`,
+the values as strings. A stage running more than once runs its hooks each
+time; a hook whose stage never ran is reported with the stages that did.
+In `examples/hooks/`:
+
+- `ablate.py drop what=vload|sload|fma [components=A] [loops=k] [parts=body]`:
+  operations out of the loops' bodies in the IR - after `schedule` the
+  schedule stays as it was, before it the scheduler arranges what is left;
+- `ablate.py drop_lines pattern=^add [labels=_loop]`: lines out of the
+  emitted loops after `emit`, their counter and branch kept. Address
+  arithmetic goes this way only: the IR's loads use the registers it sets;
+- `dump.py blocks` / `dump.py ctxfields`: what there is, printed - a start
+  for writing hooks.
+
 # What is different from other approaches
 
 The novelty of the generator is it's abstraction over ISAs as well as underlying arithmetic instructions - including a low-effort way of adding support for new ones, as well as it's multi-stage approach with tight control of each stage.

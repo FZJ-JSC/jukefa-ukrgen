@@ -146,3 +146,20 @@ once by the code falling into the loop (RISC-V's linker settles the padding
 when it relaxes, so the boundary holds in the linked library).
 `blisgen --loop-align 8` sets it for every family without its own;
 `--ukr-align` is the kernels' placement above (`--align` its old name).
+
+## What an instruction costs: hooks
+
+A family's `params` can name hooks (docs/GENERATOR.md): scripts run around
+the flow's stages. `examples/hooks/ablate.py` takes a kind of instruction
+out of the kernel's k loop - the kernel computes nonsense then, but its
+cycles show what that kind costs:
+
+```yaml
+params:
+  hooks: ["after schedule examples/hooks/ablate.py drop what=vload"]
+```
+
+As a key of an `ukropt-sweep` grid (`hooks: [null, [...], [...]]`), one
+sweep measures a kernel as is and without each kind - ukropt's
+`examples/grid-ablate.yaml`, run from this checkout (the scripts' paths are
+relative to it).
