@@ -63,8 +63,8 @@ class test_control(unittest.TestCase):
         ctx, res = gemm("neon")
         p = ctx.emitted[0]
         beta, alpha = p.params["base(beta)"], p.params["base(alpha)"]
-        self.assertTrue(any(l.startswith("ldr d") and l.endswith(f"[{beta},#0]") for l in p.code))
-        self.assertTrue(any(l.startswith("ldr d") and l.endswith(f"[{alpha},#0]") for l in p.code))
+        self.assertTrue(any(l.startswith("ldr d") and l.endswith(f"[{beta}]") for l in p.code))
+        self.assertTrue(any(l.startswith("ldr d") and l.endswith(f"[{alpha}]") for l in p.code))
         self.assertTrue(any(l.endswith("#4607182418800017408") for l in p.code))
         self.assertTrue(any(l.startswith("fcmp") for l in p.code))
 

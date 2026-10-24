@@ -44,7 +44,7 @@ class test_sme(unittest.TestCase):
         finally:
             t.STAGES = saved
         alphamul = [l.split('"')[1] for l in (res.output or "").splitlines() if "--alphamul-tileop" in l]
-        self.assertTrue(any(c.startswith("fmul(AB.TILE:slice_vec_col") and "C.TILE:>slice_vec_col" in c
+        self.assertTrue(any(c.startswith("mul(AB.TILE:slice_vec_col") and "C.TILE:>slice_vec_col" in c
                             for c in alphamul), alphamul[:3])
 
 

@@ -94,13 +94,13 @@ class test_solve(unittest.TestCase):
     def test_select_by_index_and_string(self):
         ctx, res = run(gemm("sve", **{
             "mm-tileop": ["0"],
-            "betascale-tileop": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"],
+            "betascale-tileop": ["mul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"],
             "alphascale-tileop": ["0"],
             "store-tileop": ["0"]}))
         self.assertTrue(res.completed)
         self.assertEqual(1, len(ctx.to_parts))
         part = ctx.to_parts[0]
-        self.assertEqual("fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}",
+        self.assertEqual("mul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}",
                          part["betascale"].encoding)
         self.assertEqual("C.VEC:direct", part["store"].encoding)
 

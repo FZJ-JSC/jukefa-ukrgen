@@ -201,7 +201,7 @@ class test_builder_resolutions(unittest.TestCase):
         self.assertTrue(res.completed)
         mm = program_builder(ctx, preload=False).build().blocks[0]
         ops = [op for op in mm.body if isinstance(op, lsc_transformation)]
-        self.assertEqual(["fmul", "fadd"] * 4, [op.op for op in ops])
+        self.assertEqual(["mul", "add"] * 4, [op.op for op in ops])
         self.assertIn("T0", {i.component for op in ops for i in op.indices})
 
     def test_scalar_broadcast_via_register(self):

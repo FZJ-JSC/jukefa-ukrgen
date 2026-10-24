@@ -19,7 +19,7 @@ class test_resident(unittest.TestCase):
 
     def test_chains_survive_without_extra_providers(self):
         # A registry built from the movement providers alone, as callers did
-        # before residency existed: the temporary between fmul and fadd is in
+        # before residency existed: the temporary between mul and add is in
         # a register and must still resolve.
         registry = resolution_registry()
         scalar_reduce_provider().register_resolutions(registry)
@@ -30,10 +30,10 @@ class test_resident(unittest.TestCase):
         req = mm_composition.get_sto("mm").req
         impls = osb.find_hw_implementations(
             req=req, registry=registry, io_dts={op: adt.FP64 for op in ("A", "B", "C")})
-        chains = [e for e in encode_all(impls, req) if e.startswith("fmul")]
+        chains = [e for e in encode_all(impls, req) if e.startswith("mul(")]
         self.assertTrue(chains)
         for enc in chains:
-            self.assertIn("fadd", enc)
+            self.assertRegex(enc, r"(?<!\w)add[(\[]")
             self.assertNotIn("T0.VEC:", enc)    # resident: moves nothing
 
 
