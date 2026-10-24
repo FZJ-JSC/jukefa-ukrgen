@@ -10,8 +10,8 @@ import subprocess
 import tempfile
 import unittest
 
-import specializers.test_signature as t
-from specializers.test_native import cpu_has
+import tests.specializers.test_signature as t
+from tests.specializers.test_native import cpu_has
 from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage
 
 HERE = os.path.dirname(os.path.abspath(__file__))

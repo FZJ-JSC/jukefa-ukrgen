@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import unittest
 
-import specializers.test_signature as t
+import tests.specializers.test_signature as t
 from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage
 
 HERE = os.path.dirname(os.path.abspath(__file__))

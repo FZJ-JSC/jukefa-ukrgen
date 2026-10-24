@@ -1,6 +1,6 @@
 import sys
-from specializers import test_signature as t
-from stages.test_sto import gemm as gemm_params
+from tests.specializers import test_signature as t
+from tests.stages.test_sto import gemm as gemm_params
 from ukrgen.flow.stage_engine import stage_engine
 
 def gemm(isa, **extra):

@@ -9,7 +9,7 @@ import unittest
 
 from ukrgen.injectors.blis.families import family, configuration
 from ukrgen.injectors.blis.generate import generate
-from injectors.test_families import VM
+from tests.injectors.test_families import VM
 
 
 class test_generate(unittest.TestCase):

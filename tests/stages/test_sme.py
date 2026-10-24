@@ -5,7 +5,7 @@ slice
 
 import unittest
 
-import specializers.test_signature as t
+import tests.specializers.test_signature as t
 
 FOPA = "fopa(A.VEC:direct, B.VEC:direct, C.TILE){i=m, j=n, k*=1}"
 

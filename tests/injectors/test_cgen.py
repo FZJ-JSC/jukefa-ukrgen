@@ -16,7 +16,7 @@ from ukrgen.injectors.blis.families import family, build_gemm, configuration
 from ukrgen.injectors.blis.cgen import (gemm_wrapper, asm_source, vl_helper, vl_helpers, c_expr, gemm_table,
                                         GEMM_TABLE_PRELUDE, CTYPE, cntx_init, stack_buf_size,
                                         family_header)
-from injectors.test_families import VM, VN, VNF, VMF
+from tests.injectors.test_families import VM, VN, VNF, VMF
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CC = ["aarch64-linux-gnu-gcc", "-static", "-march=armv8-a+sve"]

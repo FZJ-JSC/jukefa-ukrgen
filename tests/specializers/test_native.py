@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import unittest
 
-from specializers.gemm_helper import gemm
+from tests.specializers.gemm_helper import gemm
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 

@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 from ukrgen.injectors.blis.families import family, configuration, build_gemm, parse_sizes
-from stages.test_sto import CASE_TOS
+from tests.stages.test_sto import CASE_TOS
 
 # vectors along m, B broadcast; A and B packed as BLIS packs them
 VM = {"mm-tileop": ["fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"],

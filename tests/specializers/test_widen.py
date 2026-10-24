@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import unittest
 
-import specializers.test_signature as t
+import tests.specializers.test_signature as t
 from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -137,7 +137,7 @@ class test_widen(unittest.TestCase):
     def gemm_runs(self, isa, cand, narrow, wide, cc, march, qemu, cpu, tol):
         if not (shutil.which(cc) and shutil.which(qemu)):
             self.skipTest(f"needs {cc} and {qemu}")
-        from specializers.gemm_helper import gemm
+        from tests.specializers.gemm_helper import gemm
         stages = list(t.STAGES)
         i = [s.__name__ for s in stages].index("model_stage") + 1
         saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]

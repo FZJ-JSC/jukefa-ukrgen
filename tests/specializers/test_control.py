@@ -9,8 +9,8 @@ import subprocess
 import tempfile
 import unittest
 
-from specializers.gemm_helper import gemm
-from specializers.test_signature import assembles
+from tests.specializers.gemm_helper import gemm
+from tests.specializers.test_signature import assembles
 
 
 def assembles_for(isa, lines):

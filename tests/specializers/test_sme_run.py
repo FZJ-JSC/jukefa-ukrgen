@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 import unittest
 
-import specializers.test_signature as t
+import tests.specializers.test_signature as t
 from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -138,7 +138,7 @@ class test_sme_gemm(unittest.TestCase):
         cc, qemu = "aarch64-linux-gnu-gcc", "qemu-aarch64-static"
         if not (shutil.which(cc) and shutil.which(qemu)):
             self.skipTest(f"needs {cc} and {qemu}")
-        from specializers.test_native import header
+        from tests.specializers.test_native import header
         stages = list(t.STAGES)
         i = [x.__name__ for x in stages].index("model_stage") + 1
         saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
@@ -225,7 +225,7 @@ class test_slice_unroll(unittest.TestCase):
         cc, qemu = "aarch64-linux-gnu-gcc", "qemu-aarch64-static"
         if not (shutil.which(cc) and shutil.which(qemu)):
             self.skipTest(f"needs {cc} and {qemu}")
-        from specializers.test_native import header
+        from tests.specializers.test_native import header
         stages = list(t.STAGES)
         i = [x.__name__ for x in stages].index("model_stage") + 1
         saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
@@ -288,7 +288,7 @@ def run_gemm(test, params, defines=(), march="armv9-a+sme+sme-f64f64", ctype="do
     cc, qemu = "aarch64-linux-gnu-gcc", "qemu-aarch64-static"
     if not (shutil.which(cc) and shutil.which(qemu)):
         test.skipTest(f"needs {cc} and {qemu}")
-    from specializers.test_native import header
+    from tests.specializers.test_native import header
     stages = list(t.STAGES)
     i = [x.__name__ for x in stages].index("model_stage") + 1
     saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
@@ -457,7 +457,7 @@ class test_packed_c(unittest.TestCase):
         cc, qemu = "aarch64-linux-gnu-gcc", "qemu-aarch64-static"
         if not (shutil.which(cc) and shutil.which(qemu)):
             self.skipTest(f"needs {cc} and {qemu}")
-        from specializers.test_native import header
+        from tests.specializers.test_native import header
         stages = list(t.STAGES)
         i = [x.__name__ for x in stages].index("model_stage") + 1
         saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]

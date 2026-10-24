@@ -24,7 +24,7 @@ from ukrgen.schedulers.dependency import dependency_type as dept
 from ukrgen.schedulers.distance import distance_specification
 from ukrgen.schedulers.list_scheduler import list_scheduler, dependencies
 
-from specializers.test_signature import assembles
+from tests.specializers.test_signature import assembles
 
 STAGES = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage,
           model_stage, pre_specialize_irmod_stage, isa_specialize_stage,

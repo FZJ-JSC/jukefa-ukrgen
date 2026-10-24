@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import unittest
 
-import specializers.test_signature as t
+import tests.specializers.test_signature as t
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FOPA = "fopa(A.VEC:direct, B.VEC:direct, C.TILE){i=m, j=n, k*=1}"

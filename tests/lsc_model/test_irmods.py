@@ -9,7 +9,7 @@ from ukrgen.flow.stages.irmods import post_specialize_irmod_stage, pre_specializ
 from ukrgen.flow.stages.emit import emit_stage
 from ukrgen.models.load_store_operations import lsc_load, lsc_addr_compute, ldst_modifier
 
-from specializers.test_signature import mm, assembles, STAGES
+from tests.specializers.test_signature import mm, assembles, STAGES
 
 WITHOUT_EMIT = STAGES[:-1]
 
@@ -17,7 +17,7 @@ WITHOUT_EMIT = STAGES[:-1]
 def run(irmods, **extra):
     from ukrgen.flow.ukr_context import ukr_context
     from ukrgen.flow.stage_engine import stage_engine
-    import specializers.test_signature as base
+    import tests.specializers.test_signature as base
     stages = WITHOUT_EMIT + [post_specialize_irmod_stage, emit_stage]
     saved = base.STAGES
     base.STAGES = stages
@@ -69,7 +69,7 @@ class test_lanefuse(unittest.TestCase):
 
     def run_lanes(self, model_irmods, **extra):
         from ukrgen.flow.stages.isa_specialize import isa_specialize_stage
-        import specializers.test_signature as base
+        import tests.specializers.test_signature as base
         saved = base.STAGES
         base.STAGES = saved[:7] + [pre_specialize_irmod_stage, isa_specialize_stage,
                                    post_specialize_irmod_stage, emit_stage]
