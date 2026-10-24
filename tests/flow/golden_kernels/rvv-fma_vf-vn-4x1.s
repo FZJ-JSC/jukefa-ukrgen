@@ -2,8 +2,8 @@
 .global bli_dgemm_ukrgen_rvv_vn_4x1v_asm
 bli_dgemm_ukrgen_rvv_vn_4x1v_asm:
 add sp,sp,-16
-sd s2,0(sp)
-sd s1,8(sp)
+sd s2, 0(sp)
+sd s1, 8(sp)
 # a0 = k
 # a1 = base(A)
 # a2 = base(B)
@@ -626,8 +626,8 @@ vfmul.vf v1,v1,f0
 vfmacc.vf v1,f1,v4
 vsse64.v v1, (s1), a7
 .ukr0_cases_end:
-ld s2,0(sp)
-ld s1,8(sp)
+ld s2, 0(sp)
+ld s1, 8(sp)
 add sp,sp,16
 ret
 .section .note.GNU-stack,"",%progbits

@@ -2,7 +2,7 @@
 .global bli_dgemm_ukrgen_neon_vm_2x4_asm
 bli_dgemm_ukrgen_neon_vm_2x4_asm:
 add sp,sp,#-16
-str d8,[sp,#0]
+str d8, [sp]
 # x0 = k
 # x1 = base(A)
 # x2 = base(B)
@@ -138,43 +138,43 @@ add x1,x1,#16
 add x2,x2,#32
 cbnz x7,.ukr1_tail
 .ukr1_taildone:
-ldr d4,[x5,#0]
+ldr d4, [x5]
 fmov d5,xzr
 fcmp d4,d5
 b.ne .ukr0_try1
-ldr d4,[x4,#0]
+ldr d4, [x4]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
 b.ne .ukr0_try1
 b .ukr0_case0
 .ukr0_try1:
-ldr d4,[x5,#0]
+ldr d4, [x5]
 fmov d5,xzr
 fcmp d4,d5
 b.ne .ukr0_try2
 b .ukr0_case1
 .ukr0_try2:
-ldr d4,[x5,#0]
+ldr d4, [x5]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
 b.ne .ukr0_try3
-ldr d4,[x4,#0]
+ldr d4, [x4]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
 b.ne .ukr0_try3
 b .ukr0_case2
 .ukr0_try3:
-ldr d4,[x5,#0]
+ldr d4, [x5]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
 b.ne .ukr0_try4
 b .ukr0_case3
 .ukr0_try4:
-ldr d4,[x4,#0]
+ldr d4, [x4]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
@@ -341,7 +341,7 @@ fmul v0.2d,v0.2d,v5.2d
 fmla v0.2d,v3.2d,v16.2d
 st1 {v0.2d}, [x10]
 .ukr0_cases_end:
-ldr d8,[sp,#0]
+ldr d8, [sp]
 add sp,sp,#16
 ret
 .section .note.GNU-stack,"",%progbits

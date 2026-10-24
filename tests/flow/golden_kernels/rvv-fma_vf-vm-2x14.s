@@ -2,11 +2,11 @@
 .global bli_dgemm_ukrgen_rvv_vm_2vx14_asm
 bli_dgemm_ukrgen_rvv_vm_2vx14_asm:
 add sp,sp,-112
-sd s1,0(sp)
-sd s2,8(sp)
-sd s3,16(sp)
-sd s4,24(sp)
-sd s5,32(sp)
+sd s1, 0(sp)
+sd s2, 8(sp)
+sd s3, 16(sp)
+sd s4, 24(sp)
+sd s5, 32(sp)
 fsd f8, 40(sp)
 fsd f9, 48(sp)
 fsd f18, 56(sp)
@@ -1545,11 +1545,11 @@ vfmul.vf v1,v1,f0
 vfmacc.vf v1,f1,v28
 vse64.v v1, (s5)
 .ukr0_cases_end:
-ld s1,0(sp)
-ld s2,8(sp)
-ld s3,16(sp)
-ld s4,24(sp)
-ld s5,32(sp)
+ld s1, 0(sp)
+ld s2, 8(sp)
+ld s3, 16(sp)
+ld s4, 24(sp)
+ld s5, 32(sp)
 fld f8, 40(sp)
 fld f9, 48(sp)
 fld f18, 56(sp)

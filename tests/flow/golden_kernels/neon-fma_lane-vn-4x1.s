@@ -2,7 +2,7 @@
 .global bli_dgemm_ukrgen_neon_vn_4x2_asm
 bli_dgemm_ukrgen_neon_vn_4x2_asm:
 add sp,sp,#-16
-str d8,[sp,#0]
+str d8, [sp]
 # x0 = k
 # x1 = base(A)
 # x2 = base(B)
@@ -145,11 +145,11 @@ cmp x0,0
 b.eq .ukr0_ok0_0
 b .ukr0_try1
 .ukr0_ok0_0:
-ldr d4,[x5,#0]
+ldr d4, [x5]
 fmov d5,xzr
 fcmp d4,d5
 b.ne .ukr0_try1
-ldr d4,[x4,#0]
+ldr d4, [x4]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
@@ -162,7 +162,7 @@ cmp x0,0
 b.eq .ukr0_ok1_0
 b .ukr0_try2
 .ukr0_ok1_0:
-ldr d4,[x5,#0]
+ldr d4, [x5]
 fmov d5,xzr
 fcmp d4,d5
 b.ne .ukr0_try2
@@ -174,12 +174,12 @@ cmp x0,0
 b.eq .ukr0_ok2_0
 b .ukr0_try3
 .ukr0_ok2_0:
-ldr d4,[x5,#0]
+ldr d4, [x5]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
 b.ne .ukr0_try3
-ldr d4,[x4,#0]
+ldr d4, [x4]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
@@ -192,7 +192,7 @@ cmp x0,0
 b.eq .ukr0_ok3_0
 b .ukr0_try4
 .ukr0_ok3_0:
-ldr d4,[x5,#0]
+ldr d4, [x5]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
@@ -205,7 +205,7 @@ cmp x0,0
 b.eq .ukr0_ok4_0
 b .ukr0_try5
 .ukr0_ok4_0:
-ldr d4,[x4,#0]
+ldr d4, [x4]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
@@ -220,43 +220,43 @@ b .ukr0_try6
 .ukr0_ok5_0:
 b .ukr0_case5
 .ukr0_try6:
-ldr d4,[x5,#0]
+ldr d4, [x5]
 fmov d5,xzr
 fcmp d4,d5
 b.ne .ukr0_try7
-ldr d4,[x4,#0]
+ldr d4, [x4]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
 b.ne .ukr0_try7
 b .ukr0_case6
 .ukr0_try7:
-ldr d4,[x5,#0]
+ldr d4, [x5]
 fmov d5,xzr
 fcmp d4,d5
 b.ne .ukr0_try8
 b .ukr0_case7
 .ukr0_try8:
-ldr d4,[x5,#0]
+ldr d4, [x5]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
 b.ne .ukr0_try9
-ldr d4,[x4,#0]
+ldr d4, [x4]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
 b.ne .ukr0_try9
 b .ukr0_case8
 .ukr0_try9:
-ldr d4,[x5,#0]
+ldr d4, [x5]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
 b.ne .ukr0_try10
 b .ukr0_case9
 .ukr0_try10:
-ldr d4,[x4,#0]
+ldr d4, [x4]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
@@ -746,7 +746,7 @@ add x9,x9,x7
 st1 {v1.d}[0], [x10]
 st1 {v1.d}[1], [x9]
 .ukr0_cases_end:
-ldr d8,[sp,#0]
+ldr d8, [sp]
 add sp,sp,#16
 ret
 .section .note.GNU-stack,"",%progbits

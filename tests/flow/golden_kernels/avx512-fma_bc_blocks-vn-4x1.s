@@ -125,20 +125,20 @@ addq $64,%rdx
 test %r10,%r10
 jnz .ukr1_tail
 .ukr1_taildone:
-movq 8(%rsp),%r10
-movq 16(%rsp),%r11
+movq 8(%rsp), %r10
+movq 16(%rsp), %r11
 movq %r10, %rax
 addq $-8,%rax
 test %rax,%rax
 jz .ukr0_ok0_0
 jmp .ukr0_try1
 .ukr0_ok0_0:
-vmovsd (%r9),%xmm4
+vmovsd (%r9), %xmm4
 vpxord %xmm5,%xmm5,%xmm5
 vucomisd %xmm5,%xmm4
 jne .ukr0_try1
 jp .ukr0_try1
-vmovsd (%r8),%xmm4
+vmovsd (%r8), %xmm4
 movq $4607182418800017408,%rax
 vmovq %rax,%xmm5
 vucomisd %xmm5,%xmm4
@@ -152,7 +152,7 @@ test %rax,%rax
 jz .ukr0_ok1_0
 jmp .ukr0_try2
 .ukr0_ok1_0:
-vmovsd (%r9),%xmm4
+vmovsd (%r9), %xmm4
 vpxord %xmm5,%xmm5,%xmm5
 vucomisd %xmm5,%xmm4
 jne .ukr0_try2
@@ -165,13 +165,13 @@ test %rax,%rax
 jz .ukr0_ok2_0
 jmp .ukr0_try3
 .ukr0_ok2_0:
-vmovsd (%r9),%xmm4
+vmovsd (%r9), %xmm4
 movq $4607182418800017408,%rax
 vmovq %rax,%xmm5
 vucomisd %xmm5,%xmm4
 jne .ukr0_try3
 jp .ukr0_try3
-vmovsd (%r8),%xmm4
+vmovsd (%r8), %xmm4
 movq $4607182418800017408,%rax
 vmovq %rax,%xmm5
 vucomisd %xmm5,%xmm4
@@ -185,7 +185,7 @@ test %rax,%rax
 jz .ukr0_ok3_0
 jmp .ukr0_try4
 .ukr0_ok3_0:
-vmovsd (%r9),%xmm4
+vmovsd (%r9), %xmm4
 movq $4607182418800017408,%rax
 vmovq %rax,%xmm5
 vucomisd %xmm5,%xmm4
@@ -199,7 +199,7 @@ test %rax,%rax
 jz .ukr0_ok4_0
 jmp .ukr0_try5
 .ukr0_ok4_0:
-vmovsd (%r8),%xmm4
+vmovsd (%r8), %xmm4
 movq $4607182418800017408,%rax
 vmovq %rax,%xmm5
 vucomisd %xmm5,%xmm4
@@ -215,12 +215,12 @@ jmp .ukr0_try6
 .ukr0_ok5_0:
 jmp .ukr0_case5
 .ukr0_try6:
-vmovsd (%r9),%xmm4
+vmovsd (%r9), %xmm4
 vpxord %xmm5,%xmm5,%xmm5
 vucomisd %xmm5,%xmm4
 jne .ukr0_try7
 jp .ukr0_try7
-vmovsd (%r8),%xmm4
+vmovsd (%r8), %xmm4
 movq $4607182418800017408,%rax
 vmovq %rax,%xmm5
 vucomisd %xmm5,%xmm4
@@ -228,20 +228,20 @@ jne .ukr0_try7
 jp .ukr0_try7
 jmp .ukr0_case6
 .ukr0_try7:
-vmovsd (%r9),%xmm4
+vmovsd (%r9), %xmm4
 vpxord %xmm5,%xmm5,%xmm5
 vucomisd %xmm5,%xmm4
 jne .ukr0_try8
 jp .ukr0_try8
 jmp .ukr0_case7
 .ukr0_try8:
-vmovsd (%r9),%xmm4
+vmovsd (%r9), %xmm4
 movq $4607182418800017408,%rax
 vmovq %rax,%xmm5
 vucomisd %xmm5,%xmm4
 jne .ukr0_try9
 jp .ukr0_try9
-vmovsd (%r8),%xmm4
+vmovsd (%r8), %xmm4
 movq $4607182418800017408,%rax
 vmovq %rax,%xmm5
 vucomisd %xmm5,%xmm4
@@ -249,7 +249,7 @@ jne .ukr0_try9
 jp .ukr0_try9
 jmp .ukr0_case8
 .ukr0_try9:
-vmovsd (%r9),%xmm4
+vmovsd (%r9), %xmm4
 movq $4607182418800017408,%rax
 vmovq %rax,%xmm5
 vucomisd %xmm5,%xmm4
@@ -257,7 +257,7 @@ jne .ukr0_try10
 jp .ukr0_try10
 jmp .ukr0_case9
 .ukr0_try10:
-vmovsd (%r8),%xmm4
+vmovsd (%r8), %xmm4
 movq $4607182418800017408,%rax
 vmovq %rax,%xmm5
 vucomisd %xmm5,%xmm4
