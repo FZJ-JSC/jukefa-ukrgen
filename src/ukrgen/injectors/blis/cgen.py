@@ -6,6 +6,7 @@ and per data type a table of the kernels with a chooser by MR and NR.
 """
 
 from __future__ import annotations
+import re
 
 from .families import kernel, DT_CHAR
 
@@ -34,8 +35,10 @@ def vl_helper(gen, name: str = "ukrgen_vl") -> str:
 
 
 def vl_function(simd_size_c: str, name: str) -> str:
-    size = simd_size_c.replace("inline size_t get_simd_size()",
-                               f"static inline size_t {name}_bytes( void )")
+    # asmgen's helper is inline, or static inline since its 0.6 (0048): static
+    # once either way
+    size = re.sub(r"(?:static\s+)?inline\s+size_t\s+get_simd_size\s*\(\s*\)",
+                  f"static inline size_t {name}_bytes( void )", simd_size_c, count=1)
     return f"{size}\n\nstatic inline dim_t {name}( size_t esize )\n" \
            f"{{\n\treturn ( dim_t )( {name}_bytes() / esize );\n}}\n"
 

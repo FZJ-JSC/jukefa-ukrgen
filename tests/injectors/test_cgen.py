@@ -513,3 +513,18 @@ int main( void )
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class test_vl_function_static_once(unittest.TestCase):
+    """
+    asmgen's get_simd_size, inline or static inline (asmgen 0.6): renamed,
+    static once
+    """
+    def test_both_forms(self):
+        from ukrgen.injectors.blis.cgen import vl_function
+        for head in ("inline size_t get_simd_size()", "static inline size_t get_simd_size()"):
+            with self.subTest(head=head):
+                text = vl_function(head + " { return 16; }", "ukrgen_vl")
+                self.assertIn("static inline size_t ukrgen_vl_bytes( void ) { return 16; }", text)
+                self.assertNotIn("static static", text)
+
