@@ -42,8 +42,8 @@ def header(params):
 
 class test_native(unittest.TestCase):
 
-    def run_gemm(self, isa, cc=("gcc",), run=()):
-        ctx, res = gemm(isa)
+    def run_gemm(self, isa, cc=("gcc",), run=(), **extra):
+        ctx, res = gemm(isa, **extra)
         self.assertTrue(res.completed, res.output)
         p = ctx.emitted[0]
         self.assertEqual(["k", "base(A)", "base(B)", "base(C)", "base(alpha)", "base(beta)",
@@ -61,6 +61,7 @@ class test_native(unittest.TestCase):
             r = subprocess.run([*run, exe], capture_output=True, text=True, timeout=120)
         self.assertEqual(0, r.returncode, r.stdout)
         self.assertIn(", 0 wrong", r.stdout)
+        self.text = "\n".join(p.function("ukr"))
         return r.stdout
 
     @unittest.skipUnless(shutil.which("gcc") and cpu_has("avx2") and cpu_has("fma"),
@@ -74,10 +75,10 @@ class test_native(unittest.TestCase):
         self.assertIn("tile 16 x 3", self.run_gemm("avx512"))
 
 
-    def emulated(self, isa, cc, march, qemu, cpu):
+    def emulated(self, isa, cc, march, qemu, cpu, **extra):
         if not (shutil.which(cc) and shutil.which(qemu)):
             self.skipTest(f"needs {cc} and {qemu}")
-        return self.run_gemm(isa, cc=(cc, "-static", march), run=(qemu, "-cpu", cpu))
+        return self.run_gemm(isa, cc=(cc, "-static", march), run=(qemu, "-cpu", cpu), **extra)
 
     def test_neon(self):
         out = self.emulated("neon", "aarch64-linux-gnu-gcc", "-march=armv8-a",

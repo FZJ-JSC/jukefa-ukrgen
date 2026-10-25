@@ -16,3 +16,6 @@ each module at its old path under `legacy/src`, its tests under
 Moved by asmgen 0.6's rework (`docs/V06_REWORK.md` in asmgen, phase 8): the
 live pipeline - `injectors/blis/families.py`, `clitools` - imports none of
 it.
+
+The signature emitter's address resolution has a test of its own, as the old
+resolver had `test_addr_resolver`: `tests/specializers/test_addresses.py`.
