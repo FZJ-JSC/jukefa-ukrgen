@@ -24,12 +24,13 @@ def _setup(isa, ukr="gemm"):
 class test_setup(unittest.TestCase):
 
     def test_allocates_generator_and_composition(self):
-        # an ISA without parameters spawns no parameter stage (SVE has its
-        # optional extensions)
+        # every ISA has parameters - x86 its displacements (enable-disp8,
+        # enable-disp32: asmgen 0058), the others their optional extensions -
+        # so each spawns the parameter stage
         ctx, spawned = _setup("avx256")
         self.assertIs(gemm_composition, ctx.composition)
         self.assertTrue(hasattr(ctx.gen, "fma"))
-        self.assertEqual([], spawned)
+        self.assertEqual([isaparam_stage], spawned)
 
     def test_isa_parameters_spawn_stage(self):
         _, spawned = _setup("rvv")
