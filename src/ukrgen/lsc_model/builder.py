@@ -231,24 +231,22 @@ class program_builder:
                           rtype = rgt.FP
                       if rtype is not None:
                           rtypes.setdefault(math, set()).add(rtype)
-        shared = getattr(self.gen, "are_fregs_in_vregs", False)
+        shared = self.gen.are_fregs_in_vregs
         def on_vregs(comp):
             kinds = rtypes.get(comp, set())
             return rgt.VEC in kinds or (shared and rgt.FP in kinds)
-        def budget_of(tag, fallback):
-            try:
-                return len(self.gen.get_reg_tracker().available_regs.get(tag, []))
-            except Exception:
-                return fallback()
+        def budget_of(tag):
+            # the registers of the file the tracker allocates, reserved ones included
+            return self.gen.get_reg_tracker().available_reg_count(tag)
         # each register file fitted on its own: vectors (and FP where they
         # share the file), FP scalars where they have their own - RVV's
         # vfmacc.vf takes its scalar from one
         files = [("vreg", {c for c in self.coords if on_vregs(c)},
-                  budget_of("vreg", self.gen.max_vregs))]
+                  budget_of("vreg"))]
         if not shared:
             files.append(("freg", {c for c in self.coords if rgt.FP in rtypes.get(c, set())
                                    and rgt.VEC not in rtypes.get(c, set())},
-                          budget_of("freg", lambda: 32)))
+                          budget_of("freg")))
         for tag, members, budget in files:
             if not members:
                 continue

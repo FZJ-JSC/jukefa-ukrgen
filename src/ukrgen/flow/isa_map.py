@@ -41,6 +41,5 @@ def make_generator(isa: str) -> asmgen:
     gen.set_output_inline(yesno=False)
     # optional extensions off unless enabled (--<isa>-<FEATURE> on): only
     # signatures of the baseline ISA otherwise
-    if hasattr(gen, "set_features"):
-        gen.set_features([])
+    gen.set_features([])
     return gen

@@ -188,10 +188,8 @@ class signature_specializer:
         loop's counter and the parameters too
         """
         if not hasattr(self, "_column_pointers"):
-            try:
-                gregs = len(self.ctx.gen.get_reg_tracker().available_regs.get("greg", []))
-            except Exception:
-                gregs = 32
+            # the general registers the tracker allocates, reserved ones included
+            gregs = self.ctx.gen.get_reg_tracker().available_reg_count("greg")
             self._column_pointers = MAX_COLUMN_POINTERS if gregs > 16 else FEW_COLUMN_POINTERS
         return self._column_pointers
 

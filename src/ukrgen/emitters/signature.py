@@ -30,8 +30,10 @@ from asmgen.asmblocks.op import (
     operand_role as orl,
     operand_type as ot,
     opmem_modifier as memmod,
+    operand_modifier as opd_mod,
 )
-from asmgen.registers import reg_tracker, adt_size
+from asmgen.asmblocks.op.opset import opset_modifier
+from asmgen.registers import adt_size, asm_data_type as adt
 from asmgen.asmblocks.op.constraint import ConstraintDoesNotApplyError
 
 from ..lsc_model.addressing import sym
@@ -252,10 +254,11 @@ class offset_planner:
         if key not in self.e.strides_in:
             self.e.recipes.append(("vl_elements", (dt,), self.e.regions_started))
             reg = self.e.greg()
-            try:
-                self.e.late_setup.append(self.e.gen.vlen_to_greg(reg=reg, dt=dt))
-            except (NotImplementedError, AttributeError) as err:
-                raise specialization_error(f"reading the vector length: {err}") from err
+            call = dict(dreg=reg, dt=dt, modifiers={opset_modifier.VLEN})
+            why = self.e.gen.set.refusal(**call)
+            if why:
+                raise specialization_error(f"reading the vector length: {why}")
+            self.e.late_setup.append(self.e.gen.set(**call))
             self.e.strides_in[key] = reg
         return self.e.strides_in[key]
 
@@ -369,15 +372,12 @@ class signature_emitter:
         self.program = program
         # the generator's tracker keeps the stack pointer and the like out of
         # reach; older generators don't provide one
-        make = getattr(self.gen, "get_reg_tracker", None)
-        self.rt = make() if make else \
-            reg_tracker([("greg", self.gen.max_gregs()), ("vreg", self.gen.max_vregs())])
+        self.rt = self.gen.get_reg_tracker()
         self.phys: dict[tuple, object] = {}
         self.dts: dict[tuple, object] = self._register_types()
         self.numbers: dict[tuple, int] = {}
         self.bounds = self._register_bounds()
-        if hasattr(self.rt, "set_priority"):
-            self._required_priorities()
+        self._required_priorities()
         # setup instructions found while emitting: vector length in bytes,
         # constant strides
         self.late_setup: list[str] = []
@@ -399,8 +399,7 @@ class signature_emitter:
         self.region_loads: list[str] = []
         self.labels = iter(range(10**6))
         isa = self.gen.isa_setup()
-        self.vector_length_kept = isa.predication().name == "IMPLICIT" \
-            if hasattr(isa, "predication") else False
+        self.vector_length_kept = isa.predication().name == "IMPLICIT"
         self.strides_in: dict[str, object] = {}
 
     # --- registers ---------------------------------------------------------
@@ -465,15 +464,14 @@ class signature_emitter:
             if rgt.VEC == rtype:
                 bound = self.bounds.get(key)
                 if bound is None:
-                    try:
-                        number = self.rt.reserve_any_reg("vreg")
-                    except IndexError as err:
+                    if not self.rt.available("vreg"):
                         raise specialization_error(
                             f"{key[0]}: no vector register left - the accumulators, the data "
                             f"registers and a loop's unrolled copies (unroll_loops' factor and "
                             f"registers) take them all; scheduling (--mru) renames tiles "
                             f"streamed through straight-line code into the registers free, "
-                            f"fewer register sets or data registers fit") from err
+                            f"fewer register sets or data registers fit")
+                    number = self.rt.reserve_any_reg("vreg")
                 else:
                     used = self.rt.get_used_regs("vreg")
                     free = [i for i in bound if i not in used]
@@ -502,15 +500,14 @@ class signature_emitter:
                 self.phys[key] = self.gen.freg(number, dt)
             elif rgt.TILE == rtype:
                 # a tile (SME ZA): from its own file
-                if "treg" not in getattr(self.rt, "registered_types", ()):
+                if "treg" not in self.rt.registered_types:
                     self.rt.add_type("treg", self.gen.max_tregs(dt))
-                try:
-                    number = self.rt.reserve_any_reg("treg")
-                except IndexError as err:
+                if not self.rt.available("treg"):
                     raise specialization_error(
                         f"{key[0]}: no tile left - {dt.name} has {self.gen.max_tregs(dt)} tiles, "
                         f"all taken; fusing the loops over slices (fuse_slices, forward_slices) "
-                        f"keeps tiles out of use, or a smaller microtile needs fewer") from err
+                        f"keeps tiles out of use, or a smaller microtile needs fewer")
+                number = self.rt.reserve_any_reg("treg")
                 tag = "treg"
                 self.phys[key] = self.gen.treg(number, dt)
             else:
@@ -634,11 +631,9 @@ class signature_emitter:
         known = self.__dict__.setdefault("shifted_known", {})
         if (op, shift) not in known:
             reg = self.gen.greg(0)
-            try:
-                getattr(self.gen, f"{op}_greg_greg_shifted")(dst=reg, reg1=reg, reg2=reg, shift=shift)
-                known[(op, shift)] = True
-            except NotImplementedError:
-                known[(op, shift)] = False
+            known[(op, shift)] = getattr(self.gen, op).fits(
+                adreg=reg, bdreg=reg, cdreg=reg, a_dt=adt.UINT64, b_dt=adt.UINT64, c_dt=adt.UINT64,
+                operand_modifiers={"bdreg": {opd_mod.ISHIFT}}, bdreg_shift=shift) is not None
         return known[(op, shift)]
 
     def add_bytes(self, *args, **kwargs):
@@ -782,14 +777,13 @@ class signature_emitter:
                 walkers.append(shared[start])
                 deltas.append(steps[key])
                 continue
-            try:
-                walker = self.greg()
-            except IndexError as err:
+            if not self.rt.available("greg"):
                 raise specialization_error(
                     f"{op.info.get('component')}: a loop over slices needs a walking pointer for "
                     f"each of {len({(w.anchor.indices[0].component, str(w.anchor.offset)) for w in op.walks})} "
                     f"tile accesses and copies - more than the general registers left; a smaller "
-                    f"unroll needs fewer") from err
+                    f"unroll needs fewer")
+            walker = self.greg()
             shared[start] = walker
             lines.append(self.gen.mov_greg(src=self.aregs[(wcomp, wreg)], dst=walker))
             lines += self.add_bytes(walker, self.bytes_of(wcomp, elements - self.positions[(wcomp, wreg)]), wcomp)
@@ -1114,7 +1108,7 @@ class signature_emitter:
         predicate = _all_true(self.ctx, self.rt)
         clobbered = set(getattr(sig, "clobber_list", None) or [])
         if predicate is None and (prefix is None or not set(masks) <= clobbered
-                                  or not hasattr(self.gen, "mask_all_true")):
+                                  or not self.gen.set.forms(modifiers={opset_modifier.CONSTMASK})):
             return False
         for name in masks:
             if predicate is not None:
@@ -1122,7 +1116,8 @@ class signature_emitter:
                 continue
             reg = self.clobbered_mask(sig.operands[name].rtype)
             kwargs[name] = reg
-            prefix.append(self.gen.mask_all_true(reg=reg, dt=dt))
+            prefix.append(self.gen.set(dreg=reg, dt=dt, modifiers={opset_modifier.CONSTMASK},
+                                       mask="alltrue"))
         return True
 
     def clobbered_mask(self, rtype):
@@ -1150,11 +1145,12 @@ class signature_emitter:
             if stride is None:
                 return None
             vreg = self.gen.vreg(self.rt.reserve_any_reg("vreg"))
-            try:
-                text = self.gen.greg_to_voffs(streg=stride, vreg=vreg,
-                                              dt=self.ctx.component_dts[comp])
-            except NotImplementedError as err:
-                raise specialization_error(f"index vector for {comp}: {err}") from err
+            call = dict(dreg=vreg, dt=self.ctx.component_dts[comp],
+                        modifiers={opset_modifier.STINDEX}, streg=stride)
+            why = self.gen.set.refusal(**call)
+            if why:
+                raise specialization_error(f"index vector for {comp}: {why}")
+            text = self.gen.set(**call)
             # built where the region using it starts
             self.region_loads += [l.strip() for l in text.splitlines() if l.strip()]
             self.indexes[key] = vreg
@@ -1302,15 +1298,13 @@ class signature_emitter:
                         (side is None or side == operand_side(sig, name[:-5], op.step.op)):
                     kwargs[name] = lane
             kwargs.update(sig.structural_params)
-            try:
-                return "".join(prefix) + getattr(self.gen, op.step.op)(
-                    dregs=self.members(op, data, sig), areg=areg, dt=dt,
-                    modifiers=call_mods,
-                    operand_modifiers={n: set(s.modifiers) for n, s in sig.operands.items()
-                                       if s.modifiers},
-                    **kwargs)
-            except Exception:       # asmgen refuses: try the next signature
-                continue
+            operation = getattr(self.gen, op.step.op)
+            call = dict(dregs=self.members(op, data, sig), areg=areg, dt=dt, modifiers=call_mods,
+                        operand_modifiers={n: set(s.modifiers) for n, s in sig.operands.items()
+                                           if s.modifiers},
+                        **kwargs)
+            if operation.fits(**call):
+                return "".join(prefix) + operation(**call)
         return None
 
     def vtype_for(self, op, sig) -> str:
@@ -1354,14 +1348,17 @@ class signature_emitter:
             # the part of a wide result a widening instruction computes
             parts = {"part": op.properties["part"]} \
                 if "part" in sig.operands and "part" in op.properties else {}
-            try:
-                return self.vtype_for(op, sig) + getattr(self.gen, op.op)(
-                    **regs, **dts, **lanes, **masks, **parts, **sig.structural_params,
-                    modifiers=set(sig.modifiers),
-                    operand_modifiers={n: set(s.modifiers) for n, s in sig.operands.items()
-                                       if s.modifiers})
-            except Exception as err:
-                failures.append(str(err))
+            operation = getattr(self.gen, op.op)
+            call = dict(**regs, **dts, **lanes, **masks, **parts, **sig.structural_params,
+                        modifiers=set(sig.modifiers),
+                        operand_modifiers={n: set(s.modifiers) for n, s in sig.operands.items()
+                                           if s.modifiers})
+            why = operation.refusal(**call)
+            if why:
+                failures.append(why)
+                continue
+            # the element type set only for the signature taken
+            return self.vtype_for(op, sig) + operation(**call)
         if all(any(orl.MASK == o.orole for o in sig.operands.values())
                for sig in _sigs(op.resolution.compute_sg)):
             raise specialization_error(
@@ -1431,14 +1428,12 @@ class signature_emitter:
                     blocks[n] = op.properties["slice_reg"]
                 elif n.endswith(("_immrow", "_immcol")) and "slice_imm" in op.properties:
                     blocks[n] = op.properties["slice_imm"]
-            try:
-                return self.gen.move(
-                    dregs=[src, dst], dts=[dt, dt], modifiers=set(sig.modifiers),
-                    **masks, **sig.structural_params, **blocks,
-                    operand_modifiers={n: set(s.modifiers) for n, s in sig.operands.items()
-                                       if s.modifiers})
-            except Exception:       # asmgen refuses: try the next signature
-                continue
+            call = dict(dregs=[src, dst], dts=[dt, dt], modifiers=set(sig.modifiers),
+                        **masks, **sig.structural_params, **blocks,
+                        operand_modifiers={n: set(s.modifiers) for n, s in sig.operands.items()
+                                           if s.modifiers})
+            if self.gen.move.fits(**call):
+                return self.gen.move(**call)
         raise specialization_error(f"no move signature takes {src} into {dst}")
 
     def block(self, block: ir_block, later: list[ir_block] = ()) -> emitted_block:
@@ -1674,8 +1669,7 @@ class signature_emitter:
         names = list(dict.fromkeys(canonical(n) for n in given))
         self.cc = self.gen.create_callconv()
         # the callee's registers last: no save and restore unless needed
-        if hasattr(self.cc, "deprioritize_callee_saved"):
-            self.cc.deprioritize_callee_saved(self.rt)
+        self.cc.deprioritize_callee_saved(self.rt)
         for name in names:
             self.cc.add_param("greg", name)
         self.fn = fngen(gen=self.gen, rt=self.rt)
