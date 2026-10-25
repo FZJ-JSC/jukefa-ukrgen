@@ -47,15 +47,9 @@ class unvec_stage(stage):
 
         elif self.params["unvec-method"].value in ['lane_select','lane_bcast']:
             # TODO: needs more involved changes, crash for now
+            # (their lane counts would be the lane operands' constraints:
+            # asmgen's op.forms, its minmax_constraint)
             raise NotImplementedError("lane_select and lane_bcast not yet implemented")
-
-            into_size = gen.indexable_elements(mod_dt)
-            mod_dim //= into_size
-
-            modified_tile.dima = dimension_properties(
-                    dt=dimension_type.fixed, size=1)
-            modified_tile.dimb = dimension_properties(
-                    dt=dimension_type.fixed, size=into_size)
 
         if vecdir == "M":
             self.context.sup.b_tile = modified_tile
