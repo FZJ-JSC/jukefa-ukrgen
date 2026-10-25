@@ -17,10 +17,13 @@ and offsets all come from the program and the composition metadata.
 
 from __future__ import annotations
 
+import functools
+
 from dataclasses import dataclass, field
 
 from asmgen.asmblocks.op.constraint import ArgumentDependencyError
 from asmgen.callconv.fngen import fngen
+from . import asmops
 from ..support.domains import operand_values
 from ..support.data_move import operand_side
 from ..support.tiles import widening_ways
@@ -181,8 +184,8 @@ class offset_planner:
         register holding VL*VL - plain adds or subs repeated where it doesn't
         """
         op = "sub" if n < 0 else "add"
-        plain = getattr(self.e.gen, f"{op}_greg_greg")
-        shifted = getattr(self.e.gen, f"{op}_greg_greg_shifted")
+        plain = functools.partial(asmops.arith, self.e.gen, op)
+        shifted = functools.partial(asmops.shifted, self.e.gen, op)
         out, k, bit = [], abs(n), 0
         while k:
             if k & 1:
@@ -209,7 +212,7 @@ class offset_planner:
         lines = []
         for factors, coeff in amount.terms:
             if not factors:
-                lines.append(self.e.gen.add_greg_imm(reg=areg, imm=coeff))
+                lines.append(asmops.add_imm(self.e.gen, reg=areg, imm=coeff))
                 continue
             if 0 != coeff % esize:
                 raise specialization_error(
@@ -217,11 +220,11 @@ class offset_planner:
             n = coeff // esize
             if ("VL",) == factors and not self.e.vector_length_kept:
                 # whole vectors, forward or back: incb or decb
-                lines.append(self.e.gen.add_greg_voff(reg=areg, offset=n, dt=dt))
+                lines.append(asmops.add_vectors(self.e.gen, reg=areg, offset=n))
                 continue
             if ("VL",) == factors and n > 1:
                 # RVV: k vector lengths in a register of their own - one add
-                lines.append(self.e.gen.add_greg_greg(dst=areg, reg1=areg, reg2=self.vl_multiple(dt, n)))
+                lines.append(asmops.add(self.e.gen, dst=areg, reg1=areg, reg2=self.vl_multiple(dt, n)))
                 continue
             if ("VL",) == factors:
                 # RVV: the vector length in a register, in bytes
@@ -273,7 +276,7 @@ class offset_planner:
             vlreg = self.vl_elements(dt)
             reg = self.e.greg()
             self.e.strides_in[key] = reg
-            self.e.late_setup.append(self.e.gen.mul_greg_greg(
+            self.e.late_setup.append(asmops.mul(self.e.gen, 
                 dst=reg, reg1=vlreg, reg2=self.stride_reg(factor, setup=True)))
         return self.e.strides_in[key]
 
@@ -286,7 +289,7 @@ class offset_planner:
             self.e.recipes.append(("constant_stride", (nbytes,), self.e.regions_started))
             reg = self.e.greg()
             self.e.strides_in[key] = reg
-            self.e.late_setup.append(self.e.gen.mov_greg_imm(reg=reg, imm=nbytes))
+            self.e.late_setup.append(asmops.set_imm(self.e.gen, reg=reg, imm=nbytes))
         return self.e.strides_in[key]
 
     def vl_squared(self, dt):
@@ -301,8 +304,8 @@ class offset_planner:
             vlreg = self.vl_elements(dt)
             reg = self.e.greg()
             self.e.strides_in[key] = reg
-            self.e.late_setup += [self.e.gen.mul_greg_greg(dst=reg, reg1=vlreg, reg2=vlreg),
-                                self.e.gen.shift_greg_left(reg=reg,
+            self.e.late_setup += [asmops.mul(self.e.gen, dst=reg, reg1=vlreg, reg2=vlreg),
+                                asmops.shift_left(self.e.gen, reg=reg,
                                                          bit_count=adt_size(dt).bit_length() - 1)]
         return self.e.strides_in[key]
 
@@ -318,8 +321,8 @@ class offset_planner:
             vlreg = self.e.gen.isa_setup().vector_length_register(rt=self.e.rt)
             reg = self.e.greg()
             self.e.vlb[esize] = reg
-            self.e.late_setup += [self.e.gen.mov_greg(src=vlreg, dst=reg),
-                                self.e.gen.shift_greg_left(reg=reg, bit_count=esize.bit_length() - 1)]
+            self.e.late_setup += [asmops.mov(self.e.gen, src=vlreg, dst=reg),
+                                asmops.shift_left(self.e.gen, reg=reg, bit_count=esize.bit_length() - 1)]
         return self.e.vlb[esize]
 
     def vl_multiple(self, dt, k: int):
@@ -336,11 +339,11 @@ class offset_planner:
             reg = self.e.greg()
             self.e.vlm[key] = reg
             if 0 == k & (k - 1):
-                self.e.late_setup += [self.e.gen.mov_greg(src=base, dst=reg),
-                                    self.e.gen.shift_greg_left(reg=reg, bit_count=k.bit_length() - 1)]
+                self.e.late_setup += [asmops.mov(self.e.gen, src=base, dst=reg),
+                                    asmops.shift_left(self.e.gen, reg=reg, bit_count=k.bit_length() - 1)]
             else:
-                self.e.late_setup += [self.e.gen.mov_greg(src=base, dst=reg)] + \
-                    [self.e.gen.add_greg_greg(dst=reg, reg1=reg, reg2=base) for _ in range(k - 1)]
+                self.e.late_setup += [asmops.mov(self.e.gen, src=base, dst=reg)] + \
+                    [asmops.add(self.e.gen, dst=reg, reg1=reg, reg2=base) for _ in range(k - 1)]
         return self.e.vlm[key]
 
     def vector_multiple(self, amount, comp: str) -> int | None:
@@ -667,8 +670,8 @@ class signature_emitter:
         self.rt.reserve_specific_reg("greg", number)
         index = self.gen.greg(number)
         counter = self.greg()
-        lines = [self.gen.mov_greg(src=self.vl_elements(dt), dst=counter),
-                 self.gen.mov_greg_imm(reg=index, imm=0)]
+        lines = [asmops.mov(self.gen, src=self.vl_elements(dt), dst=counter),
+                 asmops.set_imm(self.gen, reg=index, imm=0)]
         # explicit copies in the block (unroll_loops): emitted once an
         # iteration, every pointer stepping by the unroll; a step register
         # shared by walks of the same step
@@ -785,17 +788,17 @@ class signature_emitter:
                     f"unroll needs fewer")
             walker = self.greg()
             shared[start] = walker
-            lines.append(self.gen.mov_greg(src=self.aregs[(wcomp, wreg)], dst=walker))
+            lines.append(asmops.mov(self.gen, src=self.aregs[(wcomp, wreg)], dst=walker))
             lines += self.add_bytes(walker, self.bytes_of(wcomp, elements - self.positions[(wcomp, wreg)]), wcomp)
             if key not in steps:
                 delta = self.greg()
                 if not terms or set(terms) == {()}:
-                    lines.append(self.gen.mov_greg_imm(reg=delta, imm=terms.get((), 0) * adt_size(wdt) * scale))
+                    lines.append(asmops.set_imm(self.gen, reg=delta, imm=terms.get((), 0) * adt_size(wdt) * scale))
                 elif scale > 1:
-                    lines.append(self.gen.mul_greg_imm(src=self.stride_reg(next(iter(terms))[0]),
+                    lines.append(asmops.mul_imm(self.gen, src=self.stride_reg(next(iter(terms))[0]),
                                                        dst=delta, factor=scale))
                 else:
-                    lines.append(self.gen.mov_greg(src=self.stride_reg(next(iter(terms))[0]), dst=delta))
+                    lines.append(asmops.mov(self.gen, src=self.stride_reg(next(iter(terms))[0]), dst=delta))
                 steps[key] = delta
             walkers.append(walker)
             deltas.append(steps[key])
@@ -805,7 +808,7 @@ class signature_emitter:
                 pointer_regs[(key, name)] = self.aregs[key]
                 continue
             ptr = self.greg()
-            lines.append(self.gen.mov_greg(src=self.aregs[key], dst=ptr))
+            lines.append(asmops.mov(self.gen, src=self.aregs[key], dst=ptr))
             lines += self.add_bytes(ptr, self.bytes_of(key[0], column), key[0])
             pointer_regs[(key, name)] = ptr
         loop = f"ukr{next(self.labels)}_slices"
@@ -862,9 +865,9 @@ class signature_emitter:
             if plan:
                 out = step_on(unroll)
             else:
-                out = [self.gen.add_greg_greg(dst=w, reg1=w, reg2=d)
+                out = [asmops.add(self.gen, dst=w, reg1=w, reg2=d)
                        for w, d in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values()]
-            return out + [self.gen.add_greg_imm(reg=index, imm=unroll)]
+            return out + [asmops.add_imm(self.gen, reg=index, imm=unroll)]
         if preload:
             first = [b for b in op.block if early(b)]
             rest = [b for b in op.block if not early(b)]
@@ -873,11 +876,11 @@ class signature_emitter:
             # loads go before it, the count is the slices after the last group
             label_line = lines.pop()
             lines += emit_ops(first)
-            lines.append(self.gen.add_greg_imm(reg=counter, imm=-unroll))
+            lines.append(asmops.add_imm(self.gen, reg=counter, imm=-unroll))
             lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.EZ, label=last))
             lines.append(label_line)
             lines += emit_ops(rest) + advance() + emit_ops(first)
-            lines.append(self.gen.add_greg_imm(reg=counter, imm=-unroll))
+            lines.append(asmops.add_imm(self.gen, reg=counter, imm=-unroll))
             lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
             lines.append(self.gen.label(label=last))
             lines += emit_ops(rest)
@@ -927,13 +930,13 @@ class signature_emitter:
                 lines += step_on(unroll if explicit else 1)
             else:
                 for walker, delta in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values():
-                    lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
+                    lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
             self.phys.update(saved)
         for group in sets:
             for n, _ in group.values():
                 self.rt.unuse_reg("vreg", n)
-        lines.append(self.gen.add_greg_imm(reg=index, imm=unroll))
-        lines.append(self.gen.add_greg_imm(reg=counter, imm=-unroll))
+        lines.append(asmops.add_imm(self.gen, reg=index, imm=unroll))
+        lines.append(asmops.add_imm(self.gen, reg=counter, imm=-unroll))
         lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
         for r in [counter, index] + list(shared.values()) + list(steps.values()):
             self.rt.unuse_reg("greg", r.idx)
@@ -963,9 +966,9 @@ class signature_emitter:
             for idx in s.indices:
                 self.dts.setdefault((idx.component, idx.indices[0]), dt)
         walker, counter, delta = self.greg(), self.greg(), self.greg()
-        lines = [self.gen.mov_greg(src=self.aregs[(comp, reg)], dst=walker)]
+        lines = [asmops.mov(self.gen, src=self.aregs[(comp, reg)], dst=walker)]
         lines += self.add_bytes(walker, self.bytes_of(comp, start), comp)
-        lines.append(self.gen.mov_greg(src=self.vl_elements(dt), dst=counter))
+        lines.append(asmops.mov(self.gen, src=self.vl_elements(dt), dst=counter))
         # the walk's step, the element stride in bytes - negative where a fill
         # shifts up (SVE insr, into lane 0): from the last element backwards
         stride = op.walks[0].step
@@ -973,18 +976,18 @@ class signature_emitter:
         up = op.subtiling.order < 0
         if set(terms) == {()}:
             nbytes = terms[()] * adt_size(dt)
-            lines.append(self.gen.mov_greg_imm(reg=delta, imm=-nbytes if up else nbytes))
+            lines.append(asmops.set_imm(self.gen, reg=delta, imm=-nbytes if up else nbytes))
         elif 1 == len(terms) and 1 == len(next(iter(terms))) and 1 == next(iter(terms.values())):
             source = self.stride_reg(next(iter(terms))[0])
-            lines.append(self.gen.mul_greg_imm(src=source, dst=delta, factor=-1) if up
-                         else self.gen.mov_greg(src=source, dst=delta))
+            lines.append(asmops.mul_imm(self.gen, src=source, dst=delta, factor=-1) if up
+                         else asmops.mov(self.gen, src=source, dst=delta))
         else:
             raise specialization_error(f"{op.rsln}: walking {comp} by {stride} elements")
         if up:
             # the last element: a vector length of strides on, one back
             lines += self.add_bytes(walker, self.bytes_of(comp, sym._make(
                 {tuple(sorted(("VL",) + f)): c for f, c in terms.items()})), comp)
-            lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
+            lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
         loop = f"ukr{next(self.labels)}_elements"
         lines.append(self.gen.label(label=loop))
         # the body as often as an iteration takes elements, the pointer moved
@@ -1015,7 +1018,7 @@ class signature_emitter:
                 batch = range(start, min(unroll, start + count))
                 for e in batch:
                     lines.append(access(load, scalars[e - start]))
-                    lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
+                    lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
                 for e in batch:
                     lines.append(self.move(fill, src=scalars[e - start]))
         else:
@@ -1027,8 +1030,8 @@ class signature_emitter:
                 lines.append(self.move(extract, dst=scalar))
                 lines.append(self.move(shift))
                 lines.append(access(store, scalar))
-                lines.append(self.gen.add_greg_greg(dst=walker, reg1=walker, reg2=delta))
-        lines.append(self.gen.add_greg_imm(reg=counter, imm=-unroll))
+                lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
+        lines.append(asmops.add_imm(self.gen, reg=counter, imm=-unroll))
         lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
         for r in (walker, counter, delta):
             self.rt.unuse_reg("greg", r.idx)
@@ -1211,10 +1214,10 @@ class signature_emitter:
         if src_key != dest_key and k is not None:
             # k vectors on from another pointer: one add, as the scheduler counts it
             dt = self.ctx.component_dts[comp]
-            lines = [self.gen.add_greg_greg(dst=dest, reg1=self.aregs[src_key],
+            lines = [asmops.add(self.gen, dst=dest, reg1=self.aregs[src_key],
                                             reg2=self.vl_multiple(dt, k))]
         else:
-            lines = [] if src_key == dest_key else [self.gen.mov_greg(src=self.aregs[src_key], dst=dest)]
+            lines = [] if src_key == dest_key else [asmops.mov(self.gen, src=self.aregs[src_key], dst=dest)]
             lines += self.add_bytes(dest, amount, comp)
         # a loop's advance moves to the next iteration: offsets are measured
         # within one, so that part isn't a move of the register
@@ -1378,11 +1381,11 @@ class signature_emitter:
             return [self.compute(op)]
         if isinstance(op, lsc_zero) and rgt.TILE == op.rtypes[0]:
             reg = self.reg(op.indices[0], op.rtypes[0])
-            return [self.gen.zero_treg(treg=reg, dt=self.dts[(op.indices[0].component,
+            return [asmops.zero(self.gen, reg=reg, dt=self.dts[(op.indices[0].component,
                                                               op.indices[0].indices[0])])]
         if isinstance(op, lsc_zero):
             reg = self.reg(op.indices[0], op.rtypes[0])
-            return [self.gen.zero_vreg(vreg=reg, dt=self.dts[(op.indices[0].component,
+            return [asmops.zero(self.gen, reg=reg, dt=self.dts[(op.indices[0].component,
                                                                op.indices[0].indices[0])])]
         if isinstance(op, lsc_addr_compute):
             return self.address(op)
@@ -1619,7 +1622,7 @@ class signature_emitter:
             self.cc.add_clobber(tag, regs)
         save, load, restore = self.fn.get_boilerplate(cc=self.cc)
         shift = getattr(self.fn, "sp_shift", 0)
-        loaded = {f"@@loadparam {name}@@": [l.strip() for l in self.gen.load_greg(
+        loaded = {f"@@loadparam {name}@@": [l.strip() for l in asmops.load(self.gen, 
                       areg=self.gen.greg(self.cc.spreg), offset=off + shift, dst=reg).splitlines()
                       if l.strip()]
                   for name, (off, reg) in getattr(self, "deferred_regs", {}).items()}
@@ -1746,7 +1749,7 @@ class signature_emitter:
         if shared:
             # a later loop counts the same k: count a copy
             copy_reg = self.greg()
-            lines.append(self.gen.mov_greg(src=k, dst=copy_reg))
+            lines.append(asmops.mov(self.gen, src=k, dst=copy_reg))
             k = copy_reg
         left, tmp = self.greg(), self.greg()
         lines.append(self.gen.kiterkleft(kreg=k, kleftreg=left, tmpreg=tmp, unroll=int(terms[()])))
@@ -1777,8 +1780,8 @@ class signature_emitter:
                     comp = var[len("stride("):].split(",")[0]
                     t = self.greg()
                     ok = f"ukr{self.dispatch_tag}_ok{i}_{j}"
-                    lines.append(gen.mov_greg(src=self.params[var], dst=t))
-                    lines.append(gen.add_greg_imm(
+                    lines.append(asmops.mov(gen, src=self.params[var], dst=t))
+                    lines.append(asmops.add_imm(gen, 
                         reg=t, imm=-int(value) * adt_size(self.ctx.component_dts[comp])))
                     lines.append(gen.jzero(reg=t, label=ok))
                     lines.append(gen.jump(label=following))
@@ -1788,14 +1791,14 @@ class signature_emitter:
                 dt = self.ctx.component_dts[var]
                 size = adt_size(dt)
                 v, k, t = freg(dt), freg(dt), self.greg()
-                lines.append(gen.load_freg(areg=self.params[f"base({var})"], offset=0, dst=v, dt=dt))
+                lines.append(asmops.load(gen, areg=self.params[f"base({var})"], offset=0, dst=v, dt=dt))
                 if 0 == float(value):
-                    lines.append(gen.zero_freg(freg=k, dt=dt))
+                    lines.append(asmops.zero(gen, reg=k, dt=dt))
                 else:
                     bits = struct.unpack("<Q" if 8 == size else "<I",
                                          struct.pack("<d" if 8 == size else "<f", float(value)))[0]
-                    lines.append(gen.mov_greg_imm(reg=t, imm=bits))
-                    lines.append(gen.mov_greg_to_freg(src=t, dst=k, dt=dt))
+                    lines.append(asmops.set_imm(gen, reg=t, imm=bits))
+                    lines.append(asmops.bits_to_freg(gen, src=t, dst=k, dt=dt))
                 lines.append(gen.cb(reg1=v, reg2=k, cmp=comparison.NE, label=following, dt=dt, greg=t))
                 for r in (v, k):
                     self.rt.unuse_reg("freg", r.idx)
@@ -1870,7 +1873,7 @@ class signature_emitter:
                     self.live_params.discard(name)
                 else:
                     areg = self.greg()
-                    lines += [l.strip() for l in self.gen.mov_greg(src=param, dst=areg).splitlines()
+                    lines += [l.strip() for l in asmops.mov(self.gen, src=param, dst=areg).splitlines()
                               if l.strip()]
                 self.aregs[key] = areg
                 start = db.elements_offset(self.program.addr_setup[key], strides.get(comp, {}))
@@ -1910,7 +1913,7 @@ class signature_emitter:
                 # the loop's head on a boundary: nops padding, run once
                 code.extend(lines(gen.align(self.ctx.loop_align)))
             code.extend(lines(gen.label(label=label)))
-            code.extend(lines(gen.add_greg_imm(reg=reg, imm=-1)))
+            code.extend(lines(asmops.add_imm(gen, reg=reg, imm=-1)))
             code.extend(part)
             code.extend(lines(gen.cb(reg1=reg, reg2=None, cmp=nz, label=label)))
             code.extend(lines(gen.label(label=done)))
@@ -1930,7 +1933,7 @@ class signature_emitter:
             code.extend(sec.get("init", []))
             code.extend(lines(gen.cb(reg1=n, reg2=None, cmp=ez, label=done)))
             code.extend(sec.get("prologue", []))
-            code.extend(lines(gen.add_greg_imm(reg=n, imm=-1)))
+            code.extend(lines(asmops.add_imm(gen, reg=n, imm=-1)))
             counted(n, f"ukr{tag}_loop", sec.get("body", []) + block.advance, f"ukr{tag}_last")
             code.extend(sec.get("epilogue", []) + block.advance)
             code.extend(lines(gen.label(label=done)))

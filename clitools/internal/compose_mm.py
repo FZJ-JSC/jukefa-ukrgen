@@ -4,6 +4,7 @@ import logging
 from asmgen.asmblocks.noarch import asmgen
 from asmgen.registers import reg_tracker
 from asmgen.callconv.callconv import callconv
+from ukrgen.emitters import asmops
 
 def get_blis_gemm_cc(gen : asmgen):
     cc : callconv = gen.create_callconv()
@@ -69,7 +70,7 @@ class fngen:
 
         for name,off in self.required_loads.items():
             loadblock += self.gen.asmwrap(f"# loading {name}")
-            loadblock += self.gen.load_greg(
+            loadblock += asmops.load(self.gen, 
                     areg=self.gen.greg(cc.spreg),
                     offset=off+sr_count*8, # Assuming 64 bit/ 8 byte pointers
                     dst=self.gen.greg(self.rt.aliased_regs['greg'][name])
