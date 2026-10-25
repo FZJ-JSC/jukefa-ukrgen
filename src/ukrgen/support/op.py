@@ -169,7 +169,6 @@ class op_support_builder:
         self.gen = gen
 
         self.is_vla : bool = False
-        self.fregs_in_vregs : bool = False
         self.mregs_are_vregs : bool = False
         self.arith_ops : list[operation]
         self.ldst_ops : list[operation]
@@ -181,7 +180,6 @@ class op_support_builder:
 
         # Is this VLA
         self.is_vla = self.gen.is_vla
-        self.fregs_in_vregs = self.gen.are_fregs_in_vregs
 
         # TODO: figure out through signatures
         self.mregs_are_vregs = False

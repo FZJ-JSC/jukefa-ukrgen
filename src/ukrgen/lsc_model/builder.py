@@ -231,22 +231,29 @@ class program_builder:
                           rtype = rgt.FP
                       if rtype is not None:
                           rtypes.setdefault(math, set()).add(rtype)
-        shared = self.gen.are_fregs_in_vregs
-        def on_vregs(comp):
+        rt = self.gen.get_reg_tracker()
+        def pool_of(comp):
+            """
+            The register file a component's registers are in, as the tracker
+            pools them: its vector registers', or its FP registers' - one file
+            where FP registers are vector registers (SVE, NEON, x86), their
+            own where they're not (RVV's vfmacc.vf takes its scalar from it)
+            """
             kinds = rtypes.get(comp, set())
-            return rgt.VEC in kinds or (shared and rgt.FP in kinds)
-        def budget_of(tag):
-            # the registers of the file the tracker allocates, reserved ones included
-            return self.gen.get_reg_tracker().available_reg_count(tag)
-        # each register file fitted on its own: vectors (and FP where they
-        # share the file), FP scalars where they have their own - RVV's
-        # vfmacc.vf takes its scalar from one
-        files = [("vreg", {c for c in self.coords if on_vregs(c)},
-                  budget_of("vreg"))]
-        if not shared:
-            files.append(("freg", {c for c in self.coords if rgt.FP in rtypes.get(c, set())
-                                   and rgt.VEC not in rtypes.get(c, set())},
-                          budget_of("freg")))
+            if rgt.VEC in kinds:
+                return rt.pool("vreg")
+            if rgt.FP in kinds:
+                return rt.pool("freg")
+            return None
+        # each register file fitted on its own - the vectors' first - its
+        # budget its registers, reserved ones included
+        pools: dict = {}
+        for c in self.coords:
+            pool = pool_of(c)
+            if pool is not None:
+                pools.setdefault(pool, set()).add(c)
+        files = [(pool, members, rt.capacity(pool))
+                 for pool, members in sorted(pools.items(), key=lambda kv: "vreg" not in kv[0])]
         for tag, members, budget in files:
             if not members:
                 continue
