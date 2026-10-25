@@ -78,7 +78,9 @@ def asm_source(k: kernel) -> str:
     """
     if getattr(k, "asm", ""):
         return k.asm
-    return "\n".join(k.program.function(asm_symbol(k))) + "\n"
+    # the kernel offset bytes past a boundary, if it's to be (generate's align)
+    boundary, offset = getattr(k, "align", None) or (None, 0)
+    return "\n".join(k.program.function(asm_symbol(k), align=boundary, offset=offset)) + "\n"
 
 
 def gemm_wrapper(k: kernel) -> str:

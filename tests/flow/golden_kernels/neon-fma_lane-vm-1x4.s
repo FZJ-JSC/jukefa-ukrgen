@@ -1,5 +1,6 @@
 .text
 .global bli_dgemm_ukrgen_neon_vm_2x4_asm
+.type bli_dgemm_ukrgen_neon_vm_2x4_asm, %function
 bli_dgemm_ukrgen_neon_vm_2x4_asm:
 add sp,sp,#-16
 str d8, [sp]
@@ -344,4 +345,5 @@ st1 {v0.2d}, [x10]
 ldr d8, [sp]
 add sp,sp,#16
 ret
+.size bli_dgemm_ukrgen_neon_vm_2x4_asm, .-bli_dgemm_ukrgen_neon_vm_2x4_asm
 .section .note.GNU-stack,"",%progbits

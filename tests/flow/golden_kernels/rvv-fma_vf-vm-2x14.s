@@ -1,5 +1,6 @@
 .text
 .global bli_dgemm_ukrgen_rvv_vm_2vx14_asm
+.type bli_dgemm_ukrgen_rvv_vm_2vx14_asm, %function
 bli_dgemm_ukrgen_rvv_vm_2vx14_asm:
 add sp,sp,-112
 sd s1, 0(sp)
@@ -1560,4 +1561,5 @@ fld f22, 88(sp)
 fld f23, 96(sp)
 add sp,sp,112
 ret
+.size bli_dgemm_ukrgen_rvv_vm_2vx14_asm, .-bli_dgemm_ukrgen_rvv_vm_2vx14_asm
 .section .note.GNU-stack,"",%progbits

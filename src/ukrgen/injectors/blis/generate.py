@@ -49,11 +49,8 @@ def generate(cfg: configuration, out_dir: str, stack_size: int | None = None,
         written.append(rel)
     kdir = f"kernels/{cfg.name}/3"
     for k in kernels:
+        # aligned as k.align says, offset past the boundary by nops (asm_source)
         text = asm_source(k)
-        if getattr(k, "align", None):
-            # the object's text from a boundary, the kernel offset bytes past it
-            boundary, offset = k.align
-            text = f".text\n.balign {boundary}\n" + (f".space {offset}\n" if offset else "") + text
         write(f"{'kernels/' + cfg.name + '/1m' if k.case else kdir}/{k.symbol}.S", text)
     helpers = vl_helpers(kernels, gen)
     write(f"{kdir}/bli_gemm_{cfg.name}.c",

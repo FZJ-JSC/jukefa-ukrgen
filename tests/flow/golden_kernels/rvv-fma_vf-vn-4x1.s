@@ -1,5 +1,6 @@
 .text
 .global bli_dgemm_ukrgen_rvv_vn_4x1v_asm
+.type bli_dgemm_ukrgen_rvv_vn_4x1v_asm, %function
 bli_dgemm_ukrgen_rvv_vn_4x1v_asm:
 add sp,sp,-16
 sd s2, 0(sp)
@@ -630,4 +631,5 @@ ld s2, 0(sp)
 ld s1, 8(sp)
 add sp,sp,16
 ret
+.size bli_dgemm_ukrgen_rvv_vn_4x1v_asm, .-bli_dgemm_ukrgen_rvv_vn_4x1v_asm
 .section .note.GNU-stack,"",%progbits

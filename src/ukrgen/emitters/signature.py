@@ -91,29 +91,41 @@ class emitted_program:
     #: clobbers and loading parameters passed on the stack; restoring, return
     entry : list[str] = field(default_factory=list)
     exit : list[str] = field(default_factory=list)
+    #: the generator the program is for: it frames the function (fngen)
+    gen : object = None
 
-    def instructions(self) -> list[str]:
+    def instructions(self, data : bool = True) -> list[str]:
         """
-        Every instruction, in program order, ignoring loop structure
+        Every instruction, in program order, ignoring loop structure; then
+        the data the program keeps, unless data is False
         """
+        kept = list(self.data) if data else []
         out = list(self.setup)
         if self.code:
             return list(self.entry) + out + list(self.code) + list(self.teardown) \
-                + list(self.exit) + list(self.data)
+                + list(self.exit) + kept
         for block in self.blocks + [b for _, _, bs in self.cases for b in bs]:
             for lines in block.sections.values():
                 out += lines
             out += block.advance + block.tail_advance
-        return out + list(self.teardown) + list(self.data)
+        return out + list(self.teardown) + kept
 
-    def function(self, name: str) -> list[str]:
+    def function(self, name: str, *, align: int | None = None, offset: int = 0) -> list[str]:
         """
-        The program as an assembly function: the symbol, then every
-        instruction
+        The program as an assembly function, as asmgen frames one (fngen:
+        section, alignment, .global, .type, the label, the instructions,
+        .size, the data) - then what the file says once, the GNU-stack note
+
+        :param align: the function's alignment in bytes, if any
+        :param offset: where it starts past that boundary, in bytes
         """
-        # no executable stack: GNU linkers assume one without this note
-        return [".text", f".global {name}", f"{name}:"] + self.instructions() \
-            + ['.section .note.GNU-stack,"",%progbits']
+        from asmgen.callconv.fngen import fngen  # pylint: disable=import-outside-toplevel
+        if self.gen is None:
+            raise ValueError("the program has no generator to frame it")
+        body = "".join(f"{l}\n" for l in self.instructions(data=False))
+        data = "".join(f"{l}\n" for l in self.data)
+        text = fngen(self.gen).function(name, body, align=align, offset=offset, data=data)
+        return (text + self.gen.asmfile_annotations()).splitlines()
 
     def render(self) -> str:
         lines = ["// bases: " + ", ".join(f"{c} in {r}" for c, r in self.bases.items())]
@@ -1621,6 +1633,7 @@ class signature_emitter:
         setup = setup[:self.isa_setup_lines] + late + setup[self.isa_setup_lines:]
         entry, leave = lines(save) + lines(load), lines(restore) + lines(self.gen.ret())
         return emitted_program(
+            gen=self.gen,
             setup=setup, blocks=blocks, cases=cases,
             teardown=lines(isa.teardown(rt=self.rt, dt=dt)), data=lines(isa.data()),
             bases=bases,
@@ -1901,7 +1914,7 @@ class signature_emitter:
             code.extend(lines(gen.cb(reg1=reg, reg2=None, cmp=ez, label=done)))
             if getattr(self.ctx, "loop_align", None):
                 # the loop's head on a boundary: nops padding, run once
-                code.append(f".balign {self.ctx.loop_align}")
+                code.extend(lines(gen.align(self.ctx.loop_align)))
             code.extend(lines(gen.label(label=label)))
             code.extend(lines(gen.add_greg_imm(reg=reg, imm=-1)))
             code.extend(part)
