@@ -812,12 +812,17 @@ class program_builder:
         of the level above; elements as many as the vector has at run time
         (count None: a loop)
         """
-        size, parent = adt_size(dt), self.gen.simd_size * 8
+        size, parent = adt_size(dt), None
         path = []
         for level in step.repeat.levels:
             if level in ("element", "slice"):
                 path.append((level, None, 1))
-            elif "lane" == level:
+                continue
+            if parent is None:
+                # lanes and blocks: a vector of a size known at compile time
+                # (asmgen's simd_size raises on vector-length-agnostic ISAs)
+                parent = self.gen.simd_size * 8
+            if "lane" == level:
                 path.append(("lane", parent // (8 * size), 1))
             else:
                 path.append((level, parent // level, level // (8 * size)))
