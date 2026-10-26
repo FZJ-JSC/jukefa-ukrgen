@@ -99,9 +99,19 @@ def load(gen: asmgen, *, areg: greg_base, offset: int, dst: greg_base | freg_bas
 def add_vectors(gen: asmgen, *, reg: greg_base, offset: int) -> str:
     """
     reg += offset vectors' bytes: counted in vector lengths where they're the
-    machine's (SVE's addvl), in bytes where they're known
+    machine's - one add where it holds the count (SVE's incb, addvl), steps of
+    the most it holds where not - in bytes where they're known
     """
-    if gen.is_vla:
-        return gen.add(adreg=reg, bimm=offset, cdreg=reg, a_dt=GP, c_dt=GP,
-                       modifiers={opd3_modifier.VOFFSET})
-    return add_imm(gen, reg=reg, imm=offset * gen.simd_size)
+    if not gen.is_vla:
+        return add_imm(gen, reg=reg, imm=offset * gen.simd_size)
+    def call(n):
+        return dict(adreg=reg, bimm=n, cdreg=reg, a_dt=GP, c_dt=GP, modifiers={opd3_modifier.VOFFSET})
+    out, left = "", offset
+    while left and not gen.add.fits(**call(left)):
+        step = next(n for n in range(abs(left) - 1, 0, -1) if gen.add.fits(**call(n if left > 0 else -n)))
+        step = step if left > 0 else -step
+        out += gen.add(**call(step))
+        left -= step
+    if left:
+        out += gen.add(**call(left))
+    return out

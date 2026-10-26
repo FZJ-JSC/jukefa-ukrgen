@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from asmgen.asmblocks.op.opset import opset_modifier
 from asmgen.asmblocks.op.constraint import ArgumentDependencyError
 from asmgen.callconv.fngen import fngen
 from ..support.domains import operand_values
@@ -133,7 +134,8 @@ def _usable(ctx, sig) -> bool:
         return True
     masks = [n for n, o in sig.operands.items() if orl.MASK == o.orole]
     clobbered = set(getattr(sig, "clobber_list", None) or [])
-    return set(masks) <= clobbered and hasattr(ctx.gen, "mask_all_true")
+    # re-set before each where the generator sets a mask all-true at all
+    return set(masks) <= clobbered and bool(ctx.gen.set.forms(modifiers={opset_modifier.CONSTMASK}))
 
 
 def _vl_form(sig) -> bool:
