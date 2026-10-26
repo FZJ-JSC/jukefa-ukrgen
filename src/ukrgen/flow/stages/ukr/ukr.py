@@ -333,6 +333,9 @@ class ukr_composition(ABC):
     A microkernel as a composition of STOs. Subclasses declare components, STOs and
     blocks; everything else is derived.
     """
+    #: C's storages' aliases (storage_branches): none unless branched
+    storage_aliases : dict = {}
+
 
     @classmethod
     @abstractmethod

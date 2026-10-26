@@ -32,6 +32,8 @@ Chains of several operations are joined with " ; " and share temporary names (T0
 
 from __future__ import annotations
 
+from enum import Enum
+
 from asmgen.asmblocks.op import operand_type as ot, operand_role as orl
 
 from .data_move import dm_direction as dmd
@@ -90,7 +92,7 @@ def sig_group_tag(sig_grp: sig_group) -> str:
             parts.append(f"{name}:{m}")
 
     for k, v in sorted(sig_grp.ident.struct, key=lambda kv: str(kv[0])):
-        val = v.name if hasattr(v, "name") else v
+        val = v.name if isinstance(v, Enum) else v
         parts.append(f"{k}={val}")
 
     return "+".join(parts)
@@ -178,7 +180,7 @@ def encode_operation(res: operation_resolution,
         rtype = sig.operands[hw_name].rtype
         # an operand resident in another register type than the operation's
         # (a tile reached slice by slice through vectors) is that type
-        resident = [getattr(s.rsln, "resident_rtype", None)
+        resident = [s.rsln.resident_rtype
                     for (n, _), s in res.operand_strategies.items() if n == hw_name]
         rtype = next((r for r in resident if r is not None), rtype)
         rtype_str = rtype.name if rtype is not None else "?"

@@ -565,7 +565,7 @@ class signature_emitter:
             if isinstance(op, lsc_loop):
                 ops += list(op.block) + [w.anchor for w in op.walks]
                 continue
-            groups = [getattr(getattr(op, "resolution", None), "compute_sg", None), getattr(op, "sigs", None)]
+            groups = [(op.resolution.compute_sg if op.resolution is not None else None), op.sigs]
             for sig in (s for g in groups if g for s in _sigs(g)):
                 for name, shape in sig.operands.items():
                     if ot.REGISTER != shape.otype or shape.rtype not in files or \
@@ -591,11 +591,11 @@ class signature_emitter:
         comps = set()
         def scan(ops):
             for op in ops:
-                for idx in getattr(op, "indices", None) or ():
-                    comp = getattr(idx, "component", None)
+                for idx in op.indices or ():
+                    comp = idx.component
                     if comp is not None:
                         comps.add(comp)
-                if getattr(op, "block", None):
+                if op.block:
                     scan(op.block)
         for block in blocks:
             for section in ("prologue", "body", "epilogue", "tail", "subtail"):
@@ -659,7 +659,7 @@ class signature_emitter:
         """
         comp = op.info.get("component") or op.walks[0].anchor.indices[0].component
         dt = self.ctx.component_dts[comp]
-        sliced = [b for b in op.block if getattr(b, "sigs", None) is not None and
+        sliced = [b for b in op.block if b.sigs is not None and
                   any(n.endswith(("_rowreg", "_colreg")) for s in _sigs(b.sigs) for n in s.operands)]
         allowed = set(range(self.gen.max_gregs()))
         for b in sliced:
@@ -682,7 +682,7 @@ class signature_emitter:
         # shared by walks of the same step
         explicit = op.info.get("unrolled")
         scale = op.subtiling.unroll if explicit else 1
-        plan = getattr(op, "walk_plan", None)
+        plan = op.walk_plan
 
         # the plan's registers walk themselves: where each stands, as an offset
         # from its home at this iteration's first slice
@@ -712,7 +712,7 @@ class signature_emitter:
                     column_of[w] = (key, str(column), dict(offset.terms).get(("VL",)) if folds else None)
                     columns.setdefault((key, str(column)), (key, column))
             extra = len(columns) - len(plan)
-            budget = getattr(self.ctx, "loop_gregs", None)
+            budget = self.ctx.loop_gregs
             if budget is None or 2 + extra <= budget:
                 for (key, name), (_, column) in columns.items():
                     pointers[(key, name)] = None if not dict(column.terms) else column
@@ -824,13 +824,13 @@ class signature_emitter:
         # slices don't wait on each other's registers
         rotate = 1 if explicit else max(1, min(op.subtiling.registers, unroll))
         def keys(b, positions):
-            types = getattr(b, "rtypes", None) or []
+            types = b.rtypes or []
             return [(b.indices[p].component, b.indices[p].indices[0], types[p] if p < len(types) else None)
                     for p in positions]
         local, read = [], set()
         for b in op.block:
-            read |= set(keys(b, getattr(b, "reads", [])))
-            for k in keys(b, getattr(b, "writes", [])):
+            read |= set(keys(b, b.reads))
+            for k in keys(b, b.writes):
                 if rgt.VEC == k[2] and k not in read and k not in local:
                     local.append(k)
         sets = [{} for _ in range(rotate)]
@@ -1085,7 +1085,7 @@ class signature_emitter:
                 f"{op.rsln} access to {self.program.offsets[op.offset]} is not a constant "
                 f"offset from its address register: specialize the IR first")
         immediate = rel.get((), 0) * adt_size(self.ctx.component_dts[comp])
-        increment = getattr(op, "increment", None)
+        increment = op.increment
         if increment is not None:
             # a post-increment: the access at the register, then the register on
             line = self._mem(op, self.reg(op.indices[1], op.rtypes[1]), areg, immediate,
@@ -1226,7 +1226,7 @@ class signature_emitter:
             lines += self.add_bytes(dest, amount, comp)
         # a loop's advance moves to the next iteration: offsets are measured
         # within one, so that part isn't a move of the register
-        advance = (getattr(op, "properties", None) or {}).get("advance")
+        advance = (op.properties or {}).get("advance")
         self.positions[dest_key] = self.positions[src_key] + op.delta - (advance or sym.const(0))
         return lines
 
@@ -1325,7 +1325,7 @@ class signature_emitter:
         if self.vtype is None:
             return ""
         sizes = [adt_size(o.dt) for o in sig.operands.values()
-                 if rgt.VEC == o.rtype and getattr(o, "dt", None) is not None]
+                 if rgt.VEC == o.rtype and o.dt is not None]
         if not sizes:
             return ""
         # the registers this operation sees as one: a wide accumulator's group
@@ -1474,7 +1474,7 @@ class signature_emitter:
             # data registers, tiles among them: an outer products' tile lives
             # on into the operations reaching it slice by slice
             return [(i.component, i.indices[0], r) for i, r in
-                    zip(op.indices, getattr(op, "rtypes", None) or [])
+                    zip(op.indices, op.rtypes or [])
                     if r in (rgt.VEC, rgt.FP, rgt.TILE)]
 
         needed_later = {k for b in later
@@ -1500,7 +1500,7 @@ class signature_emitter:
         db, strides = self.program.offsets, self.program.strides
         # the advance in the IR already (schedulable, walks merged): the tail's
         # alone here
-        in_ir = getattr(block, "advance_in_ir", False)
+        in_ir = block.advance_in_ir
         for comp, oid in block.advance.items():
             step = self.bytes_of(comp, db.elements_offset(oid, strides.get(comp, {})))
             # the address registers the model set up: pointers and scratch
@@ -1585,7 +1585,7 @@ class signature_emitter:
         # before the dispatch: their offsets once the save area is known
         loads = []
         self.deferred_regs = {}
-        for name, (off, named) in getattr(self, "deferred", {}).items():
+        for name, (off, named) in self.deferred.items():
             reg = self.greg()
             for n in named:
                 self.params[n] = reg
@@ -1626,11 +1626,11 @@ class signature_emitter:
         for tag, regs in isa.clobbers().items():
             self.cc.add_clobber(tag, regs)
         save, load, restore = self.fn.get_boilerplate(cc=self.cc)
-        shift = getattr(self.fn, "sp_shift", 0)
+        shift = self.fn.sp_shift
         loaded = {f"@@loadparam {name}@@": [l.strip() for l in asmops.load(self.gen, 
                       areg=self.gen.greg(self.cc.spreg), offset=off + shift, dst=reg).splitlines()
                       if l.strip()]
-                  for name, (off, reg) in getattr(self, "deferred_regs", {}).items()}
+                  for name, (off, reg) in self.deferred_regs.items()}
         # what emission found it needs: right after the ISA's setup
         late = [l.strip() for chunk in self.late_setup for l in chunk.splitlines() if l.strip()]
         setup = setup[:self.isa_setup_lines] + late + setup[self.isa_setup_lines:]
@@ -1644,7 +1644,7 @@ class signature_emitter:
             code=[x for l in self.control(blocks, cases) for x in loaded.get(l.strip(), [l])],
             # the function's parameters: C's storages' aliases are C's
             params={n: str(r) for n, r in self.params.items()
-                    if self.param_comp(n) not in getattr(self, "aliases", {})},
+                    if self.param_comp(n) not in self.aliases},
             entry=entry, exit=leave)
 
     # --- control flow ---------------------------------------------------------
@@ -1669,7 +1669,7 @@ class signature_emitter:
         names += sorted(factors)
         # C's storages' alias components take C's parameters: base(Cr) is
         # base(C), stride(Cr,m) stride(C,m) - none of their own
-        self.aliases = dict(getattr(self.ctx.composition, "storage_aliases", {}) or {})
+        self.aliases = dict(self.ctx.composition.storage_aliases or {})
         def canonical(name):
             comp = self.param_comp(name)
             return name.replace(f"({comp}", "(C", 1) if comp in self.aliases else name
@@ -1695,7 +1695,7 @@ class signature_emitter:
         self.deferred = {}
         if self.program.cases:
             used = self.memory_comps(self.program.blocks)
-            for name, (tag, off) in list(getattr(self.fn, "required_loads", {}).items()):
+            for name, (tag, off) in list(self.fn.required_loads.items()):
                 comp = self.param_comp(name)
                 if "greg" != tag or comp is None or comp in used or name not in self.params \
                         or name in self.keep_params:
@@ -1720,7 +1720,7 @@ class signature_emitter:
         """
         Parameters no later region uses: their registers are free
         """
-        aliases = getattr(self, "aliases", {})
+        aliases = self.aliases
         for name in sorted(self.live_params):
             comp = self.param_comp(name)
             # C's parameters are its storages' aliases' too
@@ -1836,7 +1836,7 @@ class signature_emitter:
             for section in ("prologue", "body", "epilogue", "tail", "subtail"):
                 for op in getattr(b, section, None) or []:
                     if isinstance(op, (lsc_load, lsc_store)) and "VINDEX" in \
-                            {m.name for m in (getattr(op.step, "op_mod_reqs", None) or set())}:
+                            {m.name for m in (op.step.op_mod_reqs or set())}:
                         found.append(op)
         return found
 
@@ -1914,7 +1914,7 @@ class signature_emitter:
             # an iteration old - no wait on the decrement before it (the body
             # doesn't read the counter; every ISA's branch tests the register)
             code.extend(lines(gen.cb(reg1=reg, reg2=None, cmp=ez, label=done)))
-            if getattr(self.ctx, "loop_align", None):
+            if self.ctx.loop_align:
                 # the loop's head on a boundary: nops padding, run once
                 code.extend(lines(gen.align(self.ctx.loop_align)))
             code.extend(lines(gen.label(label=label)))
@@ -1987,7 +1987,7 @@ def emit_program(ctx, program: ir_program) -> emitted_program:
                 return emitter, emitter.emit()
             except KeyError as err:
                 name = err.args[0] if err.args else None
-                deferred = getattr(emitter, "deferred", {})
+                deferred = emitter.deferred
                 key = next((k for k, (_, named) in deferred.items() if name == k or name in named), None)
                 if key is None or key in keep:
                     raise

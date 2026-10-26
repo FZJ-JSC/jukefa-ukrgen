@@ -90,7 +90,7 @@ def run(ctx, stage, when: str):
     The hooks for this stage at this point, in the order given
     """
     name = type(stage).__name__
-    for h in getattr(ctx, "hooks", None) or []:
+    for h in ctx.hooks or []:
         if h.matches(when, name):
             _function(h)(ctx, stage, **h.args)
             h.ran += 1
@@ -101,7 +101,7 @@ def report_unused(ctx, stages_run: list[str]):
     A warning for each hook whose stage never ran - a misspelled stage does
     nothing otherwise
     """
-    for h in getattr(ctx, "hooks", None) or []:
+    for h in ctx.hooks or []:
         if not h.ran:
             names = ", ".join(dict.fromkeys(n.removesuffix("_stage") for n in stages_run))
             print(f"warning: hook '{h}' never ran: the stages were {names}", file=sys.stderr)

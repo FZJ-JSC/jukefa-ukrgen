@@ -165,7 +165,7 @@ class schedule_stage(stage):
                         for warning in report.warnings():
                             self.log.debug(f"{where}: {warning}")
                             lines.append(f"// {where}: {warning}")
-                        if getattr(report, "cycles", None):
+                        if report.cycles:
                             lines.append(f"// {where}: {report.cycles} cycles as the issue model "
                                          f"issues them")
                         if ops and specs:

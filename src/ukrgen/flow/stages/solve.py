@@ -121,7 +121,7 @@ def produced_rtype(impl: resolved_operation_chain, component: str) -> rgt | None
         if step.name_mapping.get(dest) == component:
             # resident in another register type than the operation's: that
             strat = res.operand_strategies.get((dest, dmd.OUT))
-            resident = getattr(getattr(strat, "rsln", None), "resident_rtype", None)
+            resident = strat.rsln.resident_rtype
             return resident or res.compute_sg.representative.operands[dest].rtype
     return None
 
@@ -138,7 +138,7 @@ def consumed_rtype(impl: resolved_operation_chain, component: str) -> rgt | None
         for hw_name, math_name in step.name_mapping.items():
             if math_name == component and get_operand_io(step.hw_ast, hw_name)[0]:
                 strat = res.operand_strategies.get((hw_name, dmd.IN))
-                resident = getattr(getattr(strat, "rsln", None), "resident_rtype", None)
+                resident = strat.rsln.resident_rtype
                 return resident or res.compute_sg.representative.operands[hw_name].rtype
     return None
 
@@ -550,7 +550,7 @@ class solve_stage(stage):
             raise stage_error(f"--tileop-vectorize has {len(vectorize)} values for "
                               f"{len(names)} presets")
         per_part = []
-        aliases = getattr(self.context.composition, "storage_aliases", {})
+        aliases = self.context.composition.storage_aliases
         by_suffix = {storage[0]: alias for alias, storage in aliases.items()}
         def with_copies(preset):
             # a storage's copies of the epilogue STOs (store.r, ...) take their

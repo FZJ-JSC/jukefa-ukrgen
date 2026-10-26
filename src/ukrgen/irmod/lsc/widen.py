@@ -30,7 +30,7 @@ def widening_ops(program):
 
 def _narrow(sig) -> int:
     return min(adt_size(o.dt) for o in sig.operands.values()
-               if rgt.VEC == o.rtype and getattr(o, "dt", None) is not None)
+               if rgt.VEC == o.rtype and o.dt is not None)
 
 
 def struct_sigs(gen, op: str, dt, ways: int) -> list:

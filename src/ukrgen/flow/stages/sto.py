@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from ...support.dm_solver import resolved_operation_chain
 from ...components.tile import tile, dimension_properties as dimp, dimension_type as dimt
 from ...lsc_model.addressing import sym
 from ...components.operation import operation
@@ -29,7 +30,7 @@ def resident_components(impl) -> set[str]:
     return {step.name_mapping.get(hw, hw)
             for res, step in zip(impl.resolved_chain, impl.math_chain)
             for (hw, _), strat in res.operand_strategies.items()
-            if getattr(strat.rsln, "resident_rtype", None) is not None}
+            if strat.rsln.resident_rtype is not None}
 
 
 def resident_slice_loop(impl, operands) -> tuple | None:
@@ -41,7 +42,7 @@ def resident_slice_loop(impl, operands) -> tuple | None:
     """
     for res, step in zip(impl.resolved_chain, impl.math_chain):
         for (hw, _), strat in res.operand_strategies.items():
-            if getattr(strat.rsln, "resident_rtype", None) is None:
+            if strat.rsln.resident_rtype is None:
                 continue
             comp = step.name_mapping.get(hw, hw)
             indices = [i for i in operands.get(comp, ()) if i is not None]
@@ -73,6 +74,12 @@ class sto_tiling:
     registers : dict[str, tile] = None
     counts : dict[str, int] = None
     generate_args : dict = None
+    #: the loop over a resident operand's slices, where there is one
+    slice_loop : object = None
+    #: the operand that stays in registers across the tiling, where one does
+    resident : object = None
+    #: the tiling's offset within its part
+    part_offset : object = None
 
     def regenerate(self, counts: dict[str, int] | None = None,
                    offset: dict[str, int] | None = None) -> list[operation]:
@@ -139,7 +146,7 @@ class sto_stage(stage):
             if sto_kind.COMPUTE == sto.kind:
                 impl = chosen[name].impl
                 groups = kernel_groups([c.impl for c in chosen.values()
-                                        if hasattr(getattr(c, "impl", None), "resolved_chain")])
+                                        if isinstance(c.impl, resolved_operation_chain)])
                 found = index_extents(gen, impl, groups)
                 extents = {i: found.get(i, ONE) for i in sto.indices}
                 tiles = operand_tiles(gen, impl, sto.req, groups)
@@ -315,8 +322,8 @@ class sto_stage(stage):
 
     def progress(self):
         subtails = self.context.subtail_parts or [{}] * len(self.context.to_parts)
-        part_dims = getattr(self.context, "part_dims", None) or [self.context.dims] * len(self.context.to_parts)
-        if len(self.context.to_parts) > 1 and getattr(self.context, "split_index", None) is None:
+        part_dims = self.context.part_dims or [self.context.dims] * len(self.context.to_parts)
+        if len(self.context.to_parts) > 1 and self.context.split_index is None:
             raise stage_error("several parts split the microtile along an index: give that "
                               "index one value per part (--m 2 2)")
         results = [self.tile_part(part, sub, dims)

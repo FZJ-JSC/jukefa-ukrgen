@@ -65,7 +65,7 @@ class dimension_stage(stage):
             raise stage_error(f"the microtile is split along one index, not {', '.join(split)}: "
                               f"give one of them a value per part")
         parts = len(values[split[0]]) if split else 1
-        wanted = len(getattr(self.context, "to_parts", None) or [None])
+        wanted = len(self.context.to_parts or [None])
         if split and parts != wanted:
             raise stage_error(f"--{split[0]} gives {parts} parts, the implementations "
                               f"(--<sto>-to) {wanted}")

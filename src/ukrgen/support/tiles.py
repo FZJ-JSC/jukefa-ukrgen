@@ -38,7 +38,7 @@ def widening_ways(sig) -> int:
     if method is None or "NONE" == method.name:
         return 1
     sizes = [adt_size(o.dt) for o in sig.operands.values()
-             if getattr(o, "dt", None) is not None and o.rtype in (rgt.VEC, rgt.TILE)]
+             if o.dt is not None and o.rtype in (rgt.VEC, rgt.TILE)]
     return max(sizes) // min(sizes) if sizes else 1
 
 
@@ -55,7 +55,7 @@ def kernel_groups(impls) -> dict[int, int]:
             if widening_ways(sig) < 2:
                 continue
             sizes = [adt_size(o.dt) for o in sig.operands.values()
-                     if rgt.VEC == o.rtype and getattr(o, "dt", None) is not None]
+                     if rgt.VEC == o.rtype and o.dt is not None]
             for size in sizes:
                 if size > min(sizes):
                     groups[size] = size // min(sizes)

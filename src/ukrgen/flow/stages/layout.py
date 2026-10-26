@@ -56,7 +56,7 @@ class layout_stage(stage):
     def __init__(self, context : ukr_context):
         super().__init__(context)
         self.indices = component_indices(context.composition)
-        aliases = getattr(context.composition, "storage_aliases", {})
+        aliases = context.composition.storage_aliases
         for comp, indices in self.indices.items():
             example = " ".join(f"{i}:{'c' if 0 == n else 'p'}" for n, i in enumerate(indices))
             # an alias of C for one of its storages: that storage's layout

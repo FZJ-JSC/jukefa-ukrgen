@@ -31,7 +31,7 @@ class cluster(lsc_irmod):
             if block.loop_index is not None or len(block.body) < 2:
                 continue
             # a grouped register's members are the group, for dependencies
-            order = cluster_order(list(block.body), getattr(program, "groups", None))
+            order = cluster_order(list(block.body), program.groups)
             if [id(op) for op in order] != [id(op) for op in block.body]:
                 block.body = order
                 changed += 1

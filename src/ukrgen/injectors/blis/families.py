@@ -48,7 +48,7 @@ def run_flow(params: dict) -> tuple[ukr_context, object]:
                 taken.add(name)
     ctx = ukr_context()
     result = stage_engine(PIPELINE, ctx, prolog=prolog).run()
-    if getattr(result, "completed", False):
+    if result.completed:
         # a parameter no stage took - a key misnamed - does nothing: say so
         ignored = sorted(set(params) - taken)
         if ignored:
@@ -335,13 +335,15 @@ class kernel:
     asm: str = ""
     #: C's storages its epilogue branches on (row, col, any), the last the default
     c_storages: list = field(default_factory=list)
+    #: the kernel's alignment in bytes, where its family asks one
+    align: int | None = None
 
 
 def part_extent(ctx, part: int, idx: str) -> sym:
     """
     A part's extent along an index: its register tile's extent times its count
     """
-    dims = (getattr(ctx, "part_dims", None) or [ctx.dims] * len(ctx.stos))[part]
+    dims = (ctx.part_dims or [ctx.dims] * len(ctx.stos))[part]
     for tiling in ctx.stos[part].values():
         if idx in tiling.extents:
             return sym.extent(tiling.extents[idx]) * dims[idx]
@@ -353,7 +355,7 @@ def extent_of(ctx, idx: str) -> sym:
     The microtile's extent along an index - as the model computes it: along a
     split index the parts' extents summed
     """
-    if len(ctx.stos) > 1 and idx == getattr(ctx, "split_index", None):
+    if len(ctx.stos) > 1 and idx == ctx.split_index:
         total = part_extent(ctx, 0, idx)
         for part in range(1, len(ctx.stos)):
             total = total + part_extent(ctx, part, idx)
@@ -439,7 +441,7 @@ def gemm_one(isa: str, config_name: str, fam: family, dt: str, m: int, n: int,
         ctx, result, _ = run_unrolled(params, "k")
     except Exception as err:
         return _skip(dt, (m, n), err)
-    if not getattr(result, "completed", False) or not ctx.emitted:
+    if not result.completed or not ctx.emitted:
         return _skip(dt, (m, n), "the flow didn't complete")
     mr, nr = str(extent_of(ctx, "m")), str(extent_of(ctx, "n"))
     layout = params.get("C-layout", ["m:c", "n:s"])
@@ -484,15 +486,15 @@ def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: in
         ctx, result, _ = run_unrolled(params, "n")
     except Exception as err:
         return _skip(dt, (case, m), err)
-    if not getattr(result, "completed", False) or not ctx.emitted:
+    if not result.completed or not ctx.emitted:
         return _skip(dt, (case, m), "the flow didn't complete")
     cdim = str(extent_of(ctx, "m"))
     symbol = f"bli_{DT_CHAR[dt]}packm_{config_name}_{fam.name}_{case}{size_name(cdim)}"
     program = ctx.emitted[0]
     # a loop stepping by vectors counts chunks of a vector length
-    unit = "VL" if any(("VL",) in dict(getattr(b, "step", None).terms)
+    unit = "VL" if any(("VL",) in dict(b.step.terms)
                        for p in ctx.programs for b in p.blocks
-                       if getattr(b, "step", None) is not None) else ""
+                       if b.step is not None) else ""
     return _done(kernel(family=fam.name, dtype=dt, size=(m, 1), mr=cdim, nr="1", symbol=symbol,
                         params=list(program.params), c_layout="col", program=program, case=case,
                         loop_unit=unit, simd_size_c=ctx.gen.c_simd_size_function),
@@ -533,7 +535,7 @@ def split_one(isa: str, config_name: str, fam: family, dt: str, combo: tuple, o:
         ctx, result, _ = run_unrolled(params, "k")
     except Exception as err:
         return _skip(dt, size, err)
-    if not getattr(result, "completed", False) or not ctx.emitted:
+    if not result.completed or not ctx.emitted:
         return _skip(dt, size, "the flow didn't complete")
     mr, nr = str(extent_of(ctx, "m")), str(extent_of(ctx, "n"))
     layout = params.get("C-layout", ["m:c", "n:s"])

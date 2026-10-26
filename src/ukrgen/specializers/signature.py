@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from asmgen.asmblocks.op.opset import opset_modifier
 from asmgen.asmblocks.op.constraint import ArgumentDependencyError
 from asmgen.callconv.fngen import fngen
+from ..support.sig_group import sig_group
 from ..support.domains import operand_values
 from ..support.data_move import operand_side
 from ..support.tiles import widening_ways
@@ -57,11 +58,10 @@ def _sigs(groups) -> list:
         return []
     if isinstance(groups, list):
         return [s for g in groups for s in _sigs(g)]
-    for attr in ("sigs", "members", "signatures"):
-        if hasattr(groups, attr):
-            return list(getattr(groups, attr))
-    # a signature group's representative, or a signature itself
-    return [getattr(groups, "representative", groups)]
+    if isinstance(groups, sig_group):
+        return list(groups.sigs)
+    # a signature itself
+    return [groups]
 
 
 def _masked(sig) -> bool:
@@ -185,13 +185,17 @@ class signature_specializer:
         few general registers - x86's 16 hold A's and B's pointers, the
         loop's counter and the parameters too
         """
-        if not hasattr(self, "_column_pointers"):
+        if self._column_pointers is None:
             # the general registers the tracker allocates, reserved ones included
             gregs = self.ctx.gen.get_reg_tracker().available_reg_count("greg")
             self._column_pointers = MAX_COLUMN_POINTERS if gregs > 16 else FEW_COLUMN_POINTERS
         return self._column_pointers
 
     def __init__(self, ctx, program: ir_program):
+        # what's been placed and walked, the column pointers made on first use
+        self.placed = set()
+        self.walked_by = {}
+        self._column_pointers = None
         self.ctx = ctx
         self.program = program
         self.positions: dict[tuple[str, int], sym] = {
@@ -344,20 +348,20 @@ class signature_specializer:
             vl_taken = lambda n: any(_vl_form(s) and _accepts(s, "voffset", n) for s in usable)
             # the scratch where this section placed it: what is left, if a
             # signature takes it - vector lengths, or a constant
-            if (comp, scratch) in getattr(self, "placed", set()):
+            if (comp, scratch) in self.placed:
                 rest = dict((target - self.positions[(comp, scratch)]).terms)
                 rvl, rconst = rest.pop(("VL",), 0), rest.pop((), 0)
                 if not rest and ((not rconst and (not rvl or vl_taken(rvl))) or
                                  (not rvl and any(_takes(s, rconst * adt_size(
                                      self.ctx.component_dts[comp]),
-                                     getattr(self, "max_imm_offset", None)) for s in usable))):
+                                     self.max_imm_offset) for s in usable))):
                     op.indices[0] = lsc_reg_index(comp, [scratch])
                     return inserted + [op]
             # placed at the constant only where a signature takes the vector
             # lengths: the next vectors past it need nothing more
             delta = sym.const(const) if vl_taken(vl) else sym.const(const) + sym.factor("VL", vl)
             here = self.positions[(comp, reg)] + delta
-            if (comp, scratch) in getattr(self, "placed", set()) and \
+            if (comp, scratch) in self.placed and \
                     not [f for f in dict((here - self.positions[(comp, scratch)]).terms) if f and ("VL",) != f]:
                 # already placed this section: moved by the difference alone
                 move = here - self.positions[(comp, scratch)]
@@ -365,11 +369,11 @@ class signature_specializer:
             else:
                 inserted.append(lsc_addr_compute(comp, reg, scratch, delta, scalar_tile))
             self.positions[(comp, scratch)] = here
-            self.placed = getattr(self, "placed", set()) | {(comp, scratch)}
+            self.placed = self.placed | {(comp, scratch)}
             op.indices[0] = lsc_reg_index(comp, [scratch])
             return inserted + [op]
 
-        if not any(_takes(s, immediate, getattr(self, "max_imm_offset", None)) for s in usable):
+        if not any(_takes(s, immediate, self.max_imm_offset) for s in usable):
             if not any(_takes(s, 0) for s in usable):
                 raise specialization_error(
                     f"no {op.step.op} signature for {db[op.offset]} takes a plain address")
@@ -378,7 +382,7 @@ class signature_specializer:
             # section moves it back at its end
             inserted.append(lsc_addr_compute(comp, reg, reg, sym.const(const), scalar_tile))
             self.positions[(comp, reg)] = self.positions[(comp, reg)] + sym.const(const)
-            walked = getattr(self, "walked_by", {})
+            walked = self.walked_by
             walked[(comp, reg)] = walked.get((comp, reg), sym.const(0)) + sym.const(const)
             self.walked_by = walked
         op.indices[0] = lsc_reg_index(comp, [reg])
@@ -466,7 +470,7 @@ class signature_specializer:
         at 0 - where none of its accesses there goes negative (x86 takes no
         negative offset) and the move is constant or in vector lengths
         """
-        shift = getattr(block, "preload_shift", None) or {}
+        shift = block.preload_shift or {}
         if not any(shift.values()):
             return []
         db, firsts, lows = self.program.offsets, {}, {}
@@ -498,13 +502,13 @@ class signature_specializer:
         A loop's advance to its next iteration, per address register the model
         set up: what the emitter otherwise appends as text after the body
         """
-        if block.loop_index is None or not getattr(block, "advance", None):
+        if block.loop_index is None or not block.advance:
             return {}
         db, out = self.program.offsets, {}
         for comp, oid in block.advance.items():
             step = db.elements_offset(oid, self.program.strides.get(comp, {}))
             for (c, reg) in list(self.positions):
-                if c == comp and (c, reg) in getattr(self.program, "addr_setup", {}):
+                if c == comp and (c, reg) in self.program.addr_setup:
                     out[(c, reg)] = step
         return out
 
@@ -518,7 +522,7 @@ class signature_specializer:
             # next section (or iteration) starts from the same positions - and
             # in a loop's body and last iteration, merged with the advance to
             # the next iteration: one add a register, placed by the schedulers
-            walked = getattr(self, "walked_by", {})
+            walked = self.walked_by
             advances = self.loop_advances(block) if section in ("body", "epilogue") else {}
             for key in list(walked) + [k for k in advances if k not in walked]:
                 comp, reg = key
@@ -528,7 +532,7 @@ class signature_specializer:
                     ops.append(lsc_addr_compute(comp, reg, reg, sym.const(0) - moved, scalar_tile))
                 if step is not None and any(dict(step.terms).values()):
                     op = lsc_addr_compute(comp, reg, reg, step, scalar_tile)
-                    op.properties = dict(getattr(op, "properties", None) or {}, advance=step)
+                    op.properties = dict(op.properties or {}, advance=step)
                     ops.append(op)
                 self.positions[key] = self.positions[key] - moved
             if advances:

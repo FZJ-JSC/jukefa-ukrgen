@@ -23,6 +23,15 @@ class fraction:
         self.div = div
 
 class lsc_operation:
+    #: what some operations carry, set where they do - the others have these
+    resolution = None           # a transformation's data movement
+    block = None                # a loop's block
+    sigs = None                 # the signatures a load, store or move may take
+    increment = None            # an address register's advance after the access
+    mods : tuple = ()           # a load's, store's or transformation's modifiers
+    rtypes = None               # its operands' register types
+    walk_plan = None            # how a loop walks its components
+
     def __init__(self,
                  tiles : list[tile],
                  indices: list[lsc_reg_index],
@@ -464,8 +473,8 @@ class lsc_loop(lsc_operation):
             self.reg_types.append(w.anchor.reg_types[0])
             self.reads.append(len(self.indices) - 1)
         for op in self.block:
-            types = getattr(op, "rtypes", None) or [None] * len(op.indices)
-            kinds = getattr(op, "reg_types", None) or []
+            types = op.rtypes or [None] * len(op.indices)
+            kinds = op.reg_types or []
             for p, idx in enumerate(op.indices):
                 self.indices.append(idx)
                 self.rtypes.append(types[p] if p < len(types) else None)
@@ -476,7 +485,7 @@ class lsc_loop(lsc_operation):
                     self.writes.append(len(self.indices) - 1)
         # the address registers it walks (its walk plan): moved by it - read
         # and written
-        for comp, reg in (getattr(self, "walk_plan", None) or {}):
+        for comp, reg in (self.walk_plan or {}):
             self.indices.append(lsc_reg_index(comp, [reg]))
             self.rtypes.append(None)
             self.reg_types.append(lsc_reg_type.address)

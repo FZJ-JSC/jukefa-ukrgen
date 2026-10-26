@@ -30,8 +30,8 @@ from ..support.data_move import (
     orig_ref,
     filter_by_step_requirements,
 )
-from ..support.dm_solver import repeat_fits
-from ..support.sig_group import group_sigs
+from ..support.dm_solver import repeat_fits, resolved_operation_chain
+from ..support.sig_group import group_sigs, sig_group
 from .addressing import sym, offset_db, layout_strides, addr_pattern
 from ..components.tile import scalar_tile
 from ..models.load_store_operations import (
@@ -47,11 +47,11 @@ def _flat_sigs(sigs) -> list:
     """
     Signatures out of a group, a list of groups, or a list of signatures
     """
-    if hasattr(sigs, "sigs"):
+    if isinstance(sigs, sig_group):
         return list(sigs.sigs)
     if isinstance(sigs, (list, tuple)):
         return [s for g in sigs for s in _flat_sigs(g)]
-    return [getattr(sigs, "representative", sigs)]
+    return [sigs]
 
 class model_error(Exception):
     """
@@ -70,6 +70,8 @@ class access_group:
     ops : list[lsc_operation]
     streamed : bool
     coord : tuple = ()
+    #: what it reads: nothing - it moves data (compute items read)
+    reads : tuple = ()
 
 
 @dataclass
@@ -113,6 +115,10 @@ class program_builder:
                  preload: bool = True,
                  resolve_order: list[str] | None = None,
                  subtilings: dict | None = None, max_data_regs: dict | None = None, max_preload: dict | None = None):
+        # scratch registers' numbering, until a part asks otherwise
+        self.scratch_base = 0
+        self.unique_scratch = False
+        self.next_scratch = 0
         #: per component, [(resolution or None, {unroll, registers, order})]
         self.subtilings = subtilings or {}
         self.lane_groups: dict = {}
@@ -133,8 +139,8 @@ class program_builder:
 
         self.db = offset_db()
         self.extents: dict[str, sym] = {}
-        part_dims = getattr(ctx, "part_dims", None) or [ctx.dims] * len(ctx.to_parts)
-        split = getattr(ctx, "split_index", None)
+        part_dims = ctx.part_dims or [ctx.dims] * len(ctx.to_parts)
+        split = ctx.split_index
         for n, (pid, (_, stos)) in enumerate(zip(ids, self.parts)):
             seen = set()
             for tiling in stos.values():
@@ -211,7 +217,7 @@ class program_builder:
         for part, stos in self.parts:
             for sto in stos:
               impl = part[sto].impl if sto in part else None
-              if not hasattr(impl, "resolved_chain"):
+              if not isinstance(impl, resolved_operation_chain):
                   # a store's choice: no operation
                   continue
               for res, step in zip(impl.resolved_chain, impl.math_chain):
@@ -221,13 +227,13 @@ class program_builder:
                   for hw, math in step.name_mapping.items():
                       shape = res.compute_sg.representative.operands.get(hw)
                       strat = [st for (n, _), st in res.operand_strategies.items() if n == hw]
-                      resident = next((getattr(st.rsln, "resident_rtype", None) for st in strat
-                                       if getattr(st.rsln, "resident_rtype", None)), None)
+                      resident = next((st.rsln.resident_rtype for st in strat
+                                       if st.rsln.resident_rtype), None)
                       rtype = resident or (shape.rtype if shape is not None else None)
                       # brought as a scalar (bc_scalar: an FP register the
                       # instruction takes, vfmacc.vf), whatever the group's
                       # representative signature says
-                      if any("bc_scalar" == getattr(st.rsln, "unique_tag", None) for st in strat):
+                      if any("bc_scalar" == st.rsln.unique_tag for st in strat):
                           rtype = rgt.FP
                       if rtype is not None:
                           rtypes.setdefault(math, set()).add(rtype)
@@ -264,14 +270,14 @@ class program_builder:
             uses: dict[str, int] = {}
             for block in self.comp.all_blocks():
                 comps, wrote = set(), set()
-                for name in getattr(block, "stos", []):
+                for name in block.stos:
                     wrote |= written_by.get(name, set())
                     for _, stos in self.parts:
                         if name in stos:
                             for op in stos[name].ops:
                                 comps |= {n for n in op.tile_strs if n in on_file}
                 if comps:
-                    blocks.append((comps, wrote, getattr(block, "loop_index", None) is not None))
+                    blocks.append((comps, wrote, block.loop_index is not None))
                     for c in comps:
                         uses[c] = uses.get(c, 0) + 1
             accumulated = set().union(*[wrote for _, wrote, looped in blocks if looped])
@@ -364,7 +370,7 @@ class program_builder:
         The operations of the first loop block, in order, with their tilings
         """
         for block in self.comp.all_blocks():
-            if getattr(block, "loop_index", None) is not None:
+            if block.loop_index is not None:
                 return [(stos[n], op) for n in block.stos for _, stos in self.parts if n in stos
                         for op in stos[n].ops]
         return []
@@ -457,8 +463,8 @@ class program_builder:
         """
         if isinstance(ref, orig_ref):
             return final
-        tag = str(getattr(ref, "tag", "0"))
-        base = getattr(self, "scratch_base", 0) if getattr(self, "unique_scratch", False) else 0
+        tag = str(ref.tag)
+        base = self.scratch_base if self.unique_scratch else 0
         reg = vreg("S", rtype, base + (int(tag) if tag.isdigit() else 0))
         self._use(reg)
         return reg
@@ -477,7 +483,7 @@ class program_builder:
             return coord
         reg = tiling.registers.get(comp) if tiling.registers else None
         shape = (str(reg.dima), str(reg.dimb)) if reg is not None else ()
-        if comp in (getattr(tiling, "resident", None) or ()):
+        if comp in (tiling.resident or ()):
             # reached slice by slice through vectors: the whole tile
             shape = ("1v", "1v")
         return tuple(sorted(self.elements(tiling, comp, coord).items())) + ((_SHAPE, shape),)
@@ -495,13 +501,13 @@ class program_builder:
         live = [(pos, idx) for pos, idx in enumerate(indices) if idx is not None]
         # an STO looping over a tile's slices covers the tile along the index
         # they iterate: its coordinates step by the tile there
-        loop = getattr(tiling, "slice_loop", None)
+        loop = tiling.slice_loop
         step = lambda pos, idx: sym.extent(tiling.extents[idx]) if loop is not None \
             and idx == loop[0] else sym.extent(dims[pos])
         out = {idx: step(pos, idx) * c for (pos, idx), c in zip(live, coord)}
         # a part of a split microtile starts along the split index where the
         # one before ends
-        for idx, offset in (getattr(tiling, "part_offset", None) or {}).items():
+        for idx, offset in (tiling.part_offset or {}).items():
             if idx in out:
                 out[idx] = out[idx] + offset
         return out
@@ -553,10 +559,10 @@ class program_builder:
         """
         One data movement, its scratch registers its own in straight-line code
         """
-        if not getattr(self, "unique_scratch", False):
+        if not self.unique_scratch:
             return self._move_data(*args, **kwargs)
-        saved = getattr(self, "scratch_base", 0)
-        self.next_scratch = getattr(self, "next_scratch", 0) + 1
+        saved = self.scratch_base
+        self.next_scratch = self.next_scratch + 1
         self.scratch_base = SCRATCH_STRIDE * self.next_scratch
         try:
             return self._move_data(*args, **kwargs)
@@ -574,7 +580,7 @@ class program_builder:
         memory = memory or comp
         dt = self.ctx.component_dts[memory]
         self.vidx.setdefault(memory, self.vector_index(tiling, comp))
-        repeats = [getattr(rs.step, "repeat", None) for rs in steps]
+        repeats = [rs.step.repeat for rs in steps]
         if any(r is not None and r.group for r in repeats):
             return self.move_lane_group(sto, tiling, comp, coord, reg, steps, direction, tag,
                                         memory, dt)
@@ -588,7 +594,7 @@ class program_builder:
         ops: list[lsc_operation] = []
         for rs in steps:
             step = rs.step
-            sigs = getattr(rs, "sg", None) or self.step_sigs(step, dt)
+            sigs = rs.sg or self.step_sigs(step, dt)
             lanes = [lane]
             if step.repeat is not None:
                 lanes = list(range(self.gen.simd_size // adt_size(dt)))
@@ -678,7 +684,7 @@ class program_builder:
         index, so a loop over columns walks its second; rows the other way
         """
         step = steps[0].step
-        sigs = getattr(steps[0], "sg", None) or self.step_sigs(step, dt)
+        sigs = steps[0].sg or self.step_sigs(step, dt)
         col = any("COL" == m.name for mods in (step.opd_mod_reqs or {}).values() for m in mods)
         first, second = tiling.generate_args["operands"][comp][:2]
         elements = self.elements(tiling, comp, coord)
@@ -708,8 +714,8 @@ class program_builder:
         addr = self.address(sto, memory, direction, coord, elements)
         scalar = self.ref_reg(load.step.dest, load.step.dest_rtype, reg)
         vector = self.ref_reg(fill.step.dest, fill.step.dest_rtype, reg)
-        load_sigs = getattr(load, "sg", None) or self.step_sigs(load.step, dt)
-        fill_sigs = getattr(fill, "sg", None) or self.step_sigs(fill.step, dt)
+        load_sigs = load.sg or self.step_sigs(load.step, dt)
+        fill_sigs = fill.sg or self.step_sigs(fill.step, dt)
         block = [lsc_load(memory, scalar.index, addr.reg, None, None,
                           self.reg_tile(tiling, scalar), set(), data=_index(scalar), rsln=tag,
                           step=load.step, sigs=load_sigs, offset=addr.offset,
@@ -738,8 +744,8 @@ class program_builder:
         addr = self.address(sto, memory, direction, coord, elements)
         vector = self.ref_reg(extract.step.src[0], extract.step.src_rtypes[0], reg)
         scalar = self.ref_reg(extract.step.dest, extract.step.dest_rtype, reg)
-        extract_sigs = getattr(extract, "sg", None) or self.step_sigs(extract.step, dt)
-        store_sigs = getattr(store, "sg", None) or self.step_sigs(store.step, dt)
+        extract_sigs = extract.sg or self.step_sigs(extract.step, dt)
+        store_sigs = store.sg or self.step_sigs(store.step, dt)
         shift_sigs = [s for s in self.gen.move.get_signatures()
                       if {"ILANESHIFT", "INVALIDOTHERS"} == {m.name for m in s.operands["adreg"].modifiers}
                       and dt == s.operands["adreg"].dt
@@ -794,7 +800,7 @@ class program_builder:
             addr = self.address(sto, memory, direction, coord, start)
             ops.append(lsc_load(memory, data.index, addr.reg, None, None,
                                 self.reg_tile(tiling, data), set(), data=_index(data), rsln=tag,
-                                step=load.step, sigs=getattr(load, "sg", None) or
+                                step=load.step, sigs=load.sg or
                                 self.step_sigs(load.step, dt),
                                 offset=addr.offset, rtypes=[None, data.rtype]))
             self.lane_groups[memory] = key
@@ -803,7 +809,7 @@ class program_builder:
         op = lsc_move(_index(src), _index(dest),
                       [self.reg_tile(tiling, src), self.reg_tile(tiling, dest)],
                       rsln=tag, step=move.step,
-                      sigs=getattr(move, "sg", None) or self.step_sigs(move.step, dt),
+                      sigs=move.sg or self.step_sigs(move.step, dt),
                       rtypes=[src.rtype, dest.rtype])
         op.add_property("lane", position)
         ops.append(op)
@@ -849,7 +855,7 @@ class program_builder:
 
         def emit(rs, path, idxs):
             step = rs.step
-            sigs = getattr(rs, "sg", None) or self.step_sigs(step, dt)
+            sigs = rs.sg or self.step_sigs(step, dt)
             if "lane" == path[-1][0]:
                 position = sum(i * level[2] for i, level in zip(idxs, path))
                 elements = self.elements(tiling, comp, coord)
@@ -954,7 +960,7 @@ class program_builder:
                             self.lane_holder[(reg, by_lane[0])] = (math, coord)
                         self.holder[reg] = (math, coord)
                     elif slices and is_read and strat is not None and \
-                            getattr(strat.rsln, "resident_rtype", None) is not None:
+                            strat.rsln.resident_rtype is not None:
                         # the slice moved from the tile into the operation's
                         # vector (slice_vec)
                         loads.append(access_group(math, reg, [self.slice_move(
@@ -980,7 +986,7 @@ class program_builder:
                         written.append((reg, math, coord))
                         out = res.operand_strategies.get((hw, dmd.OUT))
                         if slices and out is not None and \
-                                getattr(out.rsln, "resident_rtype", None) is not None:
+                                out.rsln.resident_rtype is not None:
                             outward.append(self.slice_move(out, math, coord, reg, rtype, slices,
                                                            inward=False))
                 hws.append(hw)
@@ -1028,7 +1034,7 @@ class program_builder:
         tiling = tiling or self.stos[sto]
         kind = self.comp.get_sto(sto).kind
         items = []
-        slice_loop = getattr(tiling, "slice_loop", None)
+        slice_loop = tiling.slice_loop
         for op in ops:
             if sto_kind.COMPUTE == kind and slice_loop is not None:
                 items += self.slice_compute(sto, tiling, op, impl, slice_loop)
@@ -1047,7 +1053,7 @@ class program_builder:
         tile_reg = self.reg_of(math, resident, coord)
         step = strat.resolved_steps[0]
         dt = self.ctx.component_dts.get(math)
-        sigs = getattr(step, "sg", None) or self.step_sigs(step.step, dt)
+        sigs = step.sg or self.step_sigs(step.step, dt)
         src, dst = (tile_reg, reg) if inward else (reg, tile_reg)
         move = lsc_move(_index(src), _index(dst), [scalar_tile, scalar_tile], rsln=strat.rsln.unique_tag,
                         step=step.step, sigs=sigs, rtypes=[src.rtype, dst.rtype])
@@ -1172,7 +1178,7 @@ class program_builder:
         # what the loop stores along its index moves with it too (a packing
         # kernel's buffer); only what it reads did
         stored = {c for sto in block.stos
-                  for c in (getattr(self.comp.get_sto(sto), "store_components", None) or ())
+                  for c in (self.comp.get_sto(sto).store_components or ())
                   if k in self.strides.get(c, {})}
         for comp in sorted(streamed | stored):
             out.advance[comp] = self.db.add(comp, {k: iteration})
@@ -1212,7 +1218,7 @@ class program_builder:
                     from ..models.load_store_operations import ldst_modifier
                     lane = next((op.properties.get("lane") for op in items[pos].ops
                                  if isinstance(op, lsc_load)
-                                 and ldst_modifier.lane in getattr(op, "mods", ())), None)
+                                 and ldst_modifier.lane in op.mods), None)
                     full = (reg, lane)
                     if lane is not None:
                         # a lane: disjoint from the register's other lanes - a
@@ -1221,7 +1227,7 @@ class program_builder:
                     else:
                         new = reg != prev or any(
                             whole(r) == reg for p in range(prev_pos + 1, pos)
-                            for r in getattr(items[p], "reads", ()))
+                            for r in items[p].reads)
                     if new:
                         if reg in seen:
                             break
@@ -1353,7 +1359,7 @@ def _lane_steps(steps) -> bool:
     Whether a data movement loads into a single lane of its register
     """
     return any(omod.ILANE in mods for step in steps
-               for mods in (getattr(step, "opd_mod_reqs", None) or {}).values())
+               for mods in (step.opd_mod_reqs or {}).values())
 
 
 def _index(reg: vreg, lane: int | None = None) -> lsc_reg_index:
@@ -1376,8 +1382,7 @@ def _clone(op: lsc_operation) -> lsc_operation:
     new.writes = list(op.writes)
     new.reg_types = list(op.reg_types)
     new.properties = dict(op.properties)
-    if hasattr(op, "mods"):
-        new.mods = copy.copy(op.mods)
+    new.mods = copy.copy(op.mods)
     return new
 
 

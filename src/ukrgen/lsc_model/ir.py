@@ -53,7 +53,7 @@ def render_op(op, db: offset_db) -> str:
 
     def reg(pos: int) -> str:
         idx = op.indices[pos]
-        rtypes = getattr(op, "rtypes", None) or []
+        rtypes = op.rtypes or []
         rtype = rtypes[pos] if pos < len(rtypes) and rtypes[pos] is not None else None
         text = f"{idx.component}{idx.indices[0]}" + (f".{rtype.name}" if rtype else "")
         return text + (f".el[{idx.indices[1]}]" if len(idx.indices) > 1 else "")
@@ -118,6 +118,10 @@ class ir_block:
     epilogue : list = field(default_factory=list)
     tail : list = field(default_factory=list)
     advance : dict[str, int] = field(default_factory=dict)
+    #: its components' address registers advanced in the IR (not the emitter's)
+    advance_in_ir : bool = False
+    #: how far ahead its loads run of the body's iteration
+    preload_shift : object = None
 
 
 @dataclass

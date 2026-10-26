@@ -12,6 +12,7 @@ supported in an asmgen generator
 import itertools
 
 from asmgen.asmblocks.noarch import asmgen
+from asmgen.asmblocks.op.operation import operation
 from asmgen.registers import (
     asm_data_type as adt,
     adt_size
@@ -165,6 +166,13 @@ class op_support_builder:
         HW_MMA_AST:   'mma'
     }
 
+    def _operation(self, name : str) -> bool:
+        """
+        Whether the generator has an operation of the name (an IR step's
+        names are asmgen's operations, where it has them)
+        """
+        return isinstance(getattr(self.gen, name, None), operation)
+
     def __init__(self, gen : asmgen):
         self.gen = gen
 
@@ -186,16 +194,16 @@ class op_support_builder:
 
         arith_ops = self.ast_op_map.values()
 
-        self.arith_ops = [op for op in arith_ops if hasattr(self.gen,op)]
+        self.arith_ops = [op for op in arith_ops if self._operation(op)]
 
         # The generator is guaranteed to have those, but for consistencies sake...
         ldst_ops = ['load','store']
-        self.ldst_ops = [op for op in ldst_ops if hasattr(self.gen,op)]
+        self.ldst_ops = [op for op in ldst_ops if self._operation(op)]
 
         # Might have multiple different ones at some point, for now all are
         # 'move'
         move_ops = ['move']
-        self.move_ops = [op for op in move_ops if hasattr(self.gen,op)]
+        self.move_ops = [op for op in move_ops if self._operation(op)]
 
 
     def create_base_solutions(self, req : ast_node) -> list[list[rsstep]]:

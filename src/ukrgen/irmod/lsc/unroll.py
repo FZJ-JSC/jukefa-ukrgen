@@ -7,6 +7,7 @@ from dataclasses import replace
 
 from asmgen.registers import adt_size
 
+from ...support.sig_group import sig_group
 from .base import irmod_param, irmod_placement, lsc_irmod
 from .vectorize import repeats
 from .base import blocks_and_sections
@@ -85,7 +86,7 @@ def immediates_take(loop, factor: int) -> bool:
     an unrolled iteration's slices need, 0 to factor-1, in some signature
     """
     for b in loop.block:
-        sigs = getattr(b, "sigs", None)
+        sigs = b.sigs
         if sigs is None:
             continue
         names = {n for s in _sigs(sigs) for n in s.operands if n.endswith(("_immrow", "_immcol"))}
@@ -103,16 +104,16 @@ def _sigs(groups) -> list:
         return []
     if isinstance(groups, list):
         return [s for g in groups for s in _sigs(g)]
-    for attr in ("sigs", "members", "signatures"):
-        if hasattr(groups, attr):
-            return list(getattr(groups, attr))
-    return [getattr(groups, "representative", groups)]
+    if isinstance(groups, sig_group):
+        return list(groups.sigs)
+    # a signature itself
+    return [groups]
 
 
 def _clone(op):
     new = copy.copy(op)
     new.indices = list(op.indices)
-    new.properties = dict(getattr(op, "properties", {}) or {})
+    new.properties = dict(op.properties or {})
     for attr in ("reads", "writes", "rtypes", "reg_types"):
         if getattr(op, attr, None) is not None:
             setattr(new, attr, list(getattr(op, attr)))
@@ -134,13 +135,13 @@ def expand_copies(program, loop):
         return
     index = loop.info.get("index")
     def keys(op, positions):
-        types = getattr(op, "rtypes", None) or []
+        types = op.rtypes or []
         return [(op.indices[p].component, op.indices[p].indices[0], types[p] if p < len(types) else None)
                 for p in positions]
     local, read = [], set()
     for b in loop.block:
-        read |= set(keys(b, getattr(b, "reads", [])))
-        for k in keys(b, getattr(b, "writes", [])):
+        read |= set(keys(b, b.reads))
+        for k in keys(b, b.writes):
             if rgt.VEC == k[2] and k not in read and k not in local:
                 local.append(k)
     base, walks = list(loop.block), list(loop.walks)
@@ -153,7 +154,7 @@ def expand_copies(program, loop):
         moved = {}
         for b in base:
             n = _clone(b)
-            types = getattr(n, "rtypes", None) or []
+            types = n.rtypes or []
             for p, idx in enumerate(n.indices):
                 k = (idx.component, idx.indices[0], types[p] if p < len(types) else None)
                 if k in rename:

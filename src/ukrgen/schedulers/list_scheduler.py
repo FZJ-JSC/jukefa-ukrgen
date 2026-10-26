@@ -38,7 +38,7 @@ def _key(op, pos, groups=None) -> tuple:
     a member touches the group
     """
     idx = op.indices[pos]
-    rtypes = getattr(op, "rtypes", None) or []
+    rtypes = op.rtypes or []
     number = idx.indices[0]
     group = (groups or {}).get(idx.component)
     if group is not None and isinstance(number, int):
@@ -50,7 +50,7 @@ def _key(op, pos, groups=None) -> tuple:
 def _tag(op, pos) -> str | None:
     if lsc_reg_type.address == op.reg_types[pos]:
         return "greg"
-    rtypes = getattr(op, "rtypes", None) or []
+    rtypes = op.rtypes or []
     return TAGS.get(rtypes[pos]) if pos < len(rtypes) else None
 
 

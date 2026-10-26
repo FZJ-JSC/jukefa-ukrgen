@@ -111,7 +111,7 @@ def classify(op) -> str:
     """
     # the registers' machine types (rtypes: GP, FP, VEC, TILE) - reg_types
     # holds their roles in the IR (address, data)
-    types = {t for t in (getattr(op, "rtypes", None) or []) if t is not None}
+    types = {t for t in (op.rtypes or []) if t is not None}
     vector = bool(types & {rgt.VEC})
     tile = bool(types & {rgt.TILE})
     if isinstance(op, lsc_load):

@@ -47,16 +47,16 @@ def _key(index, rtype=None) -> tuple:
 
 
 def _rtype(op, p):
-    types = getattr(op, "rtypes", None) or []
+    types = op.rtypes or []
     return types[p] if p < len(types) else None
 
 
 def _written(op) -> set:
-    return {_key(op.indices[p], _rtype(op, p)) for p in getattr(op, "writes", [])}
+    return {_key(op.indices[p], _rtype(op, p)) for p in op.writes}
 
 
 def _read(op) -> set:
-    return {_key(op.indices[p], _rtype(op, p)) for p in getattr(op, "reads", [])}
+    return {_key(op.indices[p], _rtype(op, p)) for p in op.reads}
 
 
 class fuse_slices(lsc_irmod):
@@ -237,7 +237,7 @@ class forward_slices(lsc_irmod):
         block = []
         for op in loop.block:
             # readers of a forwarded vector read the one it equals
-            for p in getattr(op, "reads", []):
+            for p in op.reads:
                 k = _key(op.indices[p], _rtype(op, p))
                 if k in rename:
                     op.indices[p] = rename[k][1]
