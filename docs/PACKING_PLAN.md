@@ -35,17 +35,18 @@ lack, in what order to build it, and how SME + SVE kernels' panels
 
 ## asmgen
 
-- **A1 `STRUCT` means interleaving only.** On SME, SME2's multi-vector
+- **A1 `STRUCT` means interleaving only** - done (asmgen 0084: `MULTIVEC`). On SME, SME2's multi-vector
   contiguous loads and stores (`ldnt1d {z0.d, z8.d}, pn8/z, [x0]`) carry
   `STRUCT` and `nstructs` 2 or 4 as the interleaving `ld2d`-`ld4d` do:
   `struct_sigs` would take one for the other. They need a modifier of their
   own (`MULTIVEC`, say, with `nvectors`) - a correctness fix, first.
-- **A2 SVE's structure addressing.** SVE's `ld2d`-`ld4d`, `st2d`-`st4d`
+- **A2 SVE's structure addressing** - done (asmgen 0086). SVE's `ld2d`-`ld4d`, `st2d`-`st4d`
   have the plain form only: add `[x, #imm, MUL VL]` (`VOFFSET`, imm a
   multiple of nstructs) and `[x, x, lsl #3]` (`GOFFSET`, `SCALEOFFSET`),
   which a loop over a panel's steps uses. NEON's post-increment forms are
   there; RVV's segments are plain, and enough.
-- **A3 A mask of the first M lanes.** `set` with `CONSTMASK` makes
+- **A3 A mask of the first M lanes** - done (asmgen 0085: `mask="first"`,
+  `count`). `set` with `CONSTMASK` makes
   all-true and all-false only. Add `count=M`: SVE `ptrue p.d, vlM` where
   M is a pattern (1-8, 16, 32, ...), `whilelo` otherwise; AVX-512 a `kmov`
   of (1<<M)-1; RVV a vector length. ZA's partial tiles and k remainders
@@ -111,6 +112,27 @@ lack, in what order to build it, and how SME + SVE kernels' panels
   segment stores (RVV cores - microcoded on some), gathers against networks
   (Zen 4, 5), scatters against ZA (SME parts).
 
+## Vectors along cdim under a predicate: cdim = n·VL + M
+
+With masks of the first M lanes (A3) the `vec` route - vectors along
+cdim, X contiguous along it - packs what isn't whole vectors too, where
+today the reference does: cdim = n·VL + M, n whole vectors and a last one
+of M < VL elements, cdim < VL the case n = 0.
+
+- SVE: the last vector's loads and stores under `ptrue p.d, vlM` - M a
+  pattern, and no more than the vector has: a pattern past the vector's
+  elements makes the predicate all false, so M is bounded by the smallest
+  vector the kernel runs on (doubles: 2 at 128 bits, 8 at 512), or `whilelo`
+  from a register where it isn't (a scratch register: the kernel's).
+- AVX-512: under `kxnorw`, `kshiftrw` by 16 - M (FP64 and FP32 lanes).
+- RVV: no mask - the vector length: the last vector's `vsetvli` with avl M
+  (the setup's vl), the caller's avl register where BLIS's context chooses
+  the length.
+- ukrgen: a `vec` case sized n·VL + M - the last vector's accesses taking
+  the mask (a tileop's operand, the mask a resolution's setup) - and,
+  together with the trans strategies, the panels of split kernels (U6) by
+  the vec route where X is contiguous along cdim.
+
 ## SME + SVE: cdim = N·VL + M
 
 The split gemm (`smesve/fopa_fma_split`) computes MR = N·VL rows by outer
@@ -149,9 +171,10 @@ in the flow, the BLIS injector passing the context's length, and
 ## Order
 
 1. asmgen A1 (STRUCT is interleaving), A3 (first-M masks), A2 (SVE
-   structure addressing).
+   structure addressing) - done (asmgen 0084-0086).
 2. ukrgen `structfuse` with its cases (SVE, NEON, RVV) and tests - the
-   smallest step, on the groups and members there are.
+   smallest step, on the groups and members there are; the `vec` route
+   under a predicate (cdim = n·VL + M) beside it.
 3. asmgen A4 (permutes); ukrgen `shufflenet` (AVX-512 8x8 and 24, AVX2
    4x4, NEON) and AVX2's trans case.
 4. ukrgen `za_transpose`, then the split kernels' cdim (U6).
