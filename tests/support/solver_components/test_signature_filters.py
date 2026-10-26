@@ -13,7 +13,7 @@ import unittest
 from asmgen.asmblocks.op import (
     operation_modifier as opmod,
     operand_modifier as opdmod,
-    opd3_modifier as d3mod,
+    optransform_modifier as d3mod,
     opmem_modifier as memmod,
     register_type as rgt
 )
@@ -51,12 +51,12 @@ class test_signature_filters(unittest.TestCase):
         self.genavx512 = avx512()
         self.genneon = neon()
 
-    def test_sve_fp64_fadd_blocklane_filtered_by_mask(self):
+    def test_sve_fp64_add_blocklane_filtered_by_mask(self):
         """
         Tests that the BLOCKLANE version of the FP64 SVE fadd gets filtered out if we require a masked operation
         """
 
-        sigs = self.gensve.fadd.get_signatures()
+        sigs = self.gensve.add.get_signatures()
 
         sigs = [sig for sig in sigs if sig.operands['adreg'].dt == adt.FP64]
 

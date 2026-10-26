@@ -9,9 +9,9 @@ add_greg_imm, zero_vreg, ...) wrote them, which asmgen 0.6 retires.
 """
 from __future__ import annotations
 
-from asmgen.asmblocks.op.opd3 import opd3_modifier
+from asmgen.asmblocks.op.optransform import optransform_modifier
 from asmgen.asmblocks.op.operand import operand_modifier
-from asmgen.asmblocks.op.move import move_modifier
+from asmgen.asmblocks.op.opmove import opmove_modifier
 from asmgen.asmblocks.op.opset import opset_modifier
 from asmgen.asmblocks.op.opmem import opmem_modifier
 from asmgen.asmblocks.op.scalar import BITS_GP
@@ -58,7 +58,7 @@ def shifted(gen: asmgen, op: str, *, dst: greg_base, reg1: greg_base, reg2: greg
 def shift_left(gen: asmgen, *, reg: greg_base, bit_count: int) -> str:
     """reg <<= bit_count"""
     return gen.shift(adreg=reg, bimm=bit_count, cdreg=reg, a_dt=GP, c_dt=GP,
-                     modifiers={opd3_modifier.SHL})
+                     modifiers={optransform_modifier.SHL})
 
 
 def mul(gen: asmgen, *, dst: greg_base, reg1: greg_base, reg2: greg_base) -> str:
@@ -86,7 +86,7 @@ def zero(gen: asmgen, *, reg: data_reg, dt: adt) -> str:
 
 def bits_to_freg(gen: asmgen, *, src: greg_base, dst: freg_base, dt: adt) -> str:
     """dst, an FP register of dt, = the bits of the general purpose register src"""
-    return gen.move(dregs=[src, dst], dts=[BITS_GP[dt], dt], modifiers={move_modifier.BITS})
+    return gen.move(dregs=[src, dst], dts=[BITS_GP[dt], dt], modifiers={opmove_modifier.BITS})
 
 
 def load(gen: asmgen, *, areg: greg_base, offset: int, dst: greg_base | freg_base,
@@ -105,7 +105,7 @@ def add_vectors(gen: asmgen, *, reg: greg_base, offset: int) -> str:
     if not gen.is_vla:
         return add_imm(gen, reg=reg, imm=offset * gen.simd_size)
     def call(n):
-        return dict(adreg=reg, bimm=n, cdreg=reg, a_dt=GP, c_dt=GP, modifiers={opd3_modifier.VOFFSET})
+        return dict(adreg=reg, bimm=n, cdreg=reg, a_dt=GP, c_dt=GP, modifiers={optransform_modifier.VOFFSET})
     out, left = "", offset
     while left and not gen.add.fits(**call(left)):
         step = next(n for n in range(abs(left) - 1, 0, -1) if gen.add.fits(**call(n if left > 0 else -n)))
