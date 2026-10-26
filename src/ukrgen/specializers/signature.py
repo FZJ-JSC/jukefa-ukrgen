@@ -113,12 +113,8 @@ def _all_true(ctx, rt=None):
     implicit vector length a mask is something else, v0. None where there is
     none.
     """
-    factory = getattr(ctx.gen, "isa_setup", None)
-    if factory is None:
-        return None
-    setup = factory()
-    kind = getattr(setup, "predication", None)
-    if kind is not None and "EXPLICIT" != kind().name:
+    setup = ctx.gen.isa_setup()
+    if "EXPLICIT" != setup.predication().name:
         return None
     return setup.all_true_predicate(rt=rt, dt=None)
 
@@ -133,7 +129,7 @@ def _usable(ctx, sig) -> bool:
     if not _masked(sig) or _all_true(ctx) is not None:
         return True
     masks = [n for n, o in sig.operands.items() if orl.MASK == o.orole]
-    clobbered = set(getattr(sig, "clobber_list", None) or [])
+    clobbered = set(sig.clobber_list or [])
     # re-set before each where the generator sets a mask all-true at all
     return set(masks) <= clobbered and bool(ctx.gen.set.forms(modifiers={opset_modifier.CONSTMASK}))
 
@@ -264,10 +260,11 @@ class signature_specializer:
                 # the ISA's own forms - the operation's signatures, chosen for
                 # its resolution, hold none with a register offset
                 dt = self.ctx.component_dts[comp]
-                full = getattr(getattr(self.ctx.gen, op.step.op, None), "get_signatures", lambda: [])()
+                operation = getattr(self.ctx.gen, op.step.op, None)      # IR pseudo-operations have none
+                full = operation.get_signatures() if operation is not None else []
                 scales = {s.structural_params.get("scale_factor") for s in full
                           if "SCALEOFFSET" in {m.name for m in s.modifiers}
-                          and getattr(s.operands.get("adreg"), "dt", dt) == dt}
+                          and ("adreg" not in s.operands or s.operands["adreg"].dt == dt)}
                 # the access's own plain or immediate form, which the index
                 # extends (a gather or scatter has none)
                 plain = any(not ({m.name for m in s.modifiers} - {"IOFFSET", "MASK", "STRUCT"})

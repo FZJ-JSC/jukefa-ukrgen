@@ -93,45 +93,43 @@ class strided_provider(resolution_provider):
             # the lanes above (AVX: ZEROOTHERS), the vector is filled block by
             # block: a block's lanes into a scratch register in increasing
             # order, then the scratch inserted as the block
-            if hasattr(omod, "IBLOCK") and hasattr(omod, "ZEROOTHERS"):
-                # block_lanes: 128-bit blocks inserted into the vector;
-                # block_lanes_256 (AVX-512): 128-bit blocks into a 256-bit
-                # scratch, then 256-bit inserts - two on the destination
-                # instead of four, the halves built independently. The same
-                # resolution, one level more
-                registry.add_resolution(key_in, tr(unique_tag="block_lanes",
-                                                   steps=block_lane_loads((128,), no_gather)))
-                registry.add_resolution(key_in, tr(unique_tag="block_lanes_256",
-                                                   steps=block_lane_loads((256, 128), no_gather)))
-                # a loop over the vector's elements where their number is
-                # known at run time only: each loaded into a scalar, filled
-                # into the vector shifting it in place (RVV vfslide1down)
-                if hasattr(omod, "FILLOTHERS"):
-                    scalar = temp_ref(tag="0")
-                    registry.add_resolution(key_in, tr(unique_tag="vla_lanes", steps=[
-                        dm_step(op="load", dest=scalar, dest_rtype=rgt.FP,
-                                repeat=dm_repeat(levels=("element",))),
-                        dm_step(op="move", dest=orig_ref(), dest_rtype=rgt.VEC,
-                                src=[scalar], src_rtypes=[rgt.FP],
-                                opd_mod_reqs={orig_ref(): {omod.ILANESHIFT, omod.FILLOTHERS}},
-                                repeat=dm_repeat(levels=("element",)))]))
-                    # and draining one: lane 0 into a scalar, stored; the loop
-                    # shifts the vector down after (RVV vfmv.f.s, vslidedown)
-                    registry.add_resolution(key_out, tr(unique_tag="vla_lanes", steps=[
-                        dm_step(op="move", dest=scalar, dest_rtype=rgt.FP,
-                                src=[orig_ref()], src_rtypes=[rgt.VEC],
-                                opd_mod_reqs={orig_ref(): {omod.ILANE}},
-                                repeat=dm_repeat(levels=("element",))),
-                        dm_step(op="store", src=[scalar], src_rtypes=[rgt.FP],
-                                repeat=dm_repeat(levels=("element",)))]))
-                # stores: each block extracted into a scratch, its lanes stored
-                scratch = temp_ref(tag="0")
-                registry.add_resolution(key_out, tr(unique_tag="block_lanes", steps=[
-                    dm_step(op="move", dest=scratch, dest_rtype=rgt.VEC,
-                            src=[orig_ref()], src_rtypes=[rgt.VEC],
-                            opd_mod_reqs={orig_ref(): {omod.IBLOCK}},
-                            repeat=dm_repeat(levels=(128,), side="in")),
-                    dm_step(op="store", src=[scratch], src_rtypes=[rgt.VEC],
-                            opd_mod_reqs={scratch: {omod.ILANE}},
-                            forbidden_op_mods=no_gather,
-                            repeat=dm_repeat(levels=(128, "lane"), side="in"))]))
+            # block_lanes: 128-bit blocks inserted into the vector;
+            # block_lanes_256 (AVX-512): 128-bit blocks into a 256-bit
+            # scratch, then 256-bit inserts - two on the destination
+            # instead of four, the halves built independently. The same
+            # resolution, one level more
+            registry.add_resolution(key_in, tr(unique_tag="block_lanes",
+                                               steps=block_lane_loads((128,), no_gather)))
+            registry.add_resolution(key_in, tr(unique_tag="block_lanes_256",
+                                               steps=block_lane_loads((256, 128), no_gather)))
+            # a loop over the vector's elements where their number is
+            # known at run time only: each loaded into a scalar, filled
+            # into the vector shifting it in place (RVV vfslide1down)
+            scalar = temp_ref(tag="0")
+            registry.add_resolution(key_in, tr(unique_tag="vla_lanes", steps=[
+                dm_step(op="load", dest=scalar, dest_rtype=rgt.FP,
+                        repeat=dm_repeat(levels=("element",))),
+                dm_step(op="move", dest=orig_ref(), dest_rtype=rgt.VEC,
+                        src=[scalar], src_rtypes=[rgt.FP],
+                        opd_mod_reqs={orig_ref(): {omod.ILANESHIFT, omod.FILLOTHERS}},
+                        repeat=dm_repeat(levels=("element",)))]))
+            # and draining one: lane 0 into a scalar, stored; the loop
+            # shifts the vector down after (RVV vfmv.f.s, vslidedown)
+            registry.add_resolution(key_out, tr(unique_tag="vla_lanes", steps=[
+                dm_step(op="move", dest=scalar, dest_rtype=rgt.FP,
+                        src=[orig_ref()], src_rtypes=[rgt.VEC],
+                        opd_mod_reqs={orig_ref(): {omod.ILANE}},
+                        repeat=dm_repeat(levels=("element",))),
+                dm_step(op="store", src=[scalar], src_rtypes=[rgt.FP],
+                        repeat=dm_repeat(levels=("element",)))]))
+            # stores: each block extracted into a scratch, its lanes stored
+            scratch = temp_ref(tag="0")
+            registry.add_resolution(key_out, tr(unique_tag="block_lanes", steps=[
+                dm_step(op="move", dest=scratch, dest_rtype=rgt.VEC,
+                        src=[orig_ref()], src_rtypes=[rgt.VEC],
+                        opd_mod_reqs={orig_ref(): {omod.IBLOCK}},
+                        repeat=dm_repeat(levels=(128,), side="in")),
+                dm_step(op="store", src=[scratch], src_rtypes=[rgt.VEC],
+                        opd_mod_reqs={scratch: {omod.ILANE}},
+                        forbidden_op_mods=no_gather,
+                        repeat=dm_repeat(levels=(128, "lane"), side="in"))]))

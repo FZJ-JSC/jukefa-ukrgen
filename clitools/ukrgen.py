@@ -85,7 +85,7 @@ class argparse_prolog:
         for pname in params:
 
             apname = pname.replace("-", "_")
-            val = args.__dict__[apname]
+            val = vars(args)[apname]
 
             s.set_param(pname, val)
 

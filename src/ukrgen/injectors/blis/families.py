@@ -449,7 +449,7 @@ def gemm_one(isa: str, config_name: str, fam: family, dt: str, m: int, n: int,
     storages = params.get("C-storage") or []
     return _done(kernel(family=fam.name, dtype=dt, size=(m, n), mr=mr, nr=nr, symbol=symbol,
                         params=list(program.params), c_layout=c_layout, program=program,
-                        simd_size_c=getattr(ctx.gen, "c_simd_size_function", ""),
+                        simd_size_c=ctx.gen.c_simd_size_function,
                         c_storages=list(storages) if len(storages) > 1 else []), detach)
 
 
@@ -495,7 +495,7 @@ def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: in
                        if getattr(b, "step", None) is not None) else ""
     return _done(kernel(family=fam.name, dtype=dt, size=(m, 1), mr=cdim, nr="1", symbol=symbol,
                         params=list(program.params), c_layout="col", program=program, case=case,
-                        loop_unit=unit, simd_size_c=getattr(ctx.gen, "c_simd_size_function", "")),
+                        loop_unit=unit, simd_size_c=ctx.gen.c_simd_size_function),
                  detach)
 
 
@@ -545,7 +545,7 @@ def split_one(isa: str, config_name: str, fam: family, dt: str, combo: tuple, o:
                         params=list(program.params),
                         c_layout=c_storage(layout),
                         program=program,
-                        simd_size_c=getattr(ctx.gen, "c_simd_size_function", "")), detach)
+                        simd_size_c=ctx.gen.c_simd_size_function), detach)
 
 
 def build_split_gemm(isa: str, config_name: str, fam: family,

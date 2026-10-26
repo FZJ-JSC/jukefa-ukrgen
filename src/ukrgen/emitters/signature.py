@@ -369,6 +369,9 @@ class signature_emitter:
     :param program: the program to specialize
     """
 
+    #: shifted operands' forms asked of the operations, by (op, shift)
+    shifted_known: dict | None = None
+
     def __init__(self, ctx, program: ir_program, preallocate=(), keep_params=()):
         self.ctx = ctx
         self.gen = ctx.gen
@@ -484,12 +487,12 @@ class signature_emitter:
                     number = free[0]
                     self.rt.reserve_specific_reg("vreg", number)
                 self.phys[key] = self.gen.vreg(number)
-            elif rgt.FP == rtype and "freg" in getattr(self.rt, "shared", {}):
+            elif rgt.FP == rtype and "freg" in self.rt.shared:
                 # the tracker knows which vector registers FP registers are
                 number = self.rt.reserve_any_reg("freg")
                 tag = "freg"
                 self.phys[key] = self.gen.freg(number, dt)
-            elif rgt.FP == rtype and "freg" in getattr(self.rt, "registered_types", ()):
+            elif rgt.FP == rtype and "freg" in self.rt.registered_types:
                 # a file of its own (RVV)
                 number = self.rt.reserve_any_reg("freg")
                 tag = "freg"
@@ -569,7 +572,7 @@ class signature_emitter:
                             not shape.value_constraints:
                         continue
                     tag, count = files[shape.rtype]
-                    if tag not in getattr(self.rt, "registered_types", ()):
+                    if tag not in self.rt.registered_types:
                         continue
                     try:
                         allowed = operand_values(sig, name, universe=range(count)).values
@@ -631,7 +634,9 @@ class signature_emitter:
         instruction: asked once - a generator raises NotImplementedError where
         it doesn't - and remembered
         """
-        known = self.__dict__.setdefault("shifted_known", {})
+        if self.shifted_known is None:
+            self.shifted_known = {}
+        known = self.shifted_known
         if (op, shift) not in known:
             reg = self.gen.greg(0)
             known[(op, shift)] = getattr(self.gen, op).fits(
@@ -1109,7 +1114,7 @@ class signature_emitter:
         if not masks:
             return True
         predicate = _all_true(self.ctx, self.rt)
-        clobbered = set(getattr(sig, "clobber_list", None) or [])
+        clobbered = set(sig.clobber_list or [])
         if predicate is None and (prefix is None or not set(masks) <= clobbered
                                   or not self.gen.set.forms(modifiers={opset_modifier.CONSTMASK})):
             return False
@@ -1618,7 +1623,7 @@ class signature_emitter:
         # what the ISA's setup and teardown clobber beyond the allocation (SME:
         # changing streaming mode zeroes the vector registers) - the calling
         # convention keeps what its callee must
-        for tag, regs in getattr(isa, "clobbers", dict)().items():
+        for tag, regs in isa.clobbers().items():
             self.cc.add_clobber(tag, regs)
         save, load, restore = self.fn.get_boilerplate(cc=self.cc)
         shift = getattr(self.fn, "sp_shift", 0)

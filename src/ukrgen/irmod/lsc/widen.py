@@ -149,8 +149,7 @@ class widen(lsc_irmod):
         gen = self.ctx.gen
         if not gen.is_vla:
             return False
-        predication = getattr(gen.isa_setup(), "predication", None)
-        return predication is None or "IMPLICIT" != predication().name
+        return "IMPLICIT" != gen.isa_setup().predication().name
 
     def apply(self, program) -> int:
         wide = wide_components(self.ctx, program)

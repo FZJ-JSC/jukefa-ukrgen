@@ -473,8 +473,7 @@ def filter_by_operand_count(
 
     return filtered_sigs
 
-BLOCK_MODIFIERS = {m for m in (getattr(omod, "BLOCK", None), getattr(omod, "IBLOCK", None))
-                   if m is not None}
+BLOCK_MODIFIERS = {omod.BLOCK, omod.IBLOCK}
 
 
 def filter_by_step_requirements(
@@ -508,8 +507,8 @@ def filter_by_step_requirements(
     # multi-structure forms load or store several registers: a single
     # register's step takes them only when asking - RVV's one-structure
     # vlseg form would otherwise be offered beside the plain load it equals
-    struct = getattr(memmod, "STRUCT", None)
-    if struct is not None and struct not in (step.op_mod_reqs or set()):
+    struct = memmod.STRUCT
+    if struct not in (step.op_mod_reqs or set()):
         sigs = filter_by_forbidden_op_mods(sigs, {struct})
         if not sigs:
             return []

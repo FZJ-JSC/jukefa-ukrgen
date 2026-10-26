@@ -32,19 +32,21 @@ class loop_order:
             return self.directmap[order]
         return [self.dimchar_indices[c] for c in order]
 
-# In case either future me or someone else tries searching for the definition of these
-# order2D, order3D, order4D, order5D, order6D, order7D, order8D, order9D
+# The loop orders over the first 3 to 9 dimensions: MmNnKk_order (order2D) ...
 all_dimchars = ['m','n','k','l','o','p','r','s','t']
-for i in range(3,len(all_dimchars)+1):
-    dimchars = [f(c) for c in all_dimchars[:i] for f in (lambda c : c.upper(), lambda c : c)]
-    name = "".join(dimchars)+"_order"
-    vars()[name] = loop_order(dimchars=dimchars)
-    vars()[f"order{i-1}D"] = vars()[name]
 
-# The above does basically:
-# MmNnKk_order = loop_order(dimchars=['M','m','N','n','K','k'])
-# order2D      = MmNnKk_order
-# ... etc
+def _loop_order(count : int) -> loop_order:
+    return loop_order(dimchars=[f(c) for c in all_dimchars[:count]
+                                for f in (lambda c : c.upper(), lambda c : c)])
+
+MmNnKk_order = order2D = _loop_order(3)
+MmNnKkLl_order = order3D = _loop_order(4)
+MmNnKkLlOo_order = order4D = _loop_order(5)
+MmNnKkLlOoPp_order = order5D = _loop_order(6)
+MmNnKkLlOoPpRr_order = order6D = _loop_order(7)
+MmNnKkLlOoPpRrSs_order = order7D = _loop_order(8)
+MmNnKkLlOoPpRrSsTt_order = order8D = _loop_order(9)
+
 
 
 class mm_op(operation):
