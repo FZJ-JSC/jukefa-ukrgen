@@ -97,13 +97,12 @@ ld1d {z28.d}, p0/z, [x2, #2, MUL VL]
 ld1rd {z29.d}, p0/z, [x1, #72]
 ld1rd {z30.d}, p0/z, [x1, #80]
 ld1rd {z31.d}, p0/z, [x1, #88]
-add x1,x1,#128
 incb x2, ALL, MUL #4
 fmla z0.d,p0/m,z28.d,z27.d
 fmla z1.d,p0/m,z28.d,z29.d
 fmla z2.d,p0/m,z28.d,z30.d
 fmla z3.d,p0/m,z28.d,z31.d
-add x1,x1,#-32
+add x1,x1,#96
 decb x2, ALL, MUL #1
 .ukr1_done:
 cbz x8,.ukr1_taildone

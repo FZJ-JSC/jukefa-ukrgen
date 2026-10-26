@@ -100,14 +100,12 @@ vmovupd 128(%rdx), %zmm20
 vbroadcastsd 72(%rsi), %zmm21
 vbroadcastsd 80(%rsi), %zmm22
 vbroadcastsd 88(%rsi), %zmm23
-addq $128,%rsi
-addq $256,%rdx
 vfmadd231pd %zmm20,%zmm19,%zmm0
 vfmadd231pd %zmm20,%zmm21,%zmm1
 vfmadd231pd %zmm20,%zmm22,%zmm2
 vfmadd231pd %zmm20,%zmm23,%zmm3
-addq $-32,%rsi
-addq $-64,%rdx
+addq $96,%rsi
+addq $192,%rdx
 .ukr1_done:
 test %r10,%r10
 jz .ukr1_taildone

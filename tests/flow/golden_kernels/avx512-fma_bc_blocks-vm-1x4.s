@@ -99,14 +99,12 @@ vbroadcastsd 64(%rdx), %zmm20
 vbroadcastsd 72(%rdx), %zmm21
 vbroadcastsd 80(%rdx), %zmm22
 vbroadcastsd 88(%rdx), %zmm23
-addq $256,%rsi
-addq $128,%rdx
 vfmadd231pd %zmm19,%zmm20,%zmm0
 vfmadd231pd %zmm19,%zmm21,%zmm1
 vfmadd231pd %zmm19,%zmm22,%zmm2
 vfmadd231pd %zmm19,%zmm23,%zmm3
-addq $-64,%rsi
-addq $-32,%rdx
+addq $192,%rsi
+addq $96,%rdx
 .ukr1_done:
 test %r10,%r10
 jz .ukr1_taildone

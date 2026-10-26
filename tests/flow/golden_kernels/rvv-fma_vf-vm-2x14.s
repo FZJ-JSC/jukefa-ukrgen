@@ -417,14 +417,12 @@ fld f21, 304(a2)
 vfmacc.vf v11,f12,v29
 fld f22, 320(t5)
 vfmacc.vf v12,f13,v29
-add t5,t5,448
+add t5,t5,336
 fld f23, 320(a2)
 vfmacc.vf v13,f14,v29
-add a2,a2,448
-add t5,t5,-112
+add a2,a2,336
 vfmacc.vf v14,f15,v29
 vfmacc.vf v15,f0,v30
-add a2,a2,-112
 vfmacc.vf v16,f1,v30
 vfmacc.vf v17,f2,v30
 vfmacc.vf v18,f3,v30

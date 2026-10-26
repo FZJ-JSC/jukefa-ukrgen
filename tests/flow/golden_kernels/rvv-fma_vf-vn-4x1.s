@@ -115,13 +115,11 @@ fld f14, 64(t4)
 fld f15, 64(a1)
 fld f16, 80(t4)
 fld f17, 80(a1)
-add t4,t4,128
-add a1,a1,128
+add t4,t4,96
+add a1,a1,96
 vfmacc.vf v1,f4,v6
 vfmacc.vf v2,f5,v6
-add t4,t4,-32
 vfmacc.vf v3,f6,v6
-add a1,a1,-32
 vfmacc.vf v4,f7,v6
 vfmacc.vf v1,f10,v7
 vfmacc.vf v2,f11,v7

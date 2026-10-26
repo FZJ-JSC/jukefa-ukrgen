@@ -114,16 +114,14 @@ fmla v3.2d,v21.2d,v27.2d
 dup v29.2d,v4.d[0]
 dup v30.2d,v4.d[1]
 ldr q4, [x1, #80]
-add x1,x1,#128
-add x2,x2,#64
+add x1,x1,#96
 fmla v0.2d,v28.2d,v29.2d
+fmla v1.2d,v28.2d,v30.2d
 dup v31.2d,v4.d[0]
 dup v8.2d,v4.d[1]
-fmla v1.2d,v28.2d,v30.2d
-add x1,x1,#-32
+add x2,x2,#48
 fmla v2.2d,v28.2d,v31.2d
 fmla v3.2d,v28.2d,v8.2d
-add x2,x2,#-16
 .ukr1_done:
 cbz x8,.ukr1_taildone
 .ukr1_tail:

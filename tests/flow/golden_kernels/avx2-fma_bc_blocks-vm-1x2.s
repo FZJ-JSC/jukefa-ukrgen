@@ -67,12 +67,10 @@ vfmadd231pd %ymm8,%ymm9,%ymm0
 vbroadcastsd 32(%rdx), %ymm12
 vfmadd231pd %ymm8,%ymm10,%ymm1
 vbroadcastsd 40(%rdx), %ymm13
-addq $128,%rsi
-addq $64,%rdx
+addq $96,%rsi
 vfmadd231pd %ymm11,%ymm12,%ymm0
+addq $48,%rdx
 vfmadd231pd %ymm11,%ymm13,%ymm1
-addq $-32,%rsi
-addq $-16,%rdx
 .ukr1_done:
 test %r10,%r10
 jz .ukr1_taildone

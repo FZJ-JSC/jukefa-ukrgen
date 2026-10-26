@@ -124,7 +124,7 @@ class test_irmod_metadata(unittest.TestCase):
         self.assertEqual(["widen", "structfuse", "vectorize_loops", "fuse_slices", "forward_slices", "hoist_slices",
                           "unroll_loops", "hoist", "cluster", "lanefuse"],
                          [m.name for m in irmods_at(irmod_placement.PRE_SPECIALIZE)])
-        self.assertEqual(["ldinc"], [m.name for m in irmods_at(irmod_placement.POST_SPECIALIZE)])
+        self.assertEqual(["addrmerge", "ldinc"], [m.name for m in irmods_at(irmod_placement.POST_SPECIALIZE)])
 
     def test_required_and_tunable(self):
         # a required modification runs whenever triggered, with its tunables
