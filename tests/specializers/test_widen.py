@@ -192,7 +192,7 @@ class test_widen(unittest.TestCase):
                            "AB.VEC){i=m, n=1, k*=1}", "FP32", "FP64",
                            "riscv64-linux-gnu-gcc", "-march=rv64gcv", "qemu-riscv64-static",
                            "rv64,v=true,vlen=256,elen=64", "1e-12")
-        switches = [l for l in p.instructions() if l.startswith("vsetvli zero,zero,e64,m2")]
+        switches = [l for l in p.instructions() if l.startswith("vsetvli zero, zero, e64, m2")]
         self.assertEqual(len(p.cases) - 1, len(switches))
 
 
