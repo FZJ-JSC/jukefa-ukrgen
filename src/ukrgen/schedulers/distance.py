@@ -96,6 +96,14 @@ class distance_specification:
         """
 
         split_spec = specstr.split(":")
+        if 6 != len(split_spec):
+            raise ValueError(f"{specstr!r}: dep:regt:rtag:op1:op2:dist - 6 fields, "
+                             f"not {len(split_spec)}")
+        if not split_spec[5].strip():
+            raise ValueError(f"{specstr!r}: no distance - the last field, a number of "
+                             f"instructions, is empty")
+        if not split_spec[5].strip().lstrip("-").isdigit():
+            raise ValueError(f"{specstr!r}: the distance {split_spec[5]!r} isn't a number")
 
         dep_type = cls.choose_from_enum(choice=split_spec[0].upper(),
                                         enum=dependency_type)

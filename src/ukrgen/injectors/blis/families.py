@@ -234,6 +234,16 @@ class family:
         ratios = parse_ratios(entry["split-ratios"]) if "split-ratios" in entry else []
         if ratios and 2 != len(parts):
             raise ValueError(f"family {entry['family']}: split-ratios relate two parts")
+        # a schedule's distances, checked once here: an error in one makes
+        # every size fail alike
+        from ...schedulers.distance import distance_specification
+        for where, p in [("", params)] + [(f" case {c[0]}", c[2]) for c in cases] + \
+                [(f" part {i}", pp) for i, (pp, _) in enumerate(parts)]:
+            for spec in p.get("distances") or []:
+                try:
+                    distance_specification.from_string(spec)
+                except ValueError as err:
+                    raise ValueError(f"{kind} family {entry['family']}{where}: schedule {err}") from err
         inflight = entry.get("min-inflight")
         return family(kind=kind, name=entry["family"], dtypes=list(entry.get("dtypes", ["FP64"])),
                       params=params, sizes=sizes, default=default, cases=cases,

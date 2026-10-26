@@ -104,11 +104,11 @@ class test_families(unittest.TestCase):
 
     def test_keys(self):
         fam = family.from_yaml("gemm", {"family": "vn", "unroll": 2, "loop-order": "mnk",
-                                        "schedule": ["d(A,B)=2"], "max-data-regs": {"A": 2},
+                                        "schedule": ["RAW:data::::2"], "max-data-regs": {"A": 2},
                                         "max-preload": {"B": 1}, "max-addr-regs": {"C": 2},
                                         "addr-pattern": {"C": "phase"},
                                         "params": {"order": "nmk"}})
-        self.assertEqual({"k": "2", "order": "nmk", "distances": ["d(A,B)=2"],
+        self.assertEqual({"k": "2", "order": "nmk", "distances": ["RAW:data::::2"],
                           "A-max-data-regs": "2", "B-max-preload": "1", "C-addr-regs": "2",
                           "C-addr-pattern": "phase"}, fam.params)
         pack = family.from_yaml("packm", {"family": "pk", "unroll": 4, "cases": [
@@ -199,6 +199,21 @@ class test_families(unittest.TestCase):
             f.sizes = {"m": [m], "n": [n]}
             built, skipped = build_gemm("avx512", "ukrgen_avx512", f)
             self.assertEqual(1, len(built), skipped)
+
+
+class test_family_schedule(unittest.TestCase):
+    def test_refused_when_read(self):
+        # a schedule entry wrong is wrong for every size: refused reading the
+        # family, its name and the entry said, not each size skipped
+        from ukrgen.injectors.blis.families import family
+        entry = {"family": "vn", "m": [4], "n": "1..2", "schedule": ["RAW:data:freg:::", "WAR:data::::8"]}
+        with self.assertRaises(ValueError) as caught:
+            family.from_yaml("gemm", entry)
+        self.assertIn("family vn", str(caught.exception))
+        self.assertIn("RAW:data:freg:::", str(caught.exception))
+        entry["schedule"] = ["RAW:data:freg:::8", "WAR:data::::8"]
+        self.assertEqual("vn", family.from_yaml("gemm", entry).name)
+
 
 
 if __name__ == "__main__":

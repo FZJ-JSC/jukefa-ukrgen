@@ -324,3 +324,14 @@ class test_distance_specification(unittest.TestCase):
         distance = ds.apply(op1=op1, op2=op2)
 
         self.assertEqual(distance, 3)
+
+    def test_from_string_refusals(self):
+        # what's wrong, said: a distance missing, fields too few, not a number
+        from ukrgen.schedulers.distance import distance_specification
+        for spec, said in (("RAW:data:freg:::", "no distance"), ("RAW:data:freg::8", "6 fields, not 5"),
+                           ("RAW:data:freg:::x", "isn't a number")):
+            with self.subTest(spec=spec):
+                with self.assertRaises(ValueError) as caught:
+                    distance_specification.from_string(spec)
+                self.assertIn(said, str(caught.exception))
+

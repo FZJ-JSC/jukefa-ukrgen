@@ -68,8 +68,13 @@ def main():
              for kind in ("gemm", "packm") for ch, dt in (("s", "FP32"), ("d", "FP64"))}
     if not any(files.values()):
         parser.error("no family files: give at least --sgemm-config or --dgemm-config")
-    cfg = configuration.from_files(files, name=args.config_name,
-                                   stack_buf_size=args.stack_buf_size)
+    try:
+        cfg = configuration.from_files(files, name=args.config_name,
+                                       stack_buf_size=args.stack_buf_size)
+    except ValueError as err:
+        # a configuration's mistake: said once, nothing generated
+        print(f"blisgen: {err}", file=sys.stderr)
+        return 2
 
     from ukrgen.injectors.blis.families import parse_align
     if not args.from_dir and not args.from_git:
@@ -90,8 +95,13 @@ def main():
                           align=parse_align(args.align), loop_align=args.loop_align)
     print(f"{cfg.name}: {len(made['kernels'])} kernels, {len(made['skipped'])} sizes skipped, "
           f"{len(made['files'])} files under {args.out_dir}")
+    # why, once per reason: a family's sizes failing alike show as one line
+    reasons = {}
     for fam, dt, (m, n), why in made["skipped"]:
         logging.getLogger("BLISGEN").info(f"skipped {fam} {dt} {m}x{n}: {why}")
+        reasons.setdefault((dt, fam, str(why)), []).append(f"{m}x{n}")
+    for (dt, fam, why), sizes in sorted(reasons.items()):
+        print(f"  skipped {dt} {fam} {', '.join(sizes)}: {why[:240]}")
     return 0
 
 
