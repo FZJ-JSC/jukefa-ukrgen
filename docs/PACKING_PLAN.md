@@ -62,6 +62,14 @@ lack, in what order to build it, and how SME + SVE kernels' panels
   On `opmove` with `MULTIPLE_IN` and pattern modifiers, or an operation of
   its own; forms on x86, NEON and SVE (RVV packs with segments). The
   network built of them is ukrgen's.
+- **A3b A mask, a vector length from a register.** Any M, not only a
+  pattern's: SVE's `whilelo p.T, xzr, x<avl>` as `set` with `MASKAVL` and
+  `avlreg` (the first avl elements, at most the vector's); RVV's
+  `vsetvli rd, avl` as `set(VLEN, avlreg=)` - the vector length for avl
+  elements, `VLEN` reading and setting it. The setup makes them one feature,
+  the vector length the caller chooses: RVV's `set(VLEN, avlreg)`, SVE's
+  default predicate by `MASKAVL` (`isa_setup.setup(vl=)`, the aliased
+  avl). AVX-512 needs a scratch register for it: later.
 - **A5 ZA**: slice loads and stores (`ld1d {za0h.d[w12, i]}`,
   `st1d {za0v.d[w12, i]}`, predicated) and `mova` (SME2: four slices at
   once) are there - check the tile numbering for `.d` (za0-za7) and the
@@ -77,9 +85,12 @@ lack, in what order to build it, and how SME + SVE kernels' panels
   the rest.
 - **U2 Three irmods** recognizing a step's N row stores to Y at stride N
   from consecutive rows, each refusing what it can't do:
-  - `structfuse` - cdim N up to the ISA's structures (NEON and SVE 4, RVV
-    8): one store of the group with `struct_sigs(gen, "store", dt, N)`, P
-    advanced N vectors' elements a step.
+  - `structfuse` - done (ukrgen 0184): cdim N up to the ISA's structures
+    (NEON and SVE 4, RVV 8): a step's N strided row stores - consecutive
+    registers, rows a row apart in the model's offset records - one store
+    of the group (`struct_sigs`), the rows' registers one group; opt-in
+    (`pre-specialize-irmods`), the cases choosing it after ukropt's
+    measurements (U5, U8).
   - `za_transpose` (SME, streaming) - ⌈cdim/v⌉ tiles (v = SVL / element
     bits): row i into horizontal slice i mod v of tile ⌊i/v⌋ (straight from
     X with `ld1d za{t}h` where kappa is 1; else loaded, scaled, `mova`d),

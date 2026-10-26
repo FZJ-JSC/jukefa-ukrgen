@@ -201,6 +201,15 @@ int main( void )
         # unrolled with a tail; the last partial chunk the reference's. Each
         # vector stored into the packed panel a cdim apart: RVV's strided
         # store, SVE's scatter
+        self.packm_trans()
+
+    def test_packm_trans_structfuse(self):
+        # the rows' vectors stored interleaved, one structure store a step:
+        # SVE's st3d, RVV's vsseg3e64.v - the same panels
+        self.packm_trans(irmods=["structfuse", "hoist", "cluster"],
+                         expect={"sve": "st3d", "rvv": "vsseg3e64.v"})
+
+    def packm_trans(self, irmods=None, expect=None):
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
         cases = ("{ 3, 3, 2 * vl + 3, 2 * vl + 9, 1, 1 }, { 3, 3, 4 * vl, 4 * vl + 1, 1, 0 }, "
@@ -214,6 +223,8 @@ int main( void )
                 continue
             trans = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"],
                      "store-tileop": [store], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"]}
+            if irmods is not None:
+                trans["pre-specialize-irmods"] = irmods
             fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "unroll": 2,
                                              "cases": [{"kind": "trans", "m": [3], "params": trans}]})
             built, skipped = build_packm(isa, f"ukrgen_{isa}", fam)
@@ -229,8 +240,11 @@ int main( void )
                   open(os.path.join(HERE, "packm_harness.c")).read() \
                   .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
             with tempfile.TemporaryDirectory() as d:
+                asm = asm_source(built[0])
+                if expect:
+                    self.assertIn(expect[isa], asm, isa)
                 with open(os.path.join(d, "k.s"), "w") as f:
-                    f.write(asm_source(built[0]))
+                    f.write(asm)
                 subprocess.run(cc + ["-c", os.path.join(d, "k.s"), "-o", os.path.join(d, "k.o")], check=True)
                 with open(os.path.join(d, "t.c"), "w") as f:
                     f.write(src)
