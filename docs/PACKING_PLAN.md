@@ -1,0 +1,158 @@
+# Packing across the grain: the plan
+
+How packm's `trans` cases get the three strategies the research found
+(docs/PACKING_TRANSPOSES.md): interleaving stores (`struct`), SME's ZA
+tiles (`tile`), in-register networks (`shuffle`) - what asmgen and ukrgen
+lack, in what order to build it, and how SME + SVE kernels' panels
+(cdim = N·VL + M) pack.
+
+## Where packm is
+
+- A `trans` case packs a panel whose rows (cdim of them, m) are contiguous
+  along its length (n, k for gemm): `mul(X.VEC:direct, kappa.VEC:bc_load,
+  Y.VEC){m=1, i=n}` loads a row's vector along n, scales it, and
+  `store-tileop: Y.VEC:scatter` (SVE, SME, AVX-512) or the `strided`
+  resolution (RVV) stores it across P - element j of row i at P + j·MR + i.
+  AVX2 has no scatter: its only cdim-strided case is `gather` (vectors
+  along cdim gathered from X).
+- So before the stores, the N rows of a step are N registers, row i in
+  register i: every strategy replaces the N row stores that follow.
+- What's there already:
+  - register groups (`program.groups`): consecutive registers from a
+    multiple of the group's size, allocated by the emitter at once;
+  - the emitter's `members`: one `STRUCT` signature moving a whole group,
+    interleaved; widen's `struct_sigs(gen, op, dt, ways)`: the signatures
+    whose element e of register p is at `ways·e + p` - a packed panel when
+    ways = cdim;
+  - SME's slices: tile operands with `ROW`/`COL`, slice loops
+    (`lsc_loop` kind `slices`) and their irmods (fuse_slices,
+    forward_slices, hoist_slices), C in ZA for the outer products;
+  - `transformation.TRANSPOSE` in the matcher, with no resolution;
+  - and the design note in `support/data_move.py`: instructions moving
+    several registers come from irmods fusing single-register ones, not
+    from the solver. The three strategies are irmods over the trans case's
+    IR: no matcher or solver change to begin with.
+
+## asmgen
+
+- **A1 `STRUCT` means interleaving only.** On SME, SME2's multi-vector
+  contiguous loads and stores (`ldnt1d {z0.d, z8.d}, pn8/z, [x0]`) carry
+  `STRUCT` and `nstructs` 2 or 4 as the interleaving `ld2d`-`ld4d` do:
+  `struct_sigs` would take one for the other. They need a modifier of their
+  own (`MULTIVEC`, say, with `nvectors`) - a correctness fix, first.
+- **A2 SVE's structure addressing.** SVE's `ld2d`-`ld4d`, `st2d`-`st4d`
+  have the plain form only: add `[x, #imm, MUL VL]` (`VOFFSET`, imm a
+  multiple of nstructs) and `[x, x, lsl #3]` (`GOFFSET`, `SCALEOFFSET`),
+  which a loop over a panel's steps uses. NEON's post-increment forms are
+  there; RVV's segments are plain, and enough.
+- **A3 A mask of the first M lanes.** `set` with `CONSTMASK` makes
+  all-true and all-false only. Add `count=M`: SVE `ptrue p.d, vlM` where
+  M is a pattern (1-8, 16, 32, ...), `whilelo` otherwise; AVX-512 a `kmov`
+  of (1<<M)-1; RVV a vector length. ZA's partial tiles and k remainders
+  need it.
+- **A4 A permute operation.** Two sources, one destination, a pattern at
+  a granularity, one instruction each:
+  - zip low and high halves (NEON and SVE `zip1`/`zip2`) - x86's
+    `vunpcklpd`/`vunpckhpd` (`ps`) zip within each 128-bit lane, a pattern
+    of its own;
+  - unzip even and odd (`uzp1`/`uzp2`), transpose pairs (`trn1`/`trn2`);
+  - 128-bit block selects with an immediate: `vshuff64x2`/`vshuff32x4`
+    (AVX-512), `vperm2f128` (AVX2).
+  On `opmove` with `MULTIPLE_IN` and pattern modifiers, or an operation of
+  its own; forms on x86, NEON and SVE (RVV packs with segments). The
+  network built of them is ukrgen's.
+- **A5 ZA**: slice loads and stores (`ld1d {za0h.d[w12, i]}`,
+  `st1d {za0v.d[w12, i]}`, predicated) and `mova` (SME2: four slices at
+  once) are there - check the tile numbering for `.d` (za0-za7) and the
+  predicated slice store.
+- **A6 later**: SVE2.1's quadword forms (`zipq1/2`, `st2q`-`st4q`) for
+  more than 4 rows at a time on SVE.
+
+## ukrgen
+
+- **U1 Rows as a group.** For a structure store the N row registers are
+  consecutive: the irmod sets `program.groups` for Y's component (N) and
+  the store's `group` property; the emitter's allocation and `members` do
+  the rest.
+- **U2 Three irmods** recognizing a step's N row stores to Y at stride N
+  from consecutive rows, each refusing what it can't do:
+  - `structfuse` - cdim N up to the ISA's structures (NEON and SVE 4, RVV
+    8): one store of the group with `struct_sigs(gen, "store", dt, N)`, P
+    advanced N vectors' elements a step.
+  - `za_transpose` (SME, streaming) - ⌈cdim/v⌉ tiles (v = SVL / element
+    bits): row i into horizontal slice i mod v of tile ⌊i/v⌋ (straight from
+    X with `ld1d za{t}h` where kappa is 1; else loaded, scaled, `mova`d),
+    columns out of the vertical slices to P + k·cdim + t·v, the last tile's
+    under a first-M-lanes predicate (A3); k in steps of v, the remainder
+    predicated; the slice loops and their irmods as for C.
+  - `shufflenet` (AVX2, AVX-512, NEON - refused where `is_vla`) - N = the
+    lanes' count (or blocks of it: AMD's 24 = 3 x 8 doubles), log2(lanes)
+    rounds of permutes (A4) by a recipe per ISA (x86: in-lane unpacks, then
+    block selects; NEON: `trn` per element, then per 64 bits), then N
+    contiguous stores; lanes more registers for the rounds (8x8 doubles:
+    16 zmm).
+- **U3 IR and emission**: an op for a permute (two inputs, one output, the
+  pattern) or `lsc_transformation` with a modifier, which the signature
+  emitter writes through A4; ZA's slice ops as SME's gemm has them.
+- **U4 Matching (later)**: resolutions for `TRANSPOSE` - (VEC, OUT, MEMORY)
+  - so a tileop names the strategy (`Y.VEC:struct`, `:tile`, `:shuffle`)
+  instead of a case listing an irmod; once the irmods have proved out.
+- **U5 Cases**: a case's irmods name its strategy, its sizes what the
+  strategy takes - struct: m 1..4 (SVE, NEON), 1..8 (RVV); shuffle: m a
+  multiple of the lanes; tile: any m. New cases: AVX2 `trans` (no scatter:
+  the network makes it possible), NEON `trans` (`st2`-`st4`, `trn`
+  networks). The kernels' symbols stay (`bli_?packm_<cfg>_<fam>_trans<m>`).
+- **U6 Split kernels' panels**: a packm case whose cdim is a split
+  kernel's MR - N·VL + M, an expression of VL - rather than fixed 1..16.
+- **U7 Tests**: test_pack natively (AVX2, AVX-512) and under qemu (NEON,
+  SVE, SME, RVV): each strategy's panels against the reference - cdim at its
+  edges (M 1 and v-1), k remainders, kappa other than 1.
+- **U8 ukropt**: scatters against `st4d` (SVE hardware), strided against
+  segment stores (RVV cores - microcoded on some), gathers against networks
+  (Zen 4, 5), scatters against ZA (SME parts).
+
+## SME + SVE: cdim = N·VL + M
+
+The split gemm (`smesve/fopa_fma_split`) computes MR = N·VL rows by outer
+products (ZA) and the rest by FMAs (SVE); its A panel is packed as any:
+MR contiguous elements per k. Its packm today scatters 1..16 rows.
+
+- **ZA packs all of it.** ⌈cdim/v⌉ tiles - N full, one partial (M < v):
+  rows into horizontal slices, columns out of the vertical slices at P +
+  k·MR + t·v, the partial tile's columns stored under a predicate for its
+  first M lanes (A3). No SVE store path. Eight tiles for doubles (za0.d
+  -za7.d): cdim up to 8v = SVL/8 doubles a pass. v is the machine's, but N
+  and M are the case's: the tiles' number and the predicate are static.
+- **ZA and SVE mixed** - ZA for N·v rows, SVE for M - is worse: `st{M}d`
+  would interleave the M rows contiguously, M per k, not at MR; the M part
+  would need scatters or a store per k. The predicated tile is simpler and
+  avoids the scatters, which streaming mode runs slowly on current parts.
+- **kappa**: ZA's slice loads and stores don't compute. kappa 1 (BLIS's
+  common case) goes straight between memory and slices; other kappa
+  through Z - a row loaded, `fmul`, `mova` into its slice (or a column
+  `mova`d out, scaled, stored) - SME2's four-slice `mova` halving the
+  moves.
+- **k** in steps of v per pass, the remainder under `ld1d`'s predicate:
+  the slice loops' iterations.
+
+## Related: the vector length the caller chooses (RVV)
+
+On some hardware a vector length other than the most there is performs
+best - a multiple of 40 elements: 240 doubles of 256 on a 16384-bit
+machine. BLIS's context computes it (`bli_vlen_utils.c`), the kernel's
+`vsetvli` takes it in a register. asmgen's RVV setup takes a caller's
+aliased `avl` register (asmgen 0083). Still to come: a parameter for it
+in the flow, the BLIS injector passing the context's length, and
+`vsetvli` with the aliased avl instead of zero outside the microkernel
+(not `csrr vlenb`) where the length is read.
+
+## Order
+
+1. asmgen A1 (STRUCT is interleaving), A3 (first-M masks), A2 (SVE
+   structure addressing).
+2. ukrgen `structfuse` with its cases (SVE, NEON, RVV) and tests - the
+   smallest step, on the groups and members there are.
+3. asmgen A4 (permutes); ukrgen `shufflenet` (AVX-512 8x8 and 24, AVX2
+   4x4, NEON) and AVX2's trans case.
+4. ukrgen `za_transpose`, then the split kernels' cdim (U6).
+5. ukropt's measurements; strategies named by tileops (U4).
