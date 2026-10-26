@@ -2,8 +2,11 @@
 .global bli_dgemm_ukrgen_neon_vn_4x2_asm
 .type bli_dgemm_ukrgen_neon_vn_4x2_asm, %function
 bli_dgemm_ukrgen_neon_vn_4x2_asm:
+.cfi_startproc
 add sp,sp,#-16
+.cfi_adjust_cfa_offset 16
 str d8, [sp]
+.cfi_rel_offset d8, 0
 # x0 = k
 # x1 = base(A)
 # x2 = base(B)
@@ -748,7 +751,10 @@ st1 {v1.d}[0], [x10]
 st1 {v1.d}[1], [x9]
 .ukr0_cases_end:
 ldr d8, [sp]
+.cfi_restore d8
 add sp,sp,#16
+.cfi_adjust_cfa_offset -16
 ret
+.cfi_endproc
 .size bli_dgemm_ukrgen_neon_vn_4x2_asm, .-bli_dgemm_ukrgen_neon_vn_4x2_asm
 .section .note.GNU-stack,"",%progbits

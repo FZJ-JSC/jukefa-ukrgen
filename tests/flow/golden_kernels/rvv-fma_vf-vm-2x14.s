@@ -2,20 +2,35 @@
 .global bli_dgemm_ukrgen_rvv_vm_2vx14_asm
 .type bli_dgemm_ukrgen_rvv_vm_2vx14_asm, %function
 bli_dgemm_ukrgen_rvv_vm_2vx14_asm:
+.cfi_startproc
 add sp,sp,-112
+.cfi_adjust_cfa_offset 112
 sd s1, 0(sp)
+.cfi_rel_offset s1, 0
 sd s2, 8(sp)
+.cfi_rel_offset s2, 8
 sd s3, 16(sp)
+.cfi_rel_offset s3, 16
 sd s4, 24(sp)
+.cfi_rel_offset s4, 24
 sd s5, 32(sp)
+.cfi_rel_offset s5, 32
 fsd f8, 40(sp)
+.cfi_rel_offset f8, 40
 fsd f9, 48(sp)
+.cfi_rel_offset f9, 48
 fsd f18, 56(sp)
+.cfi_rel_offset f18, 56
 fsd f19, 64(sp)
+.cfi_rel_offset f19, 64
 fsd f20, 72(sp)
+.cfi_rel_offset f20, 72
 fsd f21, 80(sp)
+.cfi_rel_offset f21, 80
 fsd f22, 88(sp)
+.cfi_rel_offset f22, 88
 fsd f23, 96(sp)
+.cfi_rel_offset f23, 96
 # a0 = k
 # a1 = base(A)
 # a2 = base(B)
@@ -1547,19 +1562,34 @@ vfmacc.vf v1,f1,v28
 vse64.v v1, (s5)
 .ukr0_cases_end:
 ld s1, 0(sp)
+.cfi_restore s1
 ld s2, 8(sp)
+.cfi_restore s2
 ld s3, 16(sp)
+.cfi_restore s3
 ld s4, 24(sp)
+.cfi_restore s4
 ld s5, 32(sp)
+.cfi_restore s5
 fld f8, 40(sp)
+.cfi_restore f8
 fld f9, 48(sp)
+.cfi_restore f9
 fld f18, 56(sp)
+.cfi_restore f18
 fld f19, 64(sp)
+.cfi_restore f19
 fld f20, 72(sp)
+.cfi_restore f20
 fld f21, 80(sp)
+.cfi_restore f21
 fld f22, 88(sp)
+.cfi_restore f22
 fld f23, 96(sp)
+.cfi_restore f23
 add sp,sp,112
+.cfi_adjust_cfa_offset -112
 ret
+.cfi_endproc
 .size bli_dgemm_ukrgen_rvv_vm_2vx14_asm, .-bli_dgemm_ukrgen_rvv_vm_2vx14_asm
 .section .note.GNU-stack,"",%progbits

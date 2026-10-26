@@ -2,6 +2,7 @@
 .global bli_dgemm_ukrgen_avx512_vn_4x8_asm
 .type bli_dgemm_ukrgen_avx512_vn_4x8_asm, %function
 bli_dgemm_ukrgen_avx512_vn_4x8_asm:
+.cfi_startproc
 # rdi = k
 # rsi = base(A)
 # rdx = base(B)
@@ -1240,5 +1241,6 @@ addq %r10,%rsi
 vmovhpd %xmm0,24(%rsi)
 .ukr0_cases_end:
 ret
+.cfi_endproc
 .size bli_dgemm_ukrgen_avx512_vn_4x8_asm, .-bli_dgemm_ukrgen_avx512_vn_4x8_asm
 .section .note.GNU-stack,"",%progbits

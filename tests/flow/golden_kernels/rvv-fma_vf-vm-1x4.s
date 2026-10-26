@@ -2,6 +2,7 @@
 .global bli_dgemm_ukrgen_rvv_vm_1vx4_asm
 .type bli_dgemm_ukrgen_rvv_vm_1vx4_asm, %function
 bli_dgemm_ukrgen_rvv_vm_1vx4_asm:
+.cfi_startproc
 # a0 = k
 # a1 = base(A)
 # a2 = base(B)
@@ -366,5 +367,6 @@ vfmacc.vf v1,f1,v4
 vse64.v v1, (a7)
 .ukr0_cases_end:
 ret
+.cfi_endproc
 .size bli_dgemm_ukrgen_rvv_vm_1vx4_asm, .-bli_dgemm_ukrgen_rvv_vm_1vx4_asm
 .section .note.GNU-stack,"",%progbits

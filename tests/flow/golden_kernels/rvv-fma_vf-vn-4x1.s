@@ -2,9 +2,13 @@
 .global bli_dgemm_ukrgen_rvv_vn_4x1v_asm
 .type bli_dgemm_ukrgen_rvv_vn_4x1v_asm, %function
 bli_dgemm_ukrgen_rvv_vn_4x1v_asm:
+.cfi_startproc
 add sp,sp,-16
+.cfi_adjust_cfa_offset 16
 sd s2, 0(sp)
+.cfi_rel_offset s2, 0
 sd s1, 8(sp)
+.cfi_rel_offset s1, 8
 # a0 = k
 # a1 = base(A)
 # a2 = base(B)
@@ -628,8 +632,12 @@ vfmacc.vf v1,f1,v4
 vsse64.v v1, (s1), a7
 .ukr0_cases_end:
 ld s2, 0(sp)
+.cfi_restore s2
 ld s1, 8(sp)
+.cfi_restore s1
 add sp,sp,16
+.cfi_adjust_cfa_offset -16
 ret
+.cfi_endproc
 .size bli_dgemm_ukrgen_rvv_vn_4x1v_asm, .-bli_dgemm_ukrgen_rvv_vn_4x1v_asm
 .section .note.GNU-stack,"",%progbits

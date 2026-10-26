@@ -2,8 +2,11 @@
 .global bli_dgemm_ukrgen_neon_vm_2x4_asm
 .type bli_dgemm_ukrgen_neon_vm_2x4_asm, %function
 bli_dgemm_ukrgen_neon_vm_2x4_asm:
+.cfi_startproc
 add sp,sp,#-16
+.cfi_adjust_cfa_offset 16
 str d8, [sp]
+.cfi_rel_offset d8, 0
 # x0 = k
 # x1 = base(A)
 # x2 = base(B)
@@ -343,7 +346,10 @@ fmla v0.2d,v3.2d,v16.2d
 st1 {v0.2d}, [x10]
 .ukr0_cases_end:
 ldr d8, [sp]
+.cfi_restore d8
 add sp,sp,#16
+.cfi_adjust_cfa_offset -16
 ret
+.cfi_endproc
 .size bli_dgemm_ukrgen_neon_vm_2x4_asm, .-bli_dgemm_ukrgen_neon_vm_2x4_asm
 .section .note.GNU-stack,"",%progbits

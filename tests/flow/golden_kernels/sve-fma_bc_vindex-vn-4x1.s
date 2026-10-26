@@ -2,6 +2,7 @@
 .global bli_dgemm_ukrgen_sve_vn_4x1v_asm
 .type bli_dgemm_ukrgen_sve_vn_4x1v_asm, %function
 bli_dgemm_ukrgen_sve_vn_4x1v_asm:
+.cfi_startproc
 # x0 = k
 # x1 = base(A)
 # x2 = base(B)
@@ -575,5 +576,6 @@ fmla z0.d,p0/m,z3.d,z17.d
 st1d {z0.d}, p0, [x11, z4.d]
 .ukr0_cases_end:
 ret
+.cfi_endproc
 .size bli_dgemm_ukrgen_sve_vn_4x1v_asm, .-bli_dgemm_ukrgen_sve_vn_4x1v_asm
 .section .note.GNU-stack,"",%progbits
