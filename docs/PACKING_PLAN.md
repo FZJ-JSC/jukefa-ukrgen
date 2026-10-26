@@ -123,6 +123,37 @@ lack, in what order to build it, and how SME + SVE kernels' panels
   segment stores (RVV cores - microcoded on some), gathers against networks
   (Zen 4, 5), scatters against ZA (SME parts).
 
+## Any cdim by structures: splits
+
+A structure store writes its structures back to back - nstructs elements
+each - so st4d of rows 0-3 puts k=1's rows where k=0's rows 4-6 belong
+when cdim is 7. A split - 7 = 4 + 3, 5 = 4 + 1 or 2 + 3 - needs the
+structures cdim apart:
+
+- RVV: strided segment stores (`vssseg<nf>e64.v vs, (rs), stride`):
+  rows 0-3 at P, rows 4-6 at P + 4, both stride cdim·8 bytes - any cdim,
+  each part's fields within EMUL·NF ≤ 8. asmgen has the plain segment
+  forms only: **A7** RVV's strided segment loads and stores (`STRUCT` with
+  `GSTRIDE`: vlsseg, vssseg).
+- NEON: one structure from a lane (`st4 {v0.d-v3.d}[i], [x]`) - a split
+  per k element, two a vector of doubles; check asmgen's lane forms.
+- SVE: neither - its structure stores are back to back: cdim 2-4 only.
+
+## A family's choices (YAML)
+
+- **Splits**: per cdim, how its rows are parted among structure stores -
+  `struct-split: {7: [4, 3], 5: [2, 3]}`; by default as many of the widest
+  as fit, then the rest (7: 4 + 3 on RVV); all ones (`[1, 1, 1]`) the
+  strided stores of today - the old trans implementation by the same key.
+- **Implementations in the dispatch**: which a packm family's dispatch
+  tries, in order - `packm-dispatch: [vec, maskvec, shuffle, struct, tile,
+  masktile]` - each where the ISA has it (struct where it stores
+  structures, shuffle where vectors are fixed, tile on SME), the reference
+  for the rest.
+- **Masks** as a switch rather than methods of their own: `masks: on`
+  making vec and tile take a last partial vector or tile under a mask of
+  its first M lanes (maskvec, masktile), off keeping them to whole ones.
+
 ## Vectors along cdim under a predicate: cdim = n·VL + M
 
 With masks of the first M lanes (A3) the `vec` route - vectors along
@@ -183,9 +214,10 @@ in the flow, the BLIS injector passing the context's length, and
 
 1. asmgen A1 (STRUCT is interleaving), A3 (first-M masks), A2 (SVE
    structure addressing) - done (asmgen 0084-0086).
-2. ukrgen `structfuse` with its cases (SVE, NEON, RVV) and tests - the
-   smallest step, on the groups and members there are; the `vec` route
-   under a predicate (cdim = n·VL + M) beside it.
+2. ukrgen `structfuse` - done (ukrgen 0184); its splits (RVV's strided
+   segments: A7, the `struct-split` key), the family keys (splits, the
+   dispatch's implementations, masks) and cases; the `vec` route under a
+   predicate (cdim = n·VL + M) beside it.
 3. asmgen A4 (permutes); ukrgen `shufflenet` (AVX-512 8x8 and 24, AVX2
    4x4, NEON) and AVX2's trans case.
 4. ukrgen `za_transpose`, then the split kernels' cdim (U6).
