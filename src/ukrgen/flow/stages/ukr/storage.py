@@ -2,7 +2,7 @@
 C's storages as branches of one kernel's epilogue: the composition expanded
 """
 
-import copy
+import dataclasses
 
 from .ukr import component_description, case_description, branch_description, block_description
 
@@ -14,46 +14,52 @@ ALIASES = {"row": "Cr", "col": "Cc", "any": "Cg"}
 UNIT = {"row": "n", "col": "m"}
 
 
+def _fields(o) -> dict:
+    """
+    A description's fields by name - a dataclass's; nothing for anything
+    else (enums, functions, classes it refers to are values, not parts)
+    """
+    if dataclasses.is_dataclass(o) and not isinstance(o, type):
+        return {f.name: getattr(o, f.name) for f in dataclasses.fields(o)}
+    return {}
+
+
 def _renamed(obj, old: str, new: str):
     """
-    A deep copy of an STO with every reference to old naming new instead
+    An STO with every reference to old naming new instead - a reference's
+    name, names in tuples of names (or of tuples of them) - rebuilt with
+    dataclasses.replace: the frozen descriptions themselves untouched
     """
-    obj = copy.deepcopy(obj)
-    seen = set()
-    def walk(o):
-        if id(o) in seen or isinstance(o, (str, int, float, bool, type(None))):
-            return
-        seen.add(id(o))
-        if isinstance(o, (list, tuple)):
-            for x in o:
-                walk(x)
-            return
+    def rename(o):
+        if type(o) in (list, tuple):
+            return type(o)(rename(x) for x in o)
         if isinstance(o, dict):
-            for x in o.values():
-                walk(x)
-            return
-        attrs = getattr(o, "__dict__", None)
-        if attrs is None:
-            return
-        for key, value in list(attrs.items()):
+            return {k: rename(v) for k, v in o.items()}
+        fields = _fields(o)
+        if not fields:
+            return o
+        changes = {}
+        for key, value in fields.items():
             if "name" == key and value == old and _is_ref(o):
-                object.__setattr__(o, key, new)
+                value = new
             elif isinstance(value, tuple) and value and all(isinstance(v, str) for v in value):
-                object.__setattr__(o, key, tuple(new if v == old else v for v in value))
+                value = tuple(new if v == old else v for v in value)
             elif isinstance(value, tuple) and value and all(isinstance(v, tuple) for v in value):
-                object.__setattr__(o, key, tuple(tuple(new if x == old else x for x in v) for v in value))
+                value = tuple(tuple(new if x == old else x for x in v) for v in value)
             else:
-                walk(value)
-    walk(obj)
-    return obj
+                value = rename(value)
+            changes[key] = value
+        init = {f.name for f in dataclasses.fields(o) if f.init}
+        return dataclasses.replace(o, **{k: v for k, v in changes.items() if k in init})
+    return rename(obj)
 
 
 def _is_ref(o) -> bool:
     """
     A reference to a component in a requirement tree: a name and its indices
     """
-    attrs = getattr(o, "__dict__", None) or {}
-    return isinstance(attrs.get("name"), str) and "indices" in attrs
+    fields = _fields(o)
+    return isinstance(fields.get("name"), str) and "indices" in fields
 
 
 def _touches(sto, comp: str) -> bool:
@@ -73,11 +79,12 @@ def _touches(sto, comp: str) -> bool:
                     found.append(True)
                 walk(x)
             return
-        if _is_ref(o) and o.__dict__["name"] == comp:
+        fields = _fields(o)
+        if _is_ref(o) and fields["name"] == comp:
             found.append(True)
-        for value in (getattr(o, "__dict__", None) or {}).values():
+        for value in fields.values():
             walk(value)
-    for key, value in sto.__dict__.items():
+    for key, value in _fields(sto).items():
         if "name" != key:
             walk(value)
     return bool(found)
@@ -120,7 +127,7 @@ def storage_branches(base, storages: list[str]):
             for alias, s in aliases.items():
                 for sto in epilogue:
                     clone = _renamed(sto, "C", alias)
-                    object.__setattr__(clone, "name", f"{sto.name}.{suffix[s]}")
+                    clone = dataclasses.replace(clone, name=f"{sto.name}.{suffix[s]}")
                     stos.append(clone)
             return stos
 
@@ -134,8 +141,8 @@ def storage_branches(base, storages: list[str]):
                 for case in branch.cases:
                     when = {f"stride(C,{UNIT[s]})": 1}
                     when.update(case.when)
-                    blocks = tuple(block_description(**dict(b.__dict__, stos=tuple(
-                        renamed.get(n, n) for n in b.stos))) for b in case.blocks)
+                    blocks = tuple(dataclasses.replace(b, stos=tuple(
+                        renamed.get(n, n) for n in b.stos)) for b in case.blocks)
                     cases.append(case_description(when=when, blocks=blocks))
             cases.extend(branch.cases)
             return branch_description(cases=tuple(cases))
