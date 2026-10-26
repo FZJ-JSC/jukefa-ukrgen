@@ -9,7 +9,11 @@ which depend on immediate ranges only the chosen signatures know.
 
 from __future__ import annotations
 
+import ast
+import math
+import re
 from dataclasses import dataclass
+from fractions import Fraction
 
 from ..components.tile import dimension_properties as dimp, dimension_type as dimt
 
@@ -170,6 +174,45 @@ class offset_db:
         return total
 
 
+def arg_value(expr: str, values: dict[str, int]) -> int:
+    """
+    A pattern's number: an integer, or an expression of names (one letter
+    each: m, n, k, R) - side by side a product (mn, 2n, mnk), with *, /, +,
+    - and parentheses - rounded up; 0 where it isn't one
+    """
+    if expr.isdigit():
+        return int(expr)
+    tokens = re.findall(r"\d+|[A-Za-z]|[-+*/()]|\S", expr.replace(" ", ""))
+    joined = []
+    for tok in tokens:
+        if joined and (joined[-1][-1].isalnum() or joined[-1] == ")") and (tok[0].isalnum() or tok == "("):
+            joined.append("*")
+        joined.append(tok)
+    try:
+        tree = ast.parse("".join(joined), mode="eval").body
+    except SyntaxError as err:
+        raise ValueError(f"not an expression of m, n, k and R: {expr}") from err
+
+    def value(node) -> Fraction:
+        if isinstance(node, ast.Constant) and isinstance(node.value, int):
+            return Fraction(node.value)
+        if isinstance(node, ast.Name):
+            if node.id not in values:
+                raise ValueError(f"{expr}: {node.id} isn't one of {', '.join(sorted(values))}")
+            return Fraction(values[node.id])
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+            return -value(node.operand)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)):
+            a, b = value(node.left), value(node.right)
+            if isinstance(node.op, ast.Div):
+                if 0 == b:
+                    raise ValueError(f"{expr}: a division by 0")
+                return a / b
+            return {ast.Add: a + b, ast.Sub: a - b, ast.Mult: a * b}[type(node.op)]
+        raise ValueError(f"not an expression of m, n, k and R: {expr}")
+    return math.ceil(value(tree))
+
+
 class addr_pattern:
     """
     Which of a component's address registers an access uses: a pure function
@@ -179,6 +222,10 @@ class addr_pattern:
 
         rotate     0,1,2,0,1,2,...
         blocked:N  N accesses per register: blocked:2 gives 0,0,1,1,2,2,0,0,...
+                   N a number or an expression of the kernel's sizes (m, n,
+                   k: its dims) and R, the component's address registers -
+                   products written side by side: blocked:n, blocked:mn/R,
+                   blocked:mnk/R, blocked:2*n/R - rounded up
         phase      one register per phase, e.g. C's loads and C's stores, so
                    the stores need no rewinding
     """
@@ -188,16 +235,22 @@ class addr_pattern:
         self.block = block
 
     @staticmethod
-    def parse(spec: str) -> addr_pattern:
+    def parse(spec: str, values: dict[str, int] | None = None) -> addr_pattern:
+        """
+        :param values: what an expression's names are - the kernel's sizes (m,
+            n, k) and R, the component's address registers
+        """
         name, _, arg = spec.partition(":")
         if "rotate" == name and not arg:
             return addr_pattern("rotate")
         if "phase" == name and not arg:
             return addr_pattern("phase")
-        if "blocked" == name and arg.isdigit() and int(arg) > 0:
-            return addr_pattern("blocked", int(arg))
+        if "blocked" == name and arg:
+            block = arg_value(arg, values or {})
+            if block > 0:
+                return addr_pattern("blocked", block)
         raise ValueError(f"not an address register pattern: {spec} "
-                         f"(rotate, blocked:<n> or phase)")
+                         f"(rotate, blocked:<n or an expression of m, n, k, R> or phase)")
 
     def select(self, access: int, phase: int, registers: int) -> int:
         """

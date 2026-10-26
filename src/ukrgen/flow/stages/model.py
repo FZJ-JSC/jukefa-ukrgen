@@ -57,7 +57,9 @@ class model_stage(stage):
                     default="phase" if both else "rotate",
                     description=f"Which of {comp}'s address registers an access uses: "
                                 f"rotate (0,1,2,0,...), blocked:<n> (n accesses per "
-                                f"register) or phase (one register per STO and direction)",
+                                f"register; n an expression of the kernel's sizes m, n, k "
+                                f"and R, its address registers: blocked:mn/R, blocked:2*n/R) "
+                                f"or phase (one register per STO and direction)",
                     required=False)
 
         # Accumulators get one register per tile they accumulate, counted
@@ -122,7 +124,8 @@ class model_stage(stage):
             if not count.isdigit() or int(count) < 1:
                 raise stage_error(f"--{comp}-addr-regs must be a positive integer, got {count}")
             try:
-                pattern = addr_pattern.parse(self.params[f"{comp}-addr-pattern"].value)
+                pattern = addr_pattern.parse(self.params[f"{comp}-addr-pattern"].value,
+                                             dict(self.context.dims, R=int(count)))
             except ValueError as err:
                 raise stage_error(f"--{comp}-addr-pattern: {err}") from err
             addressing[comp] = addressing_plan(int(count), pattern)

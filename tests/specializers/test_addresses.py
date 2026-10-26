@@ -78,6 +78,16 @@ class test_addresses(native.test_native):
             texts.append(self.text)
         self.assertNotEqual(texts[0], texts[1])
 
+    def test_blocked_by_the_kernels_sizes(self):
+        # blocked:<expression> - the kernel's sizes, its address registers -
+        # is the number it comes to: blocked:n here blocked:3, blocked:mn/R 3
+        def code(pattern):
+            ctx, res = gemm("rvv", **params({"B": (2, pattern)}))
+            self.assertTrue(res.completed, res.output)
+            return ctx.emitted[0].code
+        self.assertEqual(code("blocked:3"), code("blocked:n"))
+        self.assertEqual(code("blocked:3"), code("blocked:mn/R"))
+
     def test_not_specialized_yet(self):
         # C's tile is 3 columns: a pattern taking a register back to an
         # earlier column - rotating over 2, blocked by 2 - puts an access a

@@ -68,3 +68,20 @@ class test_patterns(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_blocked_expressions(self):
+        # the kernel's sizes and its address registers: 2vx14, k unrolled 4, 2 registers
+        values = dict(m=2, n=14, k=4, R=2)
+        for spec, block in (("blocked:mn", 28), ("blocked:mn/R", 14), ("blocked:mnk/R", 56),
+                            ("blocked:n", 14), ("blocked:2*n/R", 14), ("blocked:2n", 28),
+                            ("blocked:(m+1)n", 42), ("blocked:7", 7)):
+            with self.subTest(spec=spec):
+                self.assertEqual(block, addr_pattern.parse(spec, values).block)
+        # rounded up: 28 accesses over 3 registers, 10 a register
+        self.assertEqual(10, addr_pattern.parse("blocked:mn/R", dict(values, R=3)).block)
+
+    def test_blocked_refused(self):
+        for spec in ("blocked:x", "blocked:0", "blocked:n/0", "blocked:n-14", "blocked:n**2", "blocked:"):
+            with self.subTest(spec=spec), self.assertRaises(ValueError):
+                addr_pattern.parse(spec, dict(m=2, n=14, k=4, R=2))
+

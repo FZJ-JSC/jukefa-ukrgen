@@ -116,7 +116,7 @@ def key_params(kind: str, entry: dict) -> dict:
     The ukrgen parameters a family's keys set: unroll (k for gemm, n for
     packm), loop-order, resolve-order, schedule (scheduler distance specs),
     and per component max-data-regs, max-preload, max-addr-regs and
-    addr-pattern (block, interleave, phase)
+    addr-pattern (rotate, blocked:<n or an expression of m, n, k and R>, phase)
     """
     params = {}
     if "unroll" in entry:
