@@ -51,7 +51,7 @@ lack, in what order to build it, and how SME + SVE kernels' panels
   M is a pattern (1-8, 16, 32, ...), `whilelo` otherwise; AVX-512 a `kmov`
   of (1<<M)-1; RVV a vector length. ZA's partial tiles and k remainders
   need it.
-- **A4 A permute operation.** Two sources, one destination, a pattern at
+- **A4 A permute operation** - done (asmgen 0087: `opmove` `PERMUTE`, `permuted()`). Two sources, one destination, a pattern at
   a granularity, one instruction each:
   - zip low and high halves (NEON and SVE `zip1`/`zip2`) - x86's
     `vunpcklpd`/`vunpckhpd` (`ps`) zip within each 128-bit lane, a pattern
@@ -97,7 +97,12 @@ lack, in what order to build it, and how SME + SVE kernels' panels
     columns out of the vertical slices to P + k·cdim + t·v, the last tile's
     under a first-M-lanes predicate (A3); k in steps of v, the remainder
     predicated; the slice loops and their irmods as for C.
-  - `shufflenet` (AVX2, AVX-512, NEON - refused where `is_vla`) - N = the
+  - `shufflenet` (AVX2, AVX-512, NEON - refused where `is_vla`) - its
+    networks found (ukrgen 0189: `support/transpose.py`, the fewest rounds
+    of the ISA's permutes by a search checked with `permuted()`: NEON
+    doubles 1, singles 2; AVX2 2 and 3; AVX-512 3 - AMD's - and 4); still
+    to come: the IR's permute op, the emitter writing it, the irmod
+    rewriting a step's row stores. N = the
     lanes' count (or blocks of it: AMD's 24 = 3 x 8 doubles), log2(lanes)
     rounds of permutes (A4) by a recipe per ISA (x86: in-lane unpacks, then
     block selects; NEON: `trn` per element, then per 64 bits), then N
