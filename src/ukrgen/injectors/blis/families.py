@@ -501,8 +501,11 @@ def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: in
     cdim = str(extent_of(ctx, "m"))
     symbol = f"bli_{DT_CHAR[dt]}packm_{config_name}_{fam.name}_{case}{size_name(cdim)}"
     program = ctx.emitted[0]
-    # a loop stepping by vectors counts chunks of a vector length
-    unit = "VL" if any(("VL",) in dict(b.step.terms)
+    # a loop stepping by vectors counts chunks of a vector length - a step by
+    # VL, or along an index a component's vectors run along (a fixed vector
+    # length's step is a number): what's left of a chunk is the reference's
+    along = {i for p in ctx.programs for i in p.vector_indices.values() if i is not None}
+    unit = "VL" if any(("VL",) in dict(b.step.terms) or b.loop_index in along
                        for p in ctx.programs for b in p.blocks
                        if b.step is not None) else ""
     return _done(kernel(family=fam.name, dtype=dt, size=(m, 1), mr=cdim, nr="1", symbol=symbol,

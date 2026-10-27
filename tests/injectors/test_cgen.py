@@ -209,27 +209,51 @@ int main( void )
         self.packm_trans(irmods=["structfuse", "hoist", "cluster"],
                          expect={"sve": "st3d", "rvv": "vsseg3e64.v"})
 
-    def packm_trans(self, irmods=None, expect=None):
+    def test_packm_trans_fixed_length(self):
+        # AVX-512: vectors along the panel of a fixed length - the loop counts
+        # chunks of it as RVV's and SVE's do, the reference takes what's left
+        # (it went unpacked: the dispatch passed the kernel every column)
+        from tests.specializers.test_native import cpu_has
+        isas = {"avx512": ("Y.VEC:scatter", ["gcc", "-mavx512f"], [[]], cpu_has("avx512f"))}
+        for m in (3, 8):
+            with self.subTest(m=m):
+                self.packm_trans(m=m, isas=isas)
+
+    def packm_trans(self, irmods=None, expect=None, m=3, isas=None):
+        """
+        A trans family of m rows built and run through BLIS's dispatch
+        against the reference - per ISA its store, compiler, runners (an
+        empty one: natively) and whether it can run here
+        """
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
-        cases = ("{ 3, 3, 2 * vl + 3, 2 * vl + 9, 1, 1 }, { 3, 3, 4 * vl, 4 * vl + 1, 1, 0 }, "
-                 "{ 3, 3, 3 * vl + 1, 3 * vl + 2, 1, 1 }, { 3, 3, vl - 1, vl + 2, 1, 1 }, "
-                 "{ 3, 4, 2 * vl, 2 * vl + 9, 1, 1 }")
-        isas = {"rvv": ("Y.VEC:strided", ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"],
-                        [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"] for v in (128, 256)]),
-                "sve": ("Y.VEC:scatter", CC, [[QEMU, "-cpu", f"max,sve{v}=on"] for v in (256, 512)])}
-        for isa, (store, cc, runners) in isas.items():
-            if not (shutil.which(cc[0]) and shutil.which(runners[0][0])):
+        cases = (f"{{ {m}, {m}, 2 * vl + 3, 2 * vl + 9, 1, 1 }}, {{ {m}, {m}, 4 * vl, 4 * vl + 1, 1, 0 }}, "
+                 f"{{ {m}, {m}, 3 * vl + 1, 3 * vl + 2, 1, 1 }}, {{ {m}, {m}, vl - 1, vl + 2, 1, 1 }}, "
+                 f"{{ {m}, {m + 1}, 2 * vl, 2 * vl + 9, 1, 1 }}")
+        if isas is None:
+            rvv_cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
+            isas = {"rvv": ("Y.VEC:strided", rvv_cc,
+                            [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"] for v in (128, 256)],
+                            bool(shutil.which(rvv_cc[0]) and shutil.which("qemu-riscv64-static"))),
+                    "sve": ("Y.VEC:scatter", CC, [[QEMU, "-cpu", f"max,sve{v}=on"] for v in (256, 512)],
+                            bool(shutil.which(CC[0]) and shutil.which(QEMU)))}
+        ran = 0
+        for isa, (store, cc, runners, available) in isas.items():
+            if not available:
                 continue
+            ran += 1
             trans = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"],
                      "store-tileop": [store], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"]}
             if irmods is not None:
                 trans["pre-specialize-irmods"] = irmods
+            if m > 4:
+                trans.update({"X-data-regs": str(m), "Y-data-regs": str(m)})
             fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "unroll": 2,
-                                             "cases": [{"kind": "trans", "m": [3], "params": trans}]})
+                                             "cases": [{"kind": "trans", "m": [m], "params": trans}]})
             built, skipped = build_packm(isa, f"ukrgen_{isa}", fam)
             self.assertEqual(1, len(built), skipped)
-            self.assertEqual("VL", built[0].loop_unit)
+            if make_generator(isa).is_vla:
+                self.assertEqual("VL", built[0].loop_unit)
             src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
                   vl_helpers(built, make_generator(isa)) + \
                   f"\n#define bli_ddpackm_ukrgen_{isa}_ref REF\ntypedef int conj_t;\ntypedef int pack_t;\n" + \
@@ -257,6 +281,8 @@ int main( void )
                     out = subprocess.run(runner + [os.path.join(d, "run")], capture_output=True,
                                          text=True, timeout=60).stdout
                     self.assertIn("5 runs, 1 by generated cases, 0 wrong", out, isa)
+        if not ran:
+            self.skipTest(f"none of {', '.join(isas)} can run here")
 
     @unittest.skipUnless(shutil.which("riscv64-linux-gnu-gcc") and shutil.which("qemu-riscv64-static"),
                          "needs riscv64-linux-gnu-gcc and qemu-riscv64-static")

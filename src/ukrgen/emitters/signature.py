@@ -1732,6 +1732,18 @@ class signature_emitter:
                 if reg.idx in self.rt.get_used_regs("greg"):
                     self.rt.unuse_reg("greg", reg.idx)
 
+    def _lanes_along(self, index) -> int | None:
+        """
+        The elements of a vector running along index, its length fixed - one
+        for every component's vectors along it; None if none run along it, or
+        its length isn't fixed
+        """
+        if self.gen.is_vla:
+            return None
+        lanes = {self.gen.simd_size // adt_size(self.ctx.component_dts[comp])
+                 for comp, along in self.program.vector_indices.items() if along == index}
+        return lanes.pop() if 1 == len(lanes) else None
+
     def loop_counts(self, block, shared: bool):
         """
         A loop's counters from its k parameter (kiterkleft): the iterations,
@@ -1739,11 +1751,17 @@ class signature_emitter:
         """
         k = self.params[block.loop_index]
         terms = dict(block.step.terms)
+        lanes = self._lanes_along(block.loop_index)
         if set(terms) == {("VL",)}:
             # vectors along the loop: its parameter counts chunks of a vector
             # length - the caller divides, and takes what's left of one - the
             # loop unrolled over as many chunks as a step has
             terms = {(): terms[("VL",)]}
+        elif set(terms) == {()} and lanes and 0 == int(terms[()]) % lanes:
+            # a fixed vector length along the loop - its step a number of
+            # elements: counted in chunks of it the same, as its tail takes
+            # a chunk an iteration
+            terms = {(): int(terms[()]) // lanes}
         if set(terms) != {()}:
             raise specialization_error(f"{block.name}: a step of {block.step} elements is not "
                                        "counted yet")
