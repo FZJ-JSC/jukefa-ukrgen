@@ -357,6 +357,45 @@ int main( void )
         built, skipped = build_packm(cfg.isa, cfg.name, fam)
         self.assertEqual([], built)
         self.assertIn("a part of 9 rows, the ISA's structures take 8 at most", str(skipped[0][2]))
+    def test_packm_trans_blocks(self):
+        # A's rows contiguous, any cdim - large vectors' 2*VL rows and more,
+        # past any one trans kernel - in blocks of rows: a trans case taking
+        # P's leading dimension (its segment stores strided: ldp), the
+        # dispatch calling its kernels on blocks, the widest first; the
+        # reference for a block's last columns (n past whole chunks) and the
+        # padding - VLEN 128 and 1024 (16 doubles a vector)
+        from ukrgen.injectors.blis.families import build_packm
+        from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
+        cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
+        if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
+            self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
+        trans = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"],
+                 "store-tileop": ["Y.VEC:strided"], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:s"],
+                 "X-data-regs": "4", "pre-specialize-irmods": ["+structfuse"]}
+        fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "unroll": 2,
+                                         "cases": [{"kind": "trans", "name": "tblock", "m": [16, 8, 4, 2, 1],
+                                                    "params": trans}]})
+        built, skipped = build_packm("rvv", "ukrgen_rvv", fam)
+        self.assertEqual([], skipped)
+        self.assertTrue(any("vssseg8e64.v" in asm_source(k) for k in built))
+        src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
+              vl_helpers(built, make_generator("rvv")) + \
+              "\n#define bli_ddpackm_ukrgen_rvv_ref REF\n" + \
+              "typedef int conj_t;\ntypedef int pack_t;\n" + \
+              "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
+              "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
+              packm_dispatch("ukrgen_rvv", "FP64", built) + \
+              "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( double ) ); }\n"
+        harness = open(os.path.join(HERE, "packm_harness.c")).read() \
+            .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
+        # cdim, cdim_max, n, inca, lda, the reference calls expected
+        cases = ("{ 2 * vl, 2 * vl, 3 * vl, 4 * vl, 1, 0 }, { vl + 5, vl + 5, 2 * vl + 3, 3 * vl, 1, 3 }, "
+                 "{ 3, 4, vl, 2 * vl, 1, 1 }")
+        outs = self.run_c("rvv", src + harness, built,
+                          [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"] for v in (128, 1024)],
+                          ["-DPACKM=bli_dpackm_ukrgen_rvv", f"-DCASES={cases}"], cc=cc)
+        for out in outs:
+            self.assertIn("3 runs, 1 by generated cases, 0 wrong", out)
 
     def test_packm_trans_shufflenet(self):
         # a block of rows - as many as a vector's lanes - transposed in

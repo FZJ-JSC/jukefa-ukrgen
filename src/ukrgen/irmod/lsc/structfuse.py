@@ -179,7 +179,12 @@ class structfuse(lsc_irmod):
                     parts = list(given)
                 else:
                     parts = [n] if n <= cap else [cap] * (n // cap) + ([n % cap] if n % cap else [])
-                strided = len(parts) > 1
+                # plain structures where P's rows are the run's rows apart (a
+                # full panel of them); a stride where they aren't - P's leading
+                # dimension a parameter (a block of a larger panel) - or parted
+                along = program.vector_indices.get(comp)
+                apart = _constant(program.strides.get(comp, {}).get(along)) if along else None
+                strided = len(parts) > 1 or apart != n
                 sigs = {s: struct_sigs(gen, "store", dt, s, strided) for s in set(parts) if s > 1}
                 if not sigs:
                     continue                # all parts single rows: the strided stores they are

@@ -442,7 +442,9 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: l
         # reference take two
         rank = {"vec": 1, "gather": 2, "trans": 3}
         first = lambda n: next(k for k in mine if n == k.case)
-        names.sort(key=lambda n: 0 if first(n).tail else rank.get(kind_of(first(n)), 4))
+        # a trans case's blocks after its full panels: exact ones first
+        blockwise = lambda n: "trans" == kind_of(first(n)) and "stride(Y,n)" in first(n).params
+        names.sort(key=lambda n: 0 if first(n).tail else rank.get(kind_of(first(n)), 4) + (0.5 if blockwise(n) else 0))
     else:
         names = [n for n in order if n in names]
     decls = [f"void {asm_symbol(k)}( {', '.join(PACKM_ARGS[p][0] for p in k.params)} );"
@@ -505,6 +507,42 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: l
         args = ", ".join(PACKM_ARGS[p][1].format(ctype=ctype) for p in k.params)
         return f"\t\tif ( cdim == {c_expr(k.mr, ctype, k.vl_fn)} ) {{ {asm_symbol(k)}( {args} ); return; }}"
 
+    def trans_blocks(name, ks):
+        """
+        A trans case taking P's leading dimension: its kernels on blocks of
+        rows - each as many times as fit, the widest first, at A's and P's
+        rows done - the reference for what's left of each block's last
+        vector-length chunk, the rows no kernel fits, and the zero padding
+        """
+        calls = []
+        for k in sorted(ks, key=lambda k: -split_size(k.mr)[1] - split_size(k.mr)[0] * 1000):
+            rows = c_expr(k.mr, ctype, k.vl_fn)
+            vl = f"{k.vl_fn}( sizeof( {ctype} ) )" if "VL" == k.loop_unit else "1"
+            args = ", ".join({"n": "chunks", "base(X)": f"( const {ctype}* )a + done * inca",
+                              "base(Y)": f"( {ctype}* )p + done"}.get(p) or
+                             PACKM_ARGS[p][1].format(ctype=ctype) for p in k.params)
+            calls.append(f"""\
+\t\twhile ( cdim - done >= {rows} )
+\t\t{{
+\t\t\tconst dim_t chunks = n / {vl}, packed = chunks * {vl};
+\t\t\tif ( chunks ) {asm_symbol(k)}( {args} );
+\t\t\tif ( packed < n )
+\t\t\t\tbli_{ch}{ch}packm_{config_name}_ref( conja, schema, {rows}, {rows}, cdim_bcast,
+\t\t\t\t    n - packed, n_max - packed, kappa, ( const {ctype}* )a + done * inca + packed * lda, inca, lda,
+\t\t\t\t    ( {ctype}* )p + done + packed * ldp, ldp, params, cntx );
+\t\t\tdone += {rows};
+\t\t}}""")
+        return (f"\t// {name}: A's rows contiguous, in blocks of rows - any cdim\n"
+                f"\tif ( cdim_bcast == 1 && n == n_max && lda == 1 )\n\t{{\n\t\tdim_t done = 0;\n"
+                + "\n".join(calls) + f"""
+\t\t// the rows no block takes, and the padding to cdim_max
+\t\tif ( done < cdim_max )
+\t\t\tbli_{ch}{ch}packm_{config_name}_ref( conja, schema, cdim - done, cdim_max - done, cdim_bcast,
+\t\t\t    n, n_max, kappa, ( const {ctype}* )a + done * inca, inca, lda,
+\t\t\t    ( {ctype}* )p + done, ldp, params, cntx );
+\t\treturn;
+\t}}""")
+
     blocks = []
     for name in names:
         ks = [k for k in mine if name == k.case]
@@ -515,6 +553,12 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: l
         strided = sorted([k for k in ks if "stride(Y,n)" in k.params],
                          key=lambda k: (-split_size(k.mr)[0] * k.lmul, -split_size(k.mr)[1]))
         full = [k for k in ks if k not in strided]
+        if strided and "trans" == kind:
+            # blocks of rows: A's rows contiguous, any cdim - B rows a call,
+            # the widest blocks first, P's rows ldp apart (large vectors'
+            # cdims, 2*VL rows and more, past any one kernel's rows)
+            blocks.append(trans_blocks(name, strided))
+            strided = []
         if strided:
             note = "A's rows inca apart, gathered into vectors along cdim" if "gather" == kind else name
             blocks.append(f"\t// {note}\n\tif ( cdim_bcast == 1 && n == n_max && {along} )\n\t{{\n"

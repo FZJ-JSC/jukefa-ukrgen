@@ -184,6 +184,27 @@ Where each goes: `dispatch`, `vec-rest`, `lmul` (a default) on the family;
 mechanism (a branch in the kernel) or the dispatch trying them where
 `*kappa == 1`; today every case multiplies.
 
+## Across the grain on large vectors: blocks of rows
+
+A trans case's kernel packs its rows, 1 to 16, a full panel of them -
+but large vectors' cdims are 2*VL rows and more (VLEN 1024: 32 doubles;
+16384: 512), past any one kernel's: the reference packed them. Done
+(ukrgen 0207): a trans case taking P's leading dimension (`Y-layout
+['m:c', 'n:s']`) is a block case - the dispatch, for A's rows contiguous
+(lda 1) and any cdim, calls its kernels on blocks of rows, each as many
+times as fit, the widest first, at A's and P's rows done, P's rows ldp
+apart; the reference only for a block's last columns (n past whole
+chunks), rows no kernel fits and the padding. Its structfuse stores are
+strided (vssseg, the stride ldp): plain segments only where P's rows are
+the fused rows apart. Tried after full-panel trans cases by default.
+
+```yaml
+- kind: trans
+  name: tblock
+  m: [16, 8, 4, 2, 1]
+  params: {..., Y-layout: ['m:c', 'n:s'], X-data-regs: '4', pre-specialize-irmods: ['+structfuse']}
+```
+
 ## Vectors along cdim under a predicate: cdim = n·VL + M
 
 Done for SVE (ukrgen 0203): a vec case with `mask: true` - size N packs N
