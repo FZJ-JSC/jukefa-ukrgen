@@ -11,9 +11,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from asmgen.registers import adt_size, asm_data_type
-
-from ...lsc_model.addressing import arg_value
 from ...flow.stage_engine import stage_engine
 from ...flow.ukr_context import ukr_context
 from ...flow.stages.setup import setup_stage
@@ -36,27 +33,6 @@ PIPELINE = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_st
 
 #: BLIS's letter for a data type
 DT_CHAR = {"FP32": "s", "FP64": "d"}
-
-#: the immediate offsets the K1 and the K3's A100 cores hold for free, in elements: past the window a
-#: load's offset costs microops (measured: 63 B FP32 and 127 B FP64 are free, one element more is not)
-IMM_WINDOW = 16
-
-
-def resolved_imm(limit, m: int, n: int, k: int, dt: str) -> int:
-    """
-    A family's max-imm-offset: a number as it is, an expression of the kernel's shape evaluated - m, n
-    and k in the family's units and e the element size in bytes, so n*e is one k step of a vm family's
-    scalar loads of B and m*e the same of a vn family's of A - and the result clamped to the window
-    """
-    if isinstance(limit, int) or str(limit).strip().isdigit():
-        return int(limit)
-    window = IMM_WINDOW * adt_size(asm_data_type[dt]) - 1
-    value = min(arg_value(str(limit), {"m": m, "n": n, "k": k, "e": adt_size(asm_data_type[dt])}),
-                window)
-    if value <= 0:
-        raise ValueError(f"max-imm-offset: {limit} is {value} bytes at m, n, k = {m}, {n}, {k}")
-    return value
-
 
 def run_flow(params: dict) -> tuple[ukr_context, object]:
     """
@@ -497,9 +473,6 @@ def gemm_one(isa: str, config_name: str, fam: family, dt: str, m: int, n: int,
     for comp in ("A", "B", "C", "AB"):
         params[f"{comp}-data-type"] = dt
     params.update({"m": str(m), "n": str(n)})
-    if "max-imm-offset" in params:
-        params["max-imm-offset"] = str(resolved_imm(params["max-imm-offset"], m, n,
-                                                    int(params.get("k", 1)), dt))
     try:
         ctx, result, _ = run_unrolled(params, "k")
     except Exception as err:
@@ -545,9 +518,6 @@ def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: in
     if fam.min_inflight:
         # at least min_inflight vectors an iteration: m a copy
         params["n"] = str(max(1, -(-fam.min_inflight // m)))
-    if "max-imm-offset" in params:
-        params["max-imm-offset"] = str(resolved_imm(params["max-imm-offset"], m, int(params["n"]), 1,
-                                                    dt))
     try:
         ctx, result, _ = run_unrolled(params, "n")
     except Exception as err:

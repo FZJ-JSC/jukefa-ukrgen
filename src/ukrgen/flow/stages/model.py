@@ -4,11 +4,13 @@ The LSC model stage: tiled STOs as loads, stores and computations
 
 import logging
 
+from asmgen.registers import adt_size
+
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
 from .ukr.ukr import storage_class, read_access, write_access, sto_kind
-from ...lsc_model.addressing import addr_pattern
+from ...lsc_model.addressing import addr_pattern, kernel_values
 from ...lsc_model.builder import program_builder, addressing_plan, model_error
 
 
@@ -125,7 +127,7 @@ class model_stage(stage):
                 raise stage_error(f"--{comp}-addr-regs must be a positive integer, got {count}")
             try:
                 pattern = addr_pattern.parse(self.params[f"{comp}-addr-pattern"].value,
-                                             dict(self.context.dims, R=int(count)))
+                                             kernel_values(self.context.dims, adt_size(self.context.component_dts[comp]), int(count)))
             except ValueError as err:
                 raise stage_error(f"--{comp}-addr-pattern: {err}") from err
             addressing[comp] = addressing_plan(int(count), pattern)

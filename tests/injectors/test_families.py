@@ -7,7 +7,7 @@ import os
 import tempfile
 import unittest
 
-from ukrgen.injectors.blis.families import family, configuration, build_gemm, parse_sizes, resolved_imm
+from ukrgen.injectors.blis.families import family, configuration, build_gemm, parse_sizes
 from tests.stages.test_sto import CASE_TOS
 
 # vectors along m, B broadcast; A and B packed as BLIS packs them
@@ -60,23 +60,30 @@ class test_families(unittest.TestCase):
         self.assertEqual([2, 5], parse_sizes([2, 5]))
 
     def test_imm_expression(self):
+        # max-imm-offset as the flow evaluates it (isa_specialize): the
+        # kernel's sizes and its element size e - as blocked:'s expressions
+        from ukrgen.lsc_model.addressing import arg_value, kernel_values
+        imm = lambda expr, m, n, k, dt: arg_value(str(expr), kernel_values({"m": m, "n": n, "k": k},
+                                                                          {"FP32": 4, "FP64": 8}[dt]))
         # one k step of the scalar side's walk: 14 and 12 floats, 14 doubles
-        self.assertEqual(56, resolved_imm("ne", 2, 14, 2, "FP32"))
-        self.assertEqual(48, resolved_imm("ne", 2, 12, 2, "FP32"))
-        self.assertEqual(112, resolved_imm("ne", 2, 14, 2, "FP64"))
-        self.assertEqual(48, resolved_imm("me", 12, 3, 2, "FP32"))
+        self.assertEqual(56, imm("ne", 2, 14, 2, "FP32"))
+        self.assertEqual(48, imm("ne", 2, 12, 2, "FP32"))
+        self.assertEqual(112, imm("ne", 2, 14, 2, "FP64"))
+        self.assertEqual(48, imm("me", 12, 3, 2, "FP32"))
         # a step plus one element: the bump lands between steps, not inside one
-        self.assertEqual(60, resolved_imm("ne+e", 2, 14, 2, "FP32"))
-        self.assertEqual(52, resolved_imm("ne+e", 2, 12, 2, "FP32"))
-        self.assertEqual(120, resolved_imm("ne+e", 2, 14, 2, "FP64"))
-        # past the window an offset costs microops, so an expression is clamped to it
-        self.assertEqual(63, resolved_imm("ne", 1, 28, 1, "FP32"))
-        self.assertEqual(127, resolved_imm("ne", 2, 20, 1, "FP64"))
+        self.assertEqual(60, imm("ne+e", 2, 14, 2, "FP32"))
+        self.assertEqual(52, imm("ne+e", 2, 12, 2, "FP32"))
+        self.assertEqual(120, imm("ne+e", 2, 14, 2, "FP64"))
+        # past the K1's and K3's window an offset costs microops: the config's
+        # expression keeps within it
+        self.assertEqual(63, imm("min(ne, 16e-1)", 1, 28, 1, "FP32"))
+        self.assertEqual(127, imm("min(ne, 16e-1)", 2, 20, 1, "FP64"))
+        self.assertEqual(56, imm("min(ne, 16e-1)", 2, 14, 2, "FP32"))
         # a number is a number, whichever way the config spells it
-        self.assertEqual(63, resolved_imm(63, 2, 14, 2, "FP32"))
-        self.assertEqual(127, resolved_imm("127", 2, 14, 2, "FP64"))
+        self.assertEqual(63, imm(63, 2, 14, 2, "FP32"))
+        self.assertEqual(127, imm("127", 2, 14, 2, "FP64"))
         with self.assertRaises(ValueError):
-            resolved_imm("nz", 2, 14, 2, "FP32")
+            imm("nz", 2, 14, 2, "FP32")
 
     def test_gemm_sizes(self):
         fam = family.from_yaml("gemm", {"family": "vm", "dtypes": ["FP64"], "params": VM,

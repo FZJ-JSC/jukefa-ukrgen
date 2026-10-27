@@ -174,24 +174,47 @@ class offset_db:
         return total
 
 
+#: an expression's functions
+FUNCTIONS = {"min": min, "max": max}
+
+
+def kernel_values(dims: dict, esize: int | None = None, registers: int | None = None) -> dict:
+    """
+    The names a kernel-dependent number's expression uses: its sizes m, n,
+    k (its dims: the family's units - vectors, elements, the unroll), e the
+    element size in bytes where one is meant, R a component's address
+    registers where one is meant
+    """
+    values = {i: dims[i] for i in ("m", "n", "k") if i in dims}
+    if esize is not None:
+        values["e"] = esize
+    if registers is not None:
+        values["R"] = registers
+    return values
+
+
 def arg_value(expr: str, values: dict[str, int]) -> int:
     """
-    A pattern's number: an integer, or an expression of names (one letter
-    each: m, n, k, R) - side by side a product (mn, 2n, mnk), with *, /, +,
-    - and parentheses - rounded up; 0 where it isn't one
+    A kernel-dependent number - blocked:<n>, max-imm-offset - an integer, or
+    an expression of names (one letter each: kernel_values' m, n, k, e, R) -
+    side by side a product (mn, 2n, ne), with *, /, +, -, parentheses and
+    min(a, b), max(a, b) (a window: min(ne, 16e-1)) - rounded up
     """
     if expr.isdigit():
         return int(expr)
-    tokens = re.findall(r"\d+|[A-Za-z]|[-+*/()]|\S", expr.replace(" ", ""))
+    names = ", ".join(sorted(values))
+    tokens = re.findall(r"\d+|min|max|[A-Za-z]|[-+*/(),]|\S", expr.replace(" ", ""))
     joined = []
     for tok in tokens:
-        if joined and (joined[-1][-1].isalnum() or joined[-1] == ")") and (tok[0].isalnum() or tok == "("):
+        # side by side a product - not a function and its parenthesis
+        if joined and (joined[-1][-1].isalnum() or joined[-1] == ")") and (tok[0].isalnum() or tok == "(") \
+                and not (joined[-1] in FUNCTIONS and tok == "("):
             joined.append("*")
         joined.append(tok)
     try:
         tree = ast.parse("".join(joined), mode="eval").body
     except SyntaxError as err:
-        raise ValueError(f"not an expression of m, n, k and R: {expr}") from err
+        raise ValueError(f"not an expression of {names}: {expr}") from err
 
     def value(node) -> Fraction:
         if isinstance(node, ast.Constant) and isinstance(node.value, int):
@@ -202,6 +225,9 @@ def arg_value(expr: str, values: dict[str, int]) -> int:
             return Fraction(values[node.id])
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
             return -value(node.operand)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in FUNCTIONS \
+                and node.args and not node.keywords:
+            return FUNCTIONS[node.func.id](value(a) for a in node.args)
         if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)):
             a, b = value(node.left), value(node.right)
             if isinstance(node.op, ast.Div):
@@ -209,7 +235,7 @@ def arg_value(expr: str, values: dict[str, int]) -> int:
                     raise ValueError(f"{expr}: a division by 0")
                 return a / b
             return {ast.Add: a + b, ast.Sub: a - b, ast.Mult: a * b}[type(node.op)]
-        raise ValueError(f"not an expression of m, n, k and R: {expr}")
+        raise ValueError(f"not an expression of {names}: {expr}")
     return math.ceil(value(tree))
 
 

@@ -88,6 +88,19 @@ class test_addresses(native.test_native):
         self.assertEqual(code("blocked:3"), code("blocked:n"))
         self.assertEqual(code("blocked:3"), code("blocked:mn/R"))
 
+    def test_imm_offset_by_the_kernels_sizes(self):
+        # --max-imm-offset an expression - the kernel's sizes, its element
+        # size - is the number it comes to: on AVX2 (displacements) 2e and
+        # min(ne, 2e) 16 bytes, a limit the kernel walks its addresses for
+        def code(limit):
+            ctx, res = gemm("avx256", **({} if limit is None else {"max-imm-offset": limit}))
+            self.assertTrue(res.completed, res.output)
+            return ctx.emitted[0].code
+        sixteen = code("16")
+        self.assertNotEqual(code(None), sixteen)
+        self.assertEqual(sixteen, code("2e"))
+        self.assertEqual(sixteen, code("min(ne, 2e)"))
+
     def test_not_specialized_yet(self):
         # C's tile is 3 columns: a pattern taking a register back to an
         # earlier column - rotating over 2, blocked by 2 - puts an access a

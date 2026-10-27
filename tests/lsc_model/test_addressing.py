@@ -80,6 +80,19 @@ if __name__ == "__main__":
         # rounded up: 28 accesses over 3 registers, 10 a register
         self.assertEqual(10, addr_pattern.parse("blocked:mn/R", dict(values, R=3)).block)
 
+    def test_functions(self):
+        # min and max: a window kept to (max-imm-offset), a floor
+        from ukrgen.lsc_model.addressing import arg_value, kernel_values
+        values = kernel_values({"m": 2, "n": 14, "k": 4}, 8, 2)
+        self.assertEqual({"m": 2, "n": 14, "k": 4, "e": 8, "R": 2}, values)
+        self.assertEqual(112, arg_value("min(ne, 16e-1)", values))
+        self.assertEqual(127, arg_value("min(2ne, 16e-1)", values))
+        self.assertEqual(14, arg_value("max(n, mk)", values))
+        self.assertEqual(28, arg_value("2max(m, n)", values))
+        for expr in ("foo(1)", "min()", "min(n e)"):
+            with self.subTest(expr=expr), self.assertRaises(ValueError):
+                arg_value(expr, values)
+
     def test_blocked_refused(self):
         for spec in ("blocked:x", "blocked:0", "blocked:n/0", "blocked:n-14", "blocked:n**2", "blocked:"):
             with self.subTest(spec=spec), self.assertRaises(ValueError):

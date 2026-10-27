@@ -4,9 +4,12 @@ Specializing the LSC IR for the ISA
 
 import logging
 
+from asmgen.registers import adt_size
+
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
+from ...lsc_model.addressing import arg_value, kernel_values
 from ...specializers.signature import signature_specializer, specialization_error
 
 
@@ -35,15 +38,31 @@ class isa_specialize_stage(stage):
                 description="Largest immediate offset in bytes, either sign, a load or store "
                             "uses (the number in the instruction on RISC-V and x86; AArch64 "
                             "encodes it divided by the access size): beyond it the access's "
-                            "address register walks forward - the K1 seems to pay for fld "
-                            "offsets above ~104 bytes")
+                            "address register walks forward. A number, or an expression of the "
+                            "kernel's sizes m, n, k and e, its element size - side by side a "
+                            "product - with min and max: ne, one k step of a vm family's B; "
+                            "min(ne, 16e-1), within the K1's and K3's free window")
+
+    def imm_limit(self) -> int | None:
+        """
+        --max-imm-offset for this kernel: a number, or its expression of the
+        kernel's sizes and element size evaluated (e where the components
+        share one); at least 1
+        """
+        limit = self.params["max-imm-offset"].value
+        if limit in (None, ""):
+            return None
+        sizes = {adt_size(dt) for dt in self.context.component_dts.values()}
+        value = arg_value(str(limit), kernel_values(self.context.dims, sizes.pop() if 1 == len(sizes) else None))
+        if value < 1:
+            raise stage_error(f"--max-imm-offset {limit} is {value} bytes for this kernel")
+        return value
 
     def progress(self):
         try:
             for program in self.context.programs:
                 sp = signature_specializer(self.context, program)
-                limit = self.params["max-imm-offset"].value
-                sp.max_imm_offset = None if limit in (None, "") else int(limit)
+                sp.max_imm_offset = self.imm_limit()
                 sp.specialize()
         except specialization_error as err:
             raise stage_error(f"specializing for the ISA: {err}") from err
