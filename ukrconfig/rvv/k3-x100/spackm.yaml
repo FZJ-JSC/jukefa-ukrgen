@@ -1,0 +1,51 @@
+# FP32 packm, rvv on the SpacemiT K3's X100 cores (0-7) - no prologue, VLEN 256, ONE vector op a cycle
+# with 2 instructions a cycle in total. Vectors along cdim - P's leading dimension a parameter, so a
+# vec kernel packs the vectors of any cdim up to 16 rows more (a split's 2*VL + 2), the reference the
+# rest, and along the panel (trans). Measured with BLIS mode, cdim 8 vectors (64 rows), panels inside
+# the 64 KB L1 - bytes a cycle at n=32/64/128:
+#   23.8 / 24.1 / 21.0   with 2:vl|vs,vf,sl,i and one address register a direction (n=128 is the L1 edge)
+#   18.3 / 18.7 / 19.6   with {X:4,Y:2} - the K1's addressing costs 20% HERE (the A100 agrees, the K1 not)
+#   23.1-24.2 for every other issue model, i.e. packm is not schedule-sensitive on this core
+# It is ISSUE-bound, not memory-bound: 44 instructions a column (8 vle + 8 vse + 8 vfmul + 20 adds) at
+# 2.07 instructions a cycle, so the 20 address adds take 45% of the issue slots. Structural floor 40
+# ops = 20 cycles = 25.6 B/cycle; measured 24.05 = 94% of it. A kappa == 1 copy case would drop the
+# eight multiplies and take it to ~32 B/cycle - the one real lever left here.
+# No max-imm-offset: a packm's offsets stay within one vector
+# Addressing: the defaults (one register a direction, rotate) are the best of 24 combinations
+# measured on jsc-k3-2 - 24.46 B/cyc at cdim 8 vectors, n=64 (1339.6 cycles a call). Raising the
+# counts is only safe together with addr-pattern phase: X4Y4 + rotate costs 22% (18.94 B/cyc,
+# 1730.4 cycles a call) while X4Y4 phase ties the default, and X6Y2/X8Y2 + rotate makes the cdim-8
+# kernel UNBUILDABLE, so the call silently falls back to vec6v + reference (75 cycles a column,
+# 3.6x slower). The trans case is flat: 20.6-21.5 cycles a column at cdim 16, n=512, best X8Y2
+# blocked:2 (20.55) against 21.47 for the default, i.e. ~4% and not adoptable at family level
+# because blocked:2 costs the vec case 22%. The kappa load is hoisted: one vlse32.v v1,(a3),zero
+# broadcast before .ukr0_loop, never touched inside it.
+# kappa is an FP SCALAR operand (`kappa.FP:use_scalar` with `mul[bdreg:VF]`), as in the gemm
+# presets, not a broadcast vector (`kappa.VEC:bc_load`, which emits vlse32 + vfmul.vv): one flw f0
+# and 40 vfmul.vf instead of vlse32.v v1 + 40 vfmul.vv, freeing a vector register and shifting the
+# whole allocation. Measured against the bc_load form on two x100 hosts (runs 5, bytes a cycle):
+#   vec  24.23 -> 25.22 and 24.54 -> 25.10 (+2 to +4%),  trans 5.94 -> 6.28 (+5.7% both hosts)
+#   FP64 is neutral (24.15 -> 24.29, 6.67 -> 6.66), adopted for one form across the tree.
+# The K1 sees no gain (10.75 -> 10.83 vec, 1.51 -> 1.45 d trans) and keeps bc_load.
+isa: rvv
+family: pk
+min-inflight: 16
+cases:
+- kind: vec
+  m: 1..8
+  params:
+    pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){i=m, n=1}']
+    store-tileop: ['Y.VEC:direct']
+    X-layout: ['m:c', 'n:s']
+    Y-layout: ['m:c', 'n:s']
+    sched-cycle-slots: "2:vl|vs,vf,sl,i"
+  schedule: ['RAW:data::::13', 'WAW:data::::13', 'WAR:data::::13', 'RAW:address:greg:::3']
+- kind: trans
+  m: 1..16
+  params:
+    pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){m=1, i=n}']
+    store-tileop: ['Y.VEC:strided']
+    X-layout: ['n:c', 'm:s']
+    Y-layout: ['m:c', 'n:p']
+    sched-cycle-slots: "2:vl|vs,vf,sl,i"
+  schedule: ['RAW:data::::13', 'WAW:data::::13', 'WAR:data::::13', 'RAW:address:greg:::3']

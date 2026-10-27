@@ -8,11 +8,16 @@
 # 4 X and 2 Y address registers, rotated (the default gives a single-direction component one register,
 # i.e. one long add chain per direction). Measured with --blis at cdim 32 (panel verified): 10.92
 # B/cycle at L1 (n=64) against 9.13, and 5.54/5.42 at n=256/1024 against 4.72/4.54.
+# Addressing: X2Y4 + phase 12.19 B/cyc (X4Y2 phase 12.12, X1Y1 phase 11.81, X1Y1 rotate 10.90,
+# X4Y2 rotate 10.83 - the previous setting), trans flat at 1.64-1.65 (old X4Y2 rotate 1.50).
+# Addressing: defaults again (one register a direction, rotate) - 8-run A/B at cdim 8 vectors:
+#   rotate X1Y1 2784.6 / 11.77   phase X2Y4 2822.9 / 11.61
+#   phase  X1Y1 2866.9 / 11.43   rotate X2Y4 2918.8 / 11.23
+# so the {X: 4, Y: 2} override this file used to carry is gone. trans is flat (1.64-1.65).
+# k1 keeps the bc_load kappa form (the FP scalar one is slower here).
 isa: rvv
 family: pk
 min-inflight: 16
-max-addr-regs: {X: 4, Y: 2}
-addr-pattern: {X: rotate, Y: rotate}
 cases:
 - kind: vec
   m: 1..8

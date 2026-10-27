@@ -13,11 +13,18 @@
 # 10.50, and 5.40/5.16 at n=256/1024 against 4.60/4.39 - the one-register plan also swung 4.21-6.77
 # across runs where this one stayed 5.10-5.40. More registers is not monotonically better: {X:4,Y:4}
 # and {X:2,Y:2} both came out worse than the default beyond L1.
+# Addressing: the DEFAULTS (one register a direction, rotate) are what 8-run A/Bs pick, and the
+# {X: 4, Y: 2} override this file used to carry measured 10.73 against 11.24 for the default at
+# cdim 8 vectors, n=64. Full A/B (cycles a call, bytes a cycle, runs 8):
+#   rotate X1Y1 2915.4 / 11.24   rotate X2Y4 3004.9 / 10.90
+#   phase  X1Y1 3529.9 /  9.28   phase  X2Y4 3170.4 / 10.34
+# A 15-combination grid had ranked phase first (11.57) - that ranking did not survive the 8-run
+# A/B, which is why no max-addr-regs/addr-pattern key is set here. The trans case is flat across
+# all of them (2.13-2.15). k1 keeps the bc_load kappa form: the FP-scalar form is 6% slower here
+# on the vec case (10.85 against 11.57 in the same 15-combination grid).
 isa: rvv
 family: pk
 min-inflight: 16
-max-addr-regs: {X: 4, Y: 2}
-addr-pattern: {X: rotate, Y: rotate}
 cases:
 - kind: vec
   m: 1..8

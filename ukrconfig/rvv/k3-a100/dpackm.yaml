@@ -5,6 +5,13 @@
 # B/cycle at L1) against 106.4 (19.2) for the gemm profile - and the trans case the gemm profile's model
 # without buckets, 1084 (1.89 B/cycle) against 1152 (1.78); both trans cases are store-bound, which
 # in-register transposes would change. No max-imm-offset: a packm's offsets stay within one vector
+# kappa is an FP scalar operand (`kappa.FP:use_scalar`, `mul[bdreg:VF]`) as in the gemm presets:
+# flw f0 + vfmul.vf instead of a vlse broadcast + vfmul.vv. At the cdims that actually occur here it
+# is NEUTRAL - FP32 cdim 64 (2v) 26.88 -> 26.84 B/cyc, cdim 96 (3v) 27.53 -> 27.49; FP64 cdim 32 (2v)
+# 21.22 -> 21.29, cdim 48 (3v) 21.03 -> 21.16 (runs 4, AI cores via --use-prologue k3_ai --cpu 9).
+# Only at 8 vectors did it gain (s 35.43 -> 37.71, d 29.00 -> 29.87), which a real dispatch never
+# reaches (cdim is mr or nr, so 1-4 vectors). Kept for one form with the gemm presets; the K1 keeps
+# bc_load, where the same change measured worse on the vec case.
 isa: rvv
 family: pk
 min-inflight: 16
@@ -12,7 +19,7 @@ cases:
 - kind: vec
   m: 1..8
   params:
-    pack-tileop: ['mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}']
+    pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){i=m, n=1}']
     store-tileop: ['Y.VEC:direct']
     X-layout: ['m:c', 'n:s']
     Y-layout: ['m:c', 'n:s']
@@ -21,7 +28,7 @@ cases:
 - kind: trans
   m: 1..16
   params:
-    pack-tileop: ['mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}']
+    pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){m=1, i=n}']
     store-tileop: ['Y.VEC:strided']
     X-layout: ['n:c', 'm:s']
     Y-layout: ['m:c', 'n:p']

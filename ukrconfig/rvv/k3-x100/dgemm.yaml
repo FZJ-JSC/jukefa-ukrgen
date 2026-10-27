@@ -1,0 +1,45 @@
+# FP64 gemm, rvv on the SpacemiT K3's X100 cores (0-7) - no prologue, VLEN 256, quad-issue but ONE
+# vector FMA a cycle: 32 cycles of FMA throughput a 32 vector FMAs, latency 5, 2 instructions a cycle,
+# vector loads nearly free. Tuned on jsc-k3-2 cores 2 and 6; every shape at the floor (cycles a k
+# step, FLOP/cycle; peak 8), measured through these configs:
+#   vn 14x2v 28.01  7.99  <- default      vm 2x14  28.01  7.99
+#   vn 8x3v  24.00  8.00                  vm 3x8   24.00  8.00
+# Same rules as the FP32 file: issue model 2:vl|vs,vf,sl,i, per-family loop order (vm kmn, vn knm),
+# and shape-dependent address register counts - vm {A: max(1, 2m-2), B: n/4} rotated, vn
+# {A: m/4, B: max(1, 2n-2)} with A blocked. nr 8 = 2*VL keeps the packm vec case dispatchable.
+isa: rvv
+blocksizes: {mr-in-mc: 16, nr-in-nc: 64, kc: 256}
+families:
+- family: vn
+  preset: gemm_fma_vf
+  vectorize: n
+  unroll: 2
+  m: [4, 6, 8, 12, 14]
+  n: 1..4
+  params:
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    sched-cycle-slots: "2:vl|vs,vf,sl,i"
+    order: knm
+    max-imm-offset: "min(me+e, 16e-1)"
+  schedule: ['RAW:data:freg:::8', 'RAW:data:vreg:::13', 'WAR:data::::8', 'RAW:address:greg:::12']
+  max-addr-regs: {A: "m/4", B: "max(1, 2n-2)"}
+  addr-pattern: {A: "blocked:mnk/R", B: rotate}
+  c-storage: [row, any]
+  default: 14x2
+- family: vm
+  preset: gemm_fma_vf
+  vectorize: m
+  unroll: 2
+  m: 1..4
+  n: [4, 6, 8, 12, 14]
+  params:
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    sched-cycle-slots: "2:vl|vs,vf,sl,i"
+    order: kmn
+    max-imm-offset: "min(ne+e, 16e-1)"
+  schedule: ['RAW:data:freg:::8', 'RAW:data:vreg:::13', 'WAR:data::::8', 'RAW:address:greg:::12']
+  max-addr-regs: {A: "max(1, 2m-2)", B: "n/4"}
+  c-storage: [col, any]
+  addr-pattern: {A: rotate, B: rotate}

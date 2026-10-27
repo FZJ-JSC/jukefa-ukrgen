@@ -1,0 +1,59 @@
+# FP32 gemm, rvv on the SpacemiT K3's X100 cores (0-7) - no prologue, VLEN 256, quad-issue
+# out of order but ONE vector FMA a cycle: 32 cycles of FMA throughput a 32 vector FMAs, latency 4,
+# 2 instructions a cycle with a scalar load or integer add alongside, vector loads nearly free.
+# Tuned on jsc-k3-2 cores 2 and 6. Every shape the tree builds now sits at the FMA floor
+# (cycles a k step, FLOP/cycle; peak 16), measured through these configs:
+#   vn 8x3v  23.96  16.00  <- default      vm 3x8   24.00  16.00
+#   vn 14x2v 27.99  16.01  <- default      vm 2x14  28.00  16.00
+# The vn layout wins HERE, unlike the K1 and the A100: with 1 FMA a cycle and 2 instructions a cycle,
+# a step is issue-limited when B comes in as scalars (vm 2x14 needs 28 FMA + 16 loads), so vectors on
+# both sides reach the FMA floor. nr 24 = 3*VL also keeps the packm vec case dispatchable.
+# Issue model 2:vl|vs,vf,sl,i - separate vl and vs slots, 2 instructions a cycle. The K1's model
+# (vl*2, sl/2, vf-sl) costs 0.5-1.0 cycles a k step; quad-issue models (3:/4: slots, or two vf
+# slots) do not help, the FMA pipe is one a cycle. unroll, buckets and imm are noise (<=2%).
+# The loop order is per FAMILY and cannot be shared: 3x8v needs kmn (24.00, 25.00 at knm) while
+# 8x3v needs knm (23.96, 24.50 at kmn). 2x14 and 14x2v are flat over either.
+# Address register COUNTS are expressions so one family covers both its shapes: a constant can only
+# sit at the floor for one of them (A2 gives 3x8v 24.99, A3 gives 2x14 28.47, A4 gives 2x14 28.50).
+#   vm: {A: max(1, 2m-2), B: n/4} - 4 A registers at m=3, 2 at m=2; B 2 at n=8, 4 at n=14, rotate.
+#   vn: {A: m/4, B: max(1, 2n-2)} - A 2 at m=8, 4 at m=14, blocked; B 4 at n=3, 2 at n=2.
+# The max(1, ...) clamps are not cosmetic: a count of 0 at the smallest shape silently DROPS those
+# kernels from the tree (2m-2 is 0 at m=1, 2n-2 at n=1) without failing the build.
+# max-imm-offset stays, though it is not doing the K1's job here: large immediates cost nothing on
+# this core (no limit and 127 tie), but at vn 8x3v the expression is worth 0.45 cycles against none.
+isa: rvv
+blocksizes: {mr-in-mc: 16, nr-in-nc: 72, kc: 256}
+families:
+- family: vn
+  preset: gemm_fma_vf
+  vectorize: n
+  unroll: 2
+  m: [4, 6, 8, 12, 14]
+  n: 1..4
+  params:
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    sched-cycle-slots: "2:vl|vs,vf,sl,i"
+    order: knm
+    max-imm-offset: "min(me+e, 16e-1)"
+  schedule: ['RAW:data:freg:::8', 'RAW:data:vreg:::13', 'WAR:data::::8', 'RAW:address:greg:::12']
+  max-addr-regs: {A: "m/4", B: "max(1, 2n-2)"}
+  addr-pattern: {A: "blocked:mnk/R", B: rotate}
+  c-storage: [row, any]
+  default: 8x3
+- family: vm
+  preset: gemm_fma_vf
+  vectorize: m
+  unroll: 2
+  m: 1..4
+  n: [4, 6, 8, 12, 14]
+  params:
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    sched-cycle-slots: "2:vl|vs,vf,sl,i"
+    order: kmn
+    max-imm-offset: "min(ne+e, 16e-1)"
+  schedule: ['RAW:data:freg:::8', 'RAW:data:vreg:::13', 'WAR:data::::8', 'RAW:address:greg:::12']
+  max-addr-regs: {A: "max(1, 2m-2)", B: "n/4"}
+  c-storage: [col, any]
+  addr-pattern: {A: rotate, B: rotate}

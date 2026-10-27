@@ -1,0 +1,41 @@
+# FP64 packm, rvv on the SpacemiT K3's X100 cores (0-7) - no prologue, VLEN 256, ONE vector op a cycle
+# with 2 instructions a cycle in total. Vectors along cdim - P's leading dimension a parameter, so a
+# vec kernel packs the vectors of any cdim up to 16 rows more (a split's 2*VL + 2), the reference the
+# rest, and along the panel (trans). Measured with BLIS mode, cdim 8 vectors (32 rows), panels inside
+# the 64 KB L1 - bytes a cycle at n=32/64/128:
+#   23.6 / 24.1 / 21.2   with 2:vl|vs,vf,sl,i and one address register a direction
+#   18.4 / 18.8 / 19.7   with {X:4,Y:2} - the K1's addressing costs ~20% here as well
+#   23.2-24.5 for every other issue model. Issue-bound like the FP32 file: 44 instructions a column at
+# ~2 a cycle with 20 of them address adds, floor 25.6 B/cycle against 24.05 measured.
+# No max-imm-offset: a packm's offsets stay within one vector
+# Addressing: same story as the FP32 file, measured at cdim 8 vectors (32 rows), n=64 - the
+# defaults (one register a direction, rotate) are best at 24.23 B/cyc (21.13 cycles a call), X4Y4
+# + rotate costs 22% (18.94), X2Y2 + rotate 3.4%, and every count with addr-pattern phase ties the
+# default to within 0.5%. NOTE a cdim of 16 vectors dispatches the REFERENCE here (the vec case
+# covers m 1..8 vectors), so a sweep at cdim=64 times the reference, not this kernel.
+# The kappa load is hoisted: one vlse64.v v1,(a3),zero before .ukr0_loop.
+# kappa is an FP SCALAR operand (`kappa.FP:use_scalar` with `mul[bdreg:VF]`) rather than a broadcast
+# vector, for one form across this tree; FP64 measures neutral (vec 24.15 -> 24.29 B/cyc at cdim 8
+# vectors, trans 6.67 -> 6.66 on jsc-k3-2) while the FP32 file gains 2-6% from it.
+isa: rvv
+family: pk
+min-inflight: 16
+cases:
+- kind: vec
+  m: 1..8
+  params:
+    pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){i=m, n=1}']
+    store-tileop: ['Y.VEC:direct']
+    X-layout: ['m:c', 'n:s']
+    Y-layout: ['m:c', 'n:s']
+    sched-cycle-slots: "2:vl|vs,vf,sl,i"
+  schedule: ['RAW:data::::13', 'WAW:data::::13', 'WAR:data::::13', 'RAW:address:greg:::3']
+- kind: trans
+  m: 1..16
+  params:
+    pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){m=1, i=n}']
+    store-tileop: ['Y.VEC:strided']
+    X-layout: ['n:c', 'm:s']
+    Y-layout: ['m:c', 'n:p']
+    sched-cycle-slots: "2:vl|vs,vf,sl,i"
+  schedule: ['RAW:data::::13', 'WAW:data::::13', 'WAR:data::::13', 'RAW:address:greg:::3']
