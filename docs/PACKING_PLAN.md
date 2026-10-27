@@ -156,7 +156,10 @@ them (`--blis`). Then (ukrgen 0200): `vec-rest` - the rows a vec case packs beyo
 and passes toggled without restating the defaults (`pre-specialize-irmods: [+structfuse,
 -cluster]`); RVV's LMUL by size (ukrgen 0201: `lmul: 2` - m2 where it divides a vec case's vectors,
 m1 for the odd counts - or a map). Possible: copy cases for kappa 1 (the dispatch trying them where
-`*kappa == 1`; today every case multiplies). Still to come: `struct-split`, `masks`.
+`*kappa == 1`; today every case multiplies). Splits (ukrgen 0202): `structfuse`'s `fields` - the most rows one structure store takes, a
+step's rows beyond it parted greedily (12 = 8 + 4; `fields` 3: 5 = 3 + 2), each part a strided
+segment store (asmgen 0090, A7: RVV's vlsseg, vssseg) - sweepable as `structfuse-fields`; SVE,
+with no strided structures, keeps its rows beyond 4. Still to come: `masks`.
 
 - **Splits**: per cdim, how its rows are parted among structure stores -
   `struct-split: {7: [4, 3], 5: [2, 3]}`; by default as many of the widest

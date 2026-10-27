@@ -256,6 +256,21 @@ int main( void )
             with self.subTest(m=m):
                 self.packm_trans(m=m, isas=isas)
 
+    def test_packm_trans_structfuse_parts(self):
+        # rows beyond a structure store's most parted, each part's rows
+        # interleaved into the columns a stride apart: RVV's 12 rows in 8 and
+        # 4, 5 rows in 3 and 2 (fields 3), 8 rows one plain segment store
+        cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
+        isas = {"rvv": ("Y.VEC:strided", cc,
+                        [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"] for v in (128, 256)],
+                        bool(shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")))}
+        for m, extra, expect in ((12, {}, ("vssseg8e64.v", "vssseg4e64.v")),
+                                 (5, {"structfuse-fields": "3"}, ("vssseg3e64.v", "vssseg2e64.v")),
+                                 (8, {}, ("vsseg8e64.v",))):
+            for inst in expect:
+                with self.subTest(m=m, inst=inst):
+                    self.packm_trans(irmods=["+structfuse"], expect={"rvv": inst}, m=m, isas=isas, extra=extra)
+
     def test_packm_trans_shufflenet(self):
         # a block of rows - as many as a vector's lanes - transposed in
         # registers, its columns stored contiguously (the shuffle stores,
@@ -318,7 +333,7 @@ int main( void )
                             self.packm_trans(expect={isa: inst}, m=m, fam=fam, dt=dt,
                                              isas={isa: (None, cc, runners, available)})
 
-    def packm_trans(self, irmods=None, expect=None, m=3, isas=None, fam=None, dt="FP64"):
+    def packm_trans(self, irmods=None, expect=None, m=3, isas=None, fam=None, dt="FP64", extra=None):
         """
         A trans family of m rows built and run through BLIS's dispatch
         against the reference - per ISA its store, compiler, runners (an
@@ -346,6 +361,7 @@ int main( void )
                      "store-tileop": [store], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"]}
             if irmods is not None:
                 trans["pre-specialize-irmods"] = irmods
+            trans.update(extra or {})
             if m > 4:
                 # Y a register a row; X streams the rows into the multiply
                 trans.update({"X-data-regs": "4", "Y-data-regs": str(m)})

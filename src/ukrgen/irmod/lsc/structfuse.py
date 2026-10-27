@@ -9,7 +9,7 @@ from asmgen.asmblocks.op import register_type as rgt, opmem_modifier as memmod
 
 from ...lsc_model.addressing import sym
 from ...models.load_store_operations import lsc_store, lsc_addr_compute
-from .base import lsc_irmod, irmod_placement, blocks_and_sections
+from .base import lsc_irmod, irmod_param, irmod_placement, blocks_and_sections
 from .widen import struct_sigs
 
 
@@ -111,6 +111,11 @@ class structfuse(lsc_irmod):
     apart, as the trans dispatch calls a case: cdim rows, P's leading
     dimension cdim.
     """
+    params = [irmod_param(name="fields", default=0, parse=int,
+                          description="the most rows one structure store takes (0: the ISA's most); a "
+                                      "step's rows beyond it parted - as many of them as fit, then the "
+                                      "rest - each part a strided structure store (RVV's vssseg) where "
+                                      "the ISA has them")]
     name = "structfuse"
     description = "a trans case's row stores fused into one interleaving (structure) store"
     placement = irmod_placement.PRE_SPECIALIZE
@@ -131,17 +136,35 @@ class structfuse(lsc_irmod):
             ops = list(getattr(block, section) or [])
             fused_at, dropped = {}, set()
             for members, n, comp in runs(program, ops):
-                sigs = struct_sigs(gen, "store", self.ctx.component_dts[comp], n)
-                known = program.groups.get(comp)
-                if not sigs or (known is not None and known[0] != n):
+                dt = self.ctx.component_dts[comp]
+                most = max((s.structural_params["nstructs"] for s in gen.store.get_signatures()
+                            if "STRUCT" in {m.name for m in s.modifiers}
+                            and "GSTRIDE" not in {m.name for m in s.modifiers}
+                            and dt == s.operands["adreg"].dt), default=0)
+                cap = min(most, self.values["fields"]) if self.values["fields"] else most
+                if cap < 2:
                     continue
-                fused = copy.deepcopy(ops[members[0]])
-                fused.properties.pop("stride_index", None)
-                fused.add_property("group", n)
-                fused.sigs = sigs
-                program.groups[comp] = (n, "STRUCT")
-                fused_at[members[0]] = fused
-                dropped.update(members[1:])
+                # one structure, or parts of cap rows and the rest - each part's
+                # rows interleaved into the columns, a stride apart (strided)
+                parts = [n] if n <= cap else [cap] * (n // cap) + ([n % cap] if n % cap else [])
+                strided = len(parts) > 1
+                sigs = {s: struct_sigs(gen, "store", dt, s, strided) for s in set(parts) if s > 1}
+                ways = max(parts)
+                known = program.groups.get(comp)
+                if not sigs or not all(sigs.values()) or (known is not None and known[0] != ways):
+                    continue
+                program.groups[comp] = (ways, "STRUCT")
+                row = 0
+                for s in parts:
+                    if s > 1:
+                        fused = copy.deepcopy(ops[members[row]])
+                        if not strided:
+                            fused.properties.pop("stride_index", None)
+                        fused.add_property("group", s)
+                        fused.sigs = sigs[s]
+                        fused_at[members[row]] = fused
+                        dropped.update(members[row + 1:row + s])
+                    row += s
             if fused_at:
                 setattr(block, section, [fused_at.get(k, op) for k, op in enumerate(ops) if k not in dropped])
                 changed += len(fused_at)

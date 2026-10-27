@@ -33,13 +33,16 @@ def _narrow(sig) -> int:
                if rgt.VEC == o.rtype and o.dt is not None)
 
 
-def struct_sigs(gen, op: str, dt, ways: int) -> list:
+def struct_sigs(gen, op: str, dt, ways: int, strided: bool = False) -> list:
     """
     A load's or store's signatures moving ways registers interleaved: element
-    e of register p at memory element ways * e + p (ld2/st2 and the like)
+    e of register p at memory element ways * e + p (ld2/st2 and the like) -
+    or, strided, element e's structure a stride from element e-1's (RVV's
+    vlsseg, vssseg)
     """
     return [s for s in getattr(gen, op).get_signatures()
             if "STRUCT" in {m.name for m in s.modifiers}
+            and strided == ("GSTRIDE" in {m.name for m in s.modifiers})
             and ways == s.structural_params.get("nstructs")
             and dt == s.operands["adreg"].dt]
 
