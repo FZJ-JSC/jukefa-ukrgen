@@ -16,6 +16,7 @@ from dataclasses import dataclass,field
 
 from abc import abstractmethod, ABC
 
+from asmgen.asmblocks.op.opmove import opmove_modifier as mvmod
 from asmgen.asmblocks.op import (
     opmem_modifier as memmod,
     operand_modifier as omod,
@@ -440,6 +441,9 @@ def get_dm_sig_io_operands(opname : str,
     if opname == "move":
         if len(dregs) == 2:
             return ([dregs[0]],[dregs[1]])
+        if mvmod.PERMUTE in sig.modifiers:
+            # two sources permuted into a third
+            return (dregs[:2], dregs[2:])
 
         input_count = sig.structural_params['nin']
         return (dregs[:input_count],dregs[input_count:])
@@ -510,6 +514,12 @@ def filter_by_step_requirements(
     struct = memmod.STRUCT
     if struct not in (step.op_mod_reqs or set()):
         sigs = filter_by_forbidden_op_mods(sigs, {struct})
+        if not sigs:
+            return []
+    # permutes of two registers into a third (asmgen's opmove PERMUTE) move
+    # data a transpose network's way: a step takes them only when asking
+    if mvmod.PERMUTE not in (step.op_mod_reqs or set()):
+        sigs = filter_by_forbidden_op_mods(sigs, {mvmod.PERMUTE})
         if not sigs:
             return []
 
