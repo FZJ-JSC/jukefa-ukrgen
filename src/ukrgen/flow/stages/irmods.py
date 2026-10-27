@@ -37,10 +37,12 @@ class irmod_stage_base(stage):
         optional = [m for m in self.available if not m.required]
         if optional:
             default = [m.name for m in optional if m.default_enabled]
+            names = [m.name for m in optional]
             self.params[self.option] = stage_param(
                     value=default, default=default, multi=True, required=False,
-                    choices=[m.name for m in optional],
-                    description="IR modifications to run, in order: " +
+                    choices=names + [f"+{n}" for n in names] + [f"-{n}" for n in names],
+                    description="IR modifications to run, in order - or changes to the defaults, "
+                                "+name and -name only (+structfuse -cluster), in their usual order: " +
                                 "; ".join(f"{m.name}: {m.description}" for m in optional))
         for m in self.available:
             for p in m.params:
@@ -58,6 +60,27 @@ class irmod_stage_base(stage):
         changed = sum(mod.apply(program) for program in self.context.programs)
         self.log.debug(f"{cls.name}: changed {changed} site(s)")
 
+    def chosen(self) -> list[str]:
+        """
+        The modifications chosen: as named, in that order - or, given only
+        changes (+name, -name), the defaults with those added and removed, in
+        the modifications' usual order (a sweep toggling one)
+        """
+        given = list((self.params[self.option].value if self.option in self.params else None) or [])
+        changes = [g for g in given if g[:1] in "+-"]
+        if not changes:
+            return given
+        if len(changes) != len(given):
+            raise stage_error(f"--{self.option}: names, or changes to the defaults (+name, -name), "
+                              f"not both: {given}")
+        added = {g[1:] for g in changes if "+" == g[0]}
+        removed = {g[1:] for g in changes if "-" == g[0]}
+        defaults = set(self.params[self.option].default or [])
+        order = [m.name for m in lsc_irmods.irmods_at(self.placement)]
+        unknown = sorted((added | removed) - set(order))
+        # an unknown one said as a named one would be: kept to be refused
+        return [n for n in order if (n in defaults or n in added) and n not in removed] + unknown
+
     def progress(self):
         for cls in self.required:
             if not cls.triggered(self.context):
@@ -68,8 +91,8 @@ class irmod_stage_base(stage):
                                   f"lacks: {', '.join(unmet)}")
             self.run(cls)
         by_name = {m.name: m for m in self.available}
-        chosen = self.params[self.option].value if self.option in self.params else []
-        for name in chosen or []:
+        chosen = self.chosen()
+        for name in chosen:
             if name not in by_name:
                 # one this kernel's ISA doesn't meet the requirements of, or
                 # none of that name: said, not looked up

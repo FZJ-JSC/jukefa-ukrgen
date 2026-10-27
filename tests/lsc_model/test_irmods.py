@@ -182,3 +182,35 @@ class test_irmod_choice(unittest.TestCase):
         self.assertIn("no IR modification nosuch", said)
         self.assertIn("shufflenet", said)
 
+
+class test_irmod_changes(unittest.TestCase):
+    """
+    +name and -name: the defaults changed - one toggled in a sweep, the
+    others still run - in the modifications' usual order
+    """
+    def pack(self, isa, irmods, m="3", store="Y.VEC:scatter"):
+        import tests.specializers.test_pack as tp
+        params = dict(tp.PARAMS)
+        params.update({"X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"], "m": m, "n": "1",
+                       "pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"],
+                       "store-tileop": [store], "pre-specialize-irmods": irmods})
+        saved, tp.PARAMS = tp.PARAMS, params
+        try:
+            return tp.pack(isa)
+        finally:
+            tp.PARAMS = saved
+
+    def test_added_and_removed(self):
+        ctx, res = self.pack("sve", ["+structfuse", "-cluster"])
+        self.assertTrue(res.completed, res.output)
+        self.assertTrue(any(line.startswith("st3d") for line in ctx.emitted[0].code))
+
+    def test_names_or_changes(self):
+        from ukrgen.flow.stages.stage import stage_error
+        with self.assertRaises(stage_error) as caught:
+            self.pack("sve", ["structfuse", "+hoist"])
+        self.assertIn("not both", str(caught.exception))
+        with self.assertRaises(stage_error) as caught:
+            self.pack("sve", ["+nosuch"])
+        self.assertIn("no IR modification nosuch", str(caught.exception))
+

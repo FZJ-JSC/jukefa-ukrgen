@@ -152,7 +152,9 @@ structures cdim apart:
 Done in part (ukrgen 0197): `dispatch: [trans_shuffle, gather, vec]` - the
 cases the dispatch tries, in order, by name, the others not built - and a
 case's `name` (two strategies of a kind side by side); ukropt's grid sweeps
-them (`--blis`). Still to come: `struct-split`, `masks`.
+them (`--blis`). Then (ukrgen 0200): `vec-rest` - the rows a vec case packs beyond its own -
+and passes toggled without restating the defaults (`pre-specialize-irmods: [+structfuse,
+-cluster]`). Still to come: `struct-split`, `masks`.
 
 - **Splits**: per cdim, how its rows are parted among structure stores -
   `struct-split: {7: [4, 3], 5: [2, 3]}`; by default as many of the widest

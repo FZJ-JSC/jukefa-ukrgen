@@ -271,6 +271,17 @@ class test_packm_dispatch_choices(unittest.TestCase):
             family.from_yaml("packm", {"family": "pk", "dtypes": ["FP64"], "cases": [
                 {"kind": "vec", "name": "x", "m": [1]}, {"kind": "trans", "name": "x", "m": [4]}]})
 
+    def test_vec_rest(self):
+        # the rows a vec case packs beyond its own: the family's
+        from ukrgen.injectors.blis.families import build_packm
+        from ukrgen.injectors.blis.cgen import packm_dispatch
+        self.assertEqual(4, self.family(**{"vec-rest": 4}).vec_rest)
+        with self.assertRaises(ValueError):
+            self.family(**{"vec-rest": -1})
+        built, _ = build_packm("avx512", "ukrgen_avx512", self.family(dispatch=["gather"]))
+        self.assertIn("cdim - done <= 4 )", packm_dispatch("ukrgen_avx512", "FP64", built, rest=4))
+        self.assertIn("cdim - done <= 16 )", packm_dispatch("ukrgen_avx512", "FP64", built))
+
     def test_order_and_what_is_built(self):
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import packm_dispatch
