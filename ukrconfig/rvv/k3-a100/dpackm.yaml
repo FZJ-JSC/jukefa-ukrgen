@@ -12,6 +12,11 @@
 # Only at 8 vectors did it gain (s 35.43 -> 37.71, d 29.00 -> 29.87), which a real dispatch never
 # reaches (cdim is mr or nr, so 1-4 vectors). Kept for one form with the gemm presets; the K1 keeps
 # bc_load, where the same change measured worse on the vec case.
+# trans: structfuse at fields 2, X-data-regs 8 - 34.6 cycles a column at n=80 (5.55 B/cyc) against
+# 40.4 (4.75) unfused.
+# tblock as in the FP32 file: cdim 32 85.06 / 6.02 (reference 160.51 / 3.19), cdim 48 128.98 / 5.95
+# (reference 254.05 / 3.02) at n=96 - about 1.9x. Structfuse's ldp-stride segment stores are what
+# it emits (vssseg<n> with P's rows ldp apart).
 isa: rvv
 family: pk
 min-inflight: 16
@@ -28,9 +33,23 @@ cases:
 - kind: trans
   m: 1..16
   params:
+    pre-specialize-irmods: ['+structfuse']
+    structfuse-fields: 2
+    X-data-regs: 8
     pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){m=1, i=n}']
     store-tileop: ['Y.VEC:strided']
     X-layout: ['n:c', 'm:s']
     Y-layout: ['m:c', 'n:p']
     sched-cycle-slots: "2:vl*2|vs|vf,sl/2,addr|i"
   schedule: ['RAW:data::::13', 'WAW:data::::13', 'WAR:data::::13', 'RAW:address:greg:::3']
+
+- kind: trans
+  name: tblock
+  m: [16, 8, 4, 2, 1]
+  params:
+    pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){m=1, i=n}']
+    store-tileop: ['Y.VEC:strided']
+    X-layout: ['n:c', 'm:s']
+    Y-layout: ['m:c', 'n:s']
+    X-data-regs: '4'
+    pre-specialize-irmods: ['+structfuse']

@@ -22,6 +22,22 @@
 # A/B, which is why no max-addr-regs/addr-pattern key is set here. The trans case is flat across
 # all of them (2.13-2.15). k1 keeps the bc_load kappa form: the FP-scalar form is 6% slower here
 # on the vec case (10.85 against 11.57 in the same 15-combination grid).
+# trans: structfuse at fields 4, X-data-regs 4 (fields sweep at n=80, cycles a column: cdim 8
+# f4 9.28 vs f2 11.99, 12 13.07 vs 17.32, 16 16.48 vs 20.68, 24 23.61 vs 30.38 - 4-row parts win
+# everywhere on FP32; the FP64 file keeps 2, which wins at 8/12/16)
+# cdim 14 is the exception: 2-row parts beat the auto 4+4+4+2 there (18.91 against 19.80 cycles a
+# column), so it gets its own split; 7+7 and 8+6 are far worse (23.4-23.5). On x100 the auto 4-parts
+# are the best at 14 (10.07 against 11.67 for 2-row parts), so only the K1 needs this line. - 23.26 cycles a column at n=80, cdim 12, inca 127
+# (fields 4: 23.43) against 29.59 without fusion, i.e. -21% cycles and +27% bytes a cycle.
+# trans covers 32 rows, not 16: the 3v FP32 panel is 24 rows and a 16-row case left it to the
+# reference entirely (57.5 cyc a column on x100, 87.8 on k1, both ~2-3 B/cyc). With the range raised
+# and structfuse on, cdim 24 measures 13.92 (x100) and 30.52 (k1) cycles a column at n=80.
+# kappa is an FP scalar operand (`kappa.FP:use_scalar`, `mul[bdreg:VF]`) in every packm config now: one
+# flw + vfmul.vf instead of a vlse broadcast + vfmul.vv, freeing a vector register (which is what
+# structfuse's Y groups need). On the K1 this is neutral to slightly better at the dispatched cdims
+# (n=80): vec cdim 8 10.76 -> 10.66, 16 16.73 -> 16.45, 24 22.48 -> 21.99 cycles a column; trans
+# 8/14/16 12.09/18.97/20.74 -> 11.98/18.95/20.70. The earlier "K1 prefers bc_load" came from one
+# 8-vector grid run on the pre-structfuse config and does not hold here.
 isa: rvv
 family: pk
 min-inflight: 16
@@ -29,16 +45,20 @@ cases:
 - kind: vec
   m: 1..8
   params:
-    pack-tileop: ['mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}']
+    pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){i=m, n=1}']
     store-tileop: ['Y.VEC:direct']
     X-layout: ['m:c', 'n:s']
     Y-layout: ['m:c', 'n:s']
     sched-cycle-slots: "2:vl|vs|vf,sl,i;vf-sl"
   schedule: ['RAW:data::::13', 'WAW:data::::13', 'WAR:data::::13', 'RAW:address:greg:::3']
 - kind: trans
-  m: 1..16
+  m: 1..32
   params:
-    pack-tileop: ['mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}']
+    pre-specialize-irmods: ['+structfuse']
+    structfuse-fields: 4
+    structfuse-split: "14=2+2+2+2+2+2+2"
+    X-data-regs: 4
+    pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){m=1, i=n}']
     store-tileop: ['Y.VEC:strided']
     X-layout: ['n:c', 'm:s']
     Y-layout: ['m:c', 'n:p']

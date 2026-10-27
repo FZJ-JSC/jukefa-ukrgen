@@ -27,6 +27,16 @@
 #   vec  24.23 -> 25.22 and 24.54 -> 25.10 (+2 to +4%),  trans 5.94 -> 6.28 (+5.7% both hosts)
 #   FP64 is neutral (24.15 -> 24.29, 6.67 -> 6.66), adopted for one form across the tree.
 # The K1 sees no gain (10.75 -> 10.83 vec, 1.51 -> 1.45 d trans) and keeps bc_load.
+# trans: the row stores fused into RVV's strided segment stores (structfuse). Measured at cdim 12,
+# inca 127 (cycles a column at n=80, bytes a cycle):
+#   fields 4, X-data-regs 4   6.7 / 14.30   <- 2.1x over no fusion
+#   fields 4, X-data-regs 8   7.3 / 13.16     fields 2 is worse here (9.3 / 10.35)
+#   no structfuse            14.2 /  6.77
+# X-data-regs is what makes it possible: the Y structure store needs consecutive vector registers,
+# so holding every X tile (X-data-regs 16) leaves none and the case is not built at all.
+# trans covers 32 rows, not 16: the 3v FP32 panel is 24 rows and a 16-row case left it to the
+# reference entirely (57.5 cyc a column on x100, 87.8 on k1, both ~2-3 B/cyc). With the range raised
+# and structfuse on, cdim 24 measures 13.92 (x100) and 30.52 (k1) cycles a column at n=80.
 isa: rvv
 family: pk
 min-inflight: 16
@@ -41,8 +51,11 @@ cases:
     sched-cycle-slots: "2:vl|vs,vf,sl,i"
   schedule: ['RAW:data::::13', 'WAW:data::::13', 'WAR:data::::13', 'RAW:address:greg:::3']
 - kind: trans
-  m: 1..16
+  m: 1..32
   params:
+    pre-specialize-irmods: ['+structfuse']
+    structfuse-fields: 4
+    X-data-regs: 4
     pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){m=1, i=n}']
     store-tileop: ['Y.VEC:strided']
     X-layout: ['n:c', 'm:s']

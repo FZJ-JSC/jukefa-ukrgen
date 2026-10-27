@@ -12,6 +12,15 @@
 # Only at 8 vectors did it gain (s 35.43 -> 37.71, d 29.00 -> 29.87), which a real dispatch never
 # reaches (cdim is mr or nr, so 1-4 vectors). Kept for one form with the gemm presets; the K1 keeps
 # bc_load, where the same change measured worse on the vec case.
+# trans: structfuse at fields 4, X-data-regs 8 - 29.2 cycles a column at n=80 (3.29 B/cyc) against
+# 32.9 (2.92) unfused. The a100 trans case still leaves rows to the reference (trans12 + reference
+# at cdim 12), so the win is smaller than the x100's 2.1x.
+# tblock: a block case (Y-layout [m:c, n:s], P's leading dimension) for the panels past one trans
+# kernel's 16 rows. Measured on the AI cores via --use-prologue k3_ai, cdim in rows, n=96 (whole
+# vector chunks), cycles a column and bytes a cycle against the reference:
+#   cdim 64  140.98 / 3.63  (ref 250.66 / 2.04)      cdim 96  210.64 / 3.65  (ref 408.50 / 1.88)
+# Dispatch stays trans-first: at cdim 16 the exact panel is 30% better than the block path
+# (trans16 29.95 / 4.27 against tblock16 38.96 / 3.29); from 24 rows up only tblock can build.
 isa: rvv
 family: pk
 min-inflight: 16
@@ -29,6 +38,9 @@ cases:
 - kind: trans
   m: 1..16
   params:
+    pre-specialize-irmods: ['+structfuse']
+    structfuse-fields: 4
+    X-data-regs: 8
     pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){m=1, i=n}']
     store-tileop: ['Y.VEC:strided']
     X-layout: ['n:c', 'm:s']
@@ -36,3 +48,14 @@ cases:
     sched-cycle-slots: "2:vl|vs|vf,sl,i;vf-sl"
   schedule: ['RAW:data::::13', 'WAW:data::::13', 'WAR:data::::13', 'RAW:address:greg:::3']
   buckets: "vf:5"
+
+- kind: trans
+  name: tblock
+  m: [16, 8, 4, 2, 1]
+  params:
+    pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){m=1, i=n}']
+    store-tileop: ['Y.VEC:strided']
+    X-layout: ['n:c', 'm:s']
+    Y-layout: ['m:c', 'n:s']
+    X-data-regs: '4'
+    pre-specialize-irmods: ['+structfuse']
