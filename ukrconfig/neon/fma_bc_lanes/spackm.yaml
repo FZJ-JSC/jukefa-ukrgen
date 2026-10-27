@@ -1,5 +1,6 @@
 # FP32 packm, neon: vectors along cdim - P's leading dimension a parameter, so a vec kernel packs the
-# vectors of any cdim up to 16 rows more (a split's 2*VL + 2), the reference the rest
+# vectors of any cdim up to 16 rows more (a split's 2*VL + 2), the reference the rest, and along the panel (trans: 4 rows a block transposed in
+# registers, trn1/trn2)
 isa: neon
 family: pk
 min-inflight: 8
@@ -11,3 +12,12 @@ cases:
     store-tileop: ['Y.VEC:direct']
     X-layout: ['m:c', 'n:s']
     Y-layout: ['m:c', 'n:s']
+- kind: trans
+  m: [4, 8, 12, 16]
+  params:
+    pack-tileop: ['mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}']
+    store-tileop: ['Y.VEC:shuffle']
+    X-layout: ['n:c', 'm:s']
+    Y-layout: ['m:c', 'n:p']
+    X-data-regs: '4'
+    Y-data-regs: '16'

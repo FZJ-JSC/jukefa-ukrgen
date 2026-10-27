@@ -33,6 +33,5 @@ cases:
     store-tileop: ['Y.VEC:shuffle']
     X-layout: ['n:c', 'm:s']
     Y-layout: ['m:c', 'n:p']
-    pre-specialize-irmods: [shufflenet, hoist, cluster]
     X-data-regs: '4'
     Y-data-regs: '16'

@@ -105,7 +105,7 @@ lack, in what order to build it, and how SME + SVE kernels' panels
     rewriting a step's row stores (in place, one spare register), the
     `shuffle` store resolution for ISAs without scatters (named only, refused
     without the irmod) - AVX-512 8 and 16 rows, AVX2 4 and 8, NEON 2 and 4
-    against the reference; the configs' cases (ukrgen 0194): dpackm's AVX2 4 and 8 rows, NEON 2-16 in pairs, AVX-512 8 and 16 (its scatters for the others); spackm's after an FP32 run. N = the
+    against the reference; the configs' cases (ukrgen 0194): dpackm's AVX2 4 and 8 rows, NEON 2-16 in pairs, AVX-512 8 and 16 (its scatters for the others); spackm's (ukrgen 0195): AVX2 8 rows, NEON 4-16, AVX-512 16; shufflenet runs wherever a shuffle store is - no irmods listed. N = the
     lanes' count (or blocks of it: AMD's 24 = 3 x 8 doubles), log2(lanes)
     rounds of permutes (A4) by a recipe per ISA (x86: in-lane unpacks, then
     block selects; NEON: `trn` per element, then per 64 bits), then N

@@ -11,7 +11,7 @@ from asmgen.asmblocks.op.opmove import opmove_modifier as mvmod
 from asmgen.registers import adt_size
 
 from ...lsc_model.addressing import sym
-from ...models.load_store_operations import lsc_permute
+from ...models.load_store_operations import lsc_permute, lsc_store
 from ...models.lsc.index import lsc_reg_index
 from ...support.transpose import transpose_network
 from .base import lsc_irmod, irmod_placement, blocks_and_sections
@@ -54,10 +54,16 @@ class shufflenet(lsc_irmod):
     name = "shufflenet"
     description = "a trans case's row stores as an in-register transpose, stored contiguously"
     placement = irmod_placement.PRE_SPECIALIZE
-    default_enabled = False
+    # what the shuffle store resolution stands for: run wherever it's chosen
+    required = True
     constraints = ("a vector of fixed length; a step's rows stored strided along the panel, "
                    "consecutive registers, as many as the vector's lanes or a multiple; "
                    "one data register more than the rows")
+
+    @classmethod
+    def triggered(cls, ctx) -> bool:
+        return any("shuffle" == op.rsln for p in ctx.programs for block, section in blocks_and_sections(p)
+                   for op in getattr(block, section) or [] if isinstance(op, lsc_store))
 
     @classmethod
     def unmet_requirements(cls, ctx) -> list[str]:

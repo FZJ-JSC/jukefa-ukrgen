@@ -221,36 +221,43 @@ int main( void )
 
     def test_packm_trans_shufflenet(self):
         # a block of rows - as many as a vector's lanes - transposed in
-        # registers, its columns stored contiguously: AVX-512's doubles in 3
-        # rounds (AMD's zen4 network, replacing scatters), AVX2's in 2 and
-        # NEON's in 1 (where there were no trans cases: no scatters, no
-        # strided stores) - the same panels as the reference's
+        # registers, its columns stored contiguously (the shuffle stores,
+        # shufflenet running for them): AVX-512's doubles in 3 rounds (AMD's
+        # zen4 network), AVX2's in 2 and NEON's in 1; singles in 4, 3 and 2 -
+        # the same panels as the reference's
         from tests.specializers.test_native import cpu_has
         neon_cc = ["aarch64-linux-gnu-gcc", "-static"]
-        runs = (("avx512", "Y.VEC:scatter", ["gcc", "-mavx512f"], [[]], cpu_has("avx512f"), (8, 16), "vshuff64x2"),
-                ("avx256", "Y.VEC:shuffle", ["gcc", "-mavx2", "-mfma"], [[]], cpu_has("avx2"), (4, 8), "vperm2f128"),
-                ("neon", "Y.VEC:shuffle", neon_cc, [[QEMU, "-cpu", "max"]],
-                 bool(shutil.which(neon_cc[0]) and shutil.which(QEMU)), (2, 4), "trn1"))
-        for isa, store, cc, runners, available, rows, inst in runs:
-            for m in rows:
-                with self.subTest(isa=isa, m=m):
-                    self.packm_trans(irmods=["shufflenet", "hoist", "cluster"], expect={isa: inst}, m=m,
-                                     isas={isa: (store, cc, runners, available)})
+        neon = bool(shutil.which(neon_cc[0]) and shutil.which(QEMU))
+        runs = (("avx512", ["gcc", "-mavx512f"], [[]], cpu_has("avx512f"), {"FP64": (8, 16), "FP32": (16,)},
+                 "vshuff64x2"),
+                ("avx256", ["gcc", "-mavx2", "-mfma"], [[]], cpu_has("avx2"), {"FP64": (4, 8), "FP32": (8,)},
+                 "vperm2f128"),
+                ("neon", neon_cc, [[QEMU, "-cpu", "max"]], neon, {"FP64": (2, 4), "FP32": (4, 8)}, "trn1"))
+        for isa, cc, runners, available, rows, inst in runs:
+            for dt, ms in rows.items():
+                for m in ms:
+                    with self.subTest(isa=isa, dt=dt, m=m):
+                        self.packm_trans(expect={isa: inst}, m=m, dt=dt,
+                                         isas={isa: ("Y.VEC:shuffle", cc, runners, available)})
 
-    def test_shuffle_needs_shufflenet(self):
-        # a shuffle store alone would store its row contiguously: refused
+    def test_shuffle_refused(self):
+        # rows not a multiple of the lanes (3 on AVX2's 4 doubles), or a
+        # vector whose length isn't known (SVE): no transpose - refused
         from ukrgen.injectors.blis.families import build_packm
         trans = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"],
                  "store-tileop": ["Y.VEC:shuffle"], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"]}
-        fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "unroll": 2,
-                                         "cases": [{"kind": "trans", "m": [4], "params": trans}]})
-        built, skipped = build_packm("avx256", "ukrgen_avx256", fam)
-        self.assertEqual([], built)
-        self.assertIn("shufflenet", str(skipped[0][2]))
+        for isa, m, said in (("avx256", 3, "as many rows as a vector has lanes"),
+                             ("sve", 4, "the vector's length isn't known")):
+            with self.subTest(isa=isa):
+                fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "unroll": 2,
+                                                 "cases": [{"kind": "trans", "m": [m], "params": trans}]})
+                built, skipped = build_packm(isa, f"ukrgen_{isa}", fam)
+                self.assertEqual([], built)
+                self.assertIn(said, str(skipped[0][2]))
 
     def test_packm_trans_configs(self):
-        # the configs' shuffle cases - their own params (unroll, registers,
-        # irmods) - through BLIS's dispatch against the reference
+        # the configs' shuffle cases, doubles and singles - their own params
+        # (unroll, registers) - through BLIS's dispatch against the reference
         import copy
         from tests.specializers.test_native import cpu_has
         from ukrgen.injectors.blis.families import configuration
@@ -261,19 +268,20 @@ int main( void )
                    ("avx512/fma_bc_blocks", "avx512", ["gcc", "-mavx512f"], [[]], cpu_has("avx512f"), "vshuff64x2"))
         root = os.path.join(HERE, "..", "..", "ukrconfig")
         for path, isa, cc, runners, available, inst in configs:
-            cfg = configuration.from_files({("packm", "FP64"): os.path.join(root, path, "dpackm.yaml")})
-            base = next(f for f in cfg.families)
-            for kind, ms, params in base.cases:
-                if "Y.VEC:shuffle" not in (params.get("store-tileop") or []):
-                    continue
-                for m in ms:
-                    with self.subTest(config=path, m=m):
-                        fam = copy.deepcopy(base)
-                        fam.cases = [(kind, [m], params)]
-                        self.packm_trans(expect={isa: inst}, m=m, fam=fam,
-                                         isas={isa: (None, cc, runners, available)})
+            for name, dt in (("dpackm.yaml", "FP64"), ("spackm.yaml", "FP32")):
+                cfg = configuration.from_files({("packm", dt): os.path.join(root, path, name)})
+                base = next(f for f in cfg.families)
+                for kind, ms, params in base.cases:
+                    if "Y.VEC:shuffle" not in (params.get("store-tileop") or []):
+                        continue
+                    for m in ms:
+                        with self.subTest(config=path, dt=dt, m=m):
+                            fam = copy.deepcopy(base)
+                            fam.cases = [(kind, [m], params)]
+                            self.packm_trans(expect={isa: inst}, m=m, fam=fam, dt=dt,
+                                             isas={isa: (None, cc, runners, available)})
 
-    def packm_trans(self, irmods=None, expect=None, m=3, isas=None, fam=None):
+    def packm_trans(self, irmods=None, expect=None, m=3, isas=None, fam=None, dt="FP64"):
         """
         A trans family of m rows built and run through BLIS's dispatch
         against the reference - per ISA its store, compiler, runners (an
@@ -281,6 +289,7 @@ int main( void )
         """
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
+        ctype, ch = {"FP64": ("double", "d"), "FP32": ("float", "s")}[dt]
         cases = (f"{{ {m}, {m}, 2 * vl + 3, 2 * vl + 9, 1, 1 }}, {{ {m}, {m}, 4 * vl, 4 * vl + 1, 1, 0 }}, "
                  f"{{ {m}, {m}, 3 * vl + 1, 3 * vl + 2, 1, 1 }}, {{ {m}, {m}, vl - 1, vl + 2, 1, 1 }}, "
                  f"{{ {m}, {m + 1}, 2 * vl, 2 * vl + 9, 1, 1 }}")
@@ -304,18 +313,18 @@ int main( void )
                 # Y a register a row; X streams the rows into the multiply
                 trans.update({"X-data-regs": "4", "Y-data-regs": str(m)})
             built, skipped = build_packm(isa, f"ukrgen_{isa}", fam if fam is not None else family.from_yaml(
-                "packm", {"family": "p", "dtypes": ["FP64"], "unroll": 2,
+                "packm", {"family": "p", "dtypes": [dt], "unroll": 2,
                           "cases": [{"kind": "trans", "m": [m], "params": trans}]}))
             self.assertEqual(1, len(built), skipped)
             if make_generator(isa).is_vla:
                 self.assertEqual("VL", built[0].loop_unit)
             src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
                   vl_helpers(built, make_generator(isa)) + \
-                  f"\n#define bli_ddpackm_ukrgen_{isa}_ref REF\ntypedef int conj_t;\ntypedef int pack_t;\n" + \
+                  f"\n#define bli_{ch}{ch}packm_ukrgen_{isa}_ref REF\ntypedef int conj_t;\ntypedef int pack_t;\n" + \
                   "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
                   "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
-                  packm_dispatch(f"ukrgen_{isa}", "FP64", built) + \
-                  "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( double ) ); }\n" + \
+                  packm_dispatch(f"ukrgen_{isa}", dt, built) + \
+                  f"\ndim_t VL_OF( void ) {{ return ukrgen_vl( sizeof( {ctype} ) ); }}\n" + \
                   open(os.path.join(HERE, "packm_harness.c")).read() \
                   .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
             with tempfile.TemporaryDirectory() as d:
@@ -328,7 +337,8 @@ int main( void )
                 with open(os.path.join(d, "t.c"), "w") as f:
                     f.write(src)
                 r = subprocess.run(cc + ["-O1", f"-I{HERE}", f"-DCASES={cases}",
-                                         f"-DPACKM=bli_dpackm_ukrgen_{isa}", os.path.join(d, "t.c"),
+                                         f"-DPACKM=bli_{ch}packm_ukrgen_{isa}", f"-DWT={ctype}",
+                                         os.path.join(d, "t.c"),
                                          os.path.join(d, "k.o"), "-o", os.path.join(d, "run")],
                                    capture_output=True, text=True)
                 self.assertEqual(0, r.returncode, r.stderr)

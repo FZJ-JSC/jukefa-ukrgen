@@ -1,5 +1,5 @@
 # FP32 packm, avx512: vectors along cdim - P's leading dimension a parameter, so a vec kernel packs the
-# vectors of any cdim up to 16 rows more (a split's 2*VL + 2), the reference the rest, and along the panel (trans)
+# vectors of any cdim up to 16 rows more (a split's 2*VL + 2), the reference the rest, and along the panel (trans: scattered, 16 rows transposed in registers)
 isa: avx512
 family: pk
 min-inflight: 8
@@ -19,9 +19,18 @@ cases:
     X-layout: ['n:c', 'm:s']
     Y-layout: ['m:c', 'n:s']
 - kind: trans
-  m: 1..16
+  m: 1..15
   params:
     pack-tileop: ['mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}']
     store-tileop: ['Y.VEC:scatter']
     X-layout: ['n:c', 'm:s']
     Y-layout: ['m:c', 'n:p']
+- kind: trans
+  m: [16]
+  params:
+    pack-tileop: ['mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}']
+    store-tileop: ['Y.VEC:shuffle']
+    X-layout: ['n:c', 'm:s']
+    Y-layout: ['m:c', 'n:p']
+    X-data-regs: '4'
+    Y-data-regs: '16'
