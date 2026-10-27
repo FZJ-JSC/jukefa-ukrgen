@@ -1,5 +1,5 @@
 # FP64 packm, avx256: vectors along cdim - P's leading dimension a parameter, so a vec kernel packs the
-# vectors of any cdim up to 16 rows more (a split's 2*VL + 2), the reference the rest, and along the panel (trans)
+# vectors of any cdim up to 16 rows more (a split's 2*VL + 2), the reference the rest, and along the panel (trans: 4 or 8 rows transposed in registers)
 isa: avx256
 family: pk
 min-inflight: 8
@@ -18,3 +18,13 @@ cases:
     store-tileop: ['Y.VEC:direct']
     X-layout: ['n:c', 'm:s']
     Y-layout: ['m:c', 'n:s']
+- kind: trans
+  m: [4, 8]
+  params:
+    pack-tileop: ['mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}']
+    store-tileop: ['Y.VEC:shuffle']
+    X-layout: ['n:c', 'm:s']
+    Y-layout: ['m:c', 'n:p']
+    pre-specialize-irmods: [shufflenet, hoist, cluster]
+    X-data-regs: '4'
+    Y-data-regs: '8'

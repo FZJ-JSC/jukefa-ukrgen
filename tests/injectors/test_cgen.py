@@ -248,7 +248,32 @@ int main( void )
         self.assertEqual([], built)
         self.assertIn("shufflenet", str(skipped[0][2]))
 
-    def packm_trans(self, irmods=None, expect=None, m=3, isas=None):
+    def test_packm_trans_configs(self):
+        # the configs' shuffle cases - their own params (unroll, registers,
+        # irmods) - through BLIS's dispatch against the reference
+        import copy
+        from tests.specializers.test_native import cpu_has
+        from ukrgen.injectors.blis.families import configuration
+        neon_cc = ["aarch64-linux-gnu-gcc", "-static"]
+        configs = (("avx2/fma_bc_blocks", "avx256", ["gcc", "-mavx2", "-mfma"], [[]], cpu_has("avx2"), "vperm2f128"),
+                   ("neon/fma_bc_lanes", "neon", neon_cc, [[QEMU, "-cpu", "max"]],
+                    bool(shutil.which(neon_cc[0]) and shutil.which(QEMU)), "trn1"),
+                   ("avx512/fma_bc_blocks", "avx512", ["gcc", "-mavx512f"], [[]], cpu_has("avx512f"), "vshuff64x2"))
+        root = os.path.join(HERE, "..", "..", "ukrconfig")
+        for path, isa, cc, runners, available, inst in configs:
+            cfg = configuration.from_files({("packm", "FP64"): os.path.join(root, path, "dpackm.yaml")})
+            base = next(f for f in cfg.families)
+            for kind, ms, params in base.cases:
+                if "Y.VEC:shuffle" not in (params.get("store-tileop") or []):
+                    continue
+                for m in ms:
+                    with self.subTest(config=path, m=m):
+                        fam = copy.deepcopy(base)
+                        fam.cases = [(kind, [m], params)]
+                        self.packm_trans(expect={isa: inst}, m=m, fam=fam,
+                                         isas={isa: (None, cc, runners, available)})
+
+    def packm_trans(self, irmods=None, expect=None, m=3, isas=None, fam=None):
         """
         A trans family of m rows built and run through BLIS's dispatch
         against the reference - per ISA its store, compiler, runners (an
@@ -278,9 +303,9 @@ int main( void )
             if m > 4:
                 # Y a register a row; X streams the rows into the multiply
                 trans.update({"X-data-regs": "4", "Y-data-regs": str(m)})
-            fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "unroll": 2,
-                                             "cases": [{"kind": "trans", "m": [m], "params": trans}]})
-            built, skipped = build_packm(isa, f"ukrgen_{isa}", fam)
+            built, skipped = build_packm(isa, f"ukrgen_{isa}", fam if fam is not None else family.from_yaml(
+                "packm", {"family": "p", "dtypes": ["FP64"], "unroll": 2,
+                          "cases": [{"kind": "trans", "m": [m], "params": trans}]}))
             self.assertEqual(1, len(built), skipped)
             if make_generator(isa).is_vla:
                 self.assertEqual("VL", built[0].loop_unit)
