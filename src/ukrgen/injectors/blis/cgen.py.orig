@@ -410,14 +410,16 @@ def packm_prototype(config_name: str, dtype: str) -> str:
     return f"void bli_{DT_CHAR[dtype]}packm_{config_name}\n{PACKM_SIGNATURE};"
 
 
-def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: list | None = None) -> str:
+def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: list | None = None,
+                   rest: int | None = None) -> str:
     """
     The data type's packm: each case a block of its own, tried in order -
     the family's dispatch (by case name), else vec, gather, trans as the
     config has them - and everything else the reference's, which also fills
     the edges. vec, gather cases taking P's leading dimension pack the
-    vectors of any cdim from theirs to theirs plus PACKM_REST (inca 1 for
-    vec, lda 1 for gather), the reference the rows left; a full panel - cdim
+    vectors of any cdim from theirs to theirs plus rest - the family's
+    vec-rest, else PACKM_REST - (inca 1 for vec, lda 1 for gather), the
+    reference the rows left; a full panel - cdim
     of cdim_max rows, n of n_max, no broadcast, P's rows cdim apart - of a
     size a case packs goes to that case: vec where A is contiguous along
     cdim (inca 1), trans where along the panel (lda 1)
@@ -446,7 +448,7 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: l
         return f"""\
 \t\t{{
 \t\t\tconst dim_t done = {c_expr(k.mr, ctype, k.vl_fn)};
-\t\t\tif ( done <= cdim && cdim - done <= {PACKM_REST} )
+\t\t\tif ( done <= cdim && cdim - done <= {PACKM_REST if rest is None else rest} )
 \t\t\t{{
 \t\t\t\t{asm_symbol(k)}( {args} );
 \t\t\t\tif ( done < cdim_max )

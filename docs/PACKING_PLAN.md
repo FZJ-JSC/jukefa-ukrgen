@@ -154,7 +154,9 @@ cases the dispatch tries, in order, by name, the others not built - and a
 case's `name` (two strategies of a kind side by side); ukropt's grid sweeps
 them (`--blis`). Then (ukrgen 0200): `vec-rest` - the rows a vec case packs beyond its own -
 and passes toggled without restating the defaults (`pre-specialize-irmods: [+structfuse,
--cluster]`). Still to come: `struct-split`, `masks`.
+-cluster]`); RVV's LMUL by size (ukrgen 0201: `lmul: 2` - m2 where it divides a vec case's vectors,
+m1 for the odd counts - or a map). Possible: copy cases for kappa 1 (the dispatch trying them where
+`*kappa == 1`; today every case multiplies). Still to come: `struct-split`, `masks`.
 
 - **Splits**: per cdim, how its rows are parted among structure stores -
   `struct-split: {7: [4, 3], 5: [2, 3]}`; by default as many of the widest

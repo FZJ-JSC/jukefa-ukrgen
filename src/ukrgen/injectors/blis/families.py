@@ -122,8 +122,12 @@ def key_params(kind: str, entry: dict) -> dict:
     tried (default: every case, vec, gather, trans); vec-rest, the rows a vec
     or gather case packs beyond its own (default 16); a case's name, its
     kind's unless given (two strategies of a kind side by side:
-    name: trans_shuffle). pre- and post-specialize-irmods take names (the
-    list run) or changes to the defaults only: [+structfuse, -cluster]
+    name: trans_shuffle); lmul (RVV, a case's or the family's for its
+    cases): a number - the LMUL of the sizes it divides, 1 for the others (a
+    trans case's every size) - or {size: LMUL}, a vec or gather case's size
+    counted in registers whatever its LMUL. pre- and post-specialize-irmods
+    take names (the list run) or changes to the defaults only:
+    [+structfuse, -cluster]
     """
     params = {}
     if "unroll" in entry:
@@ -199,6 +203,10 @@ class family:
     #: reference packing the rest (cdim from its rows to its rows + vec_rest);
     #: None: cgen's PACKM_REST
     vec_rest: int | None = None
+    #: packm, RVV: each case's LMUL by its name (lmul: the case's, else the
+    #: family's) - a number, for the sizes it divides (1 for the others; a
+    #: trans case's every size), or {size: LMUL}
+    case_lmul: dict = field(default_factory=dict)
     #: a split microtile: the index split, and per part its parameters and
     #: sizes along that index
     split: str | None = None
@@ -276,11 +284,22 @@ class family:
                 except ValueError as err:
                     raise ValueError(f"{kind} family {entry['family']}{where}: schedule {err}") from err
         inflight = entry.get("min-inflight")
+        # lmul: the case's, else the family's
+        case_lmul = {}
+        for case in entry.get("cases") or []:
+            spec = case.get("lmul", entry.get("lmul"))
+            if spec is None:
+                continue
+            values = list(spec.values()) if isinstance(spec, dict) else [spec]
+            if any(v not in (1, 2, 4, 8) for v in values):
+                raise ValueError(f"{kind} family {entry['family']}: lmul {spec!r} - 1, 2, 4 or 8, "
+                                 f"or sizes to them")
+            case_lmul[case.get("name") or case["kind"]] = spec
         vec_rest = entry.get("vec-rest")
         if vec_rest is not None and (not isinstance(vec_rest, int) or vec_rest < 0):
             raise ValueError(f"{kind} family {entry['family']}: vec-rest {vec_rest!r} - rows, 0 or more")
         return family(kind=kind, name=entry["family"], case_kinds=case_kinds, dispatch=dispatch,
-                      vec_rest=vec_rest, dtypes=list(entry.get("dtypes", ["FP64"])),
+                      vec_rest=vec_rest, case_lmul=case_lmul, dtypes=list(entry.get("dtypes", ["FP64"])),
                       params=params, sizes=sizes, default=default, cases=cases,
                       split=split, parts=parts, ratios=ratios,
                       min_inflight=int(inflight) if inflight is not None else None,
@@ -376,6 +395,9 @@ class kernel:
     case: str = ""
     #: a packm case's kind (vec, gather, trans) - its name (case) its own
     kind: str = ""
+    #: its RVV LMUL where a family chose one by size: its VL (mr, vl_fn)
+    #: a group's, its size counted in registers (vec4v at m2: 2 groups)
+    lmul: int = 1
     #: its loop parameter counts chunks of a vector length ("VL"), not elements
     loop_unit: str = ""
     #: its assembly where built in another process (the program stays there)
@@ -515,6 +537,20 @@ def build_gemm(isa: str, config_name: str, fam: family,
     return _collect(run_tasks(gemm_one, tasks, jobs))
 
 
+def lmul_for(spec, m: int, kind: str) -> int | None:
+    """
+    A packm case's RVV LMUL for its size m: a number for the sizes it
+    divides (a trans case's every size), 1 for the others; a map's for its
+    sizes; None where the family chooses none
+    """
+    if spec is None:
+        return None
+    if isinstance(spec, dict):
+        return int(spec.get(m, 1))
+    spec = int(spec)
+    return spec if "trans" == kind or 0 == m % spec else 1
+
+
 def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: int,
               case_params: dict, detach: bool = False) -> tuple:
     """
@@ -529,14 +565,28 @@ def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: in
     if fam.min_inflight:
         # at least min_inflight vectors an iteration: m a copy
         params["n"] = str(max(1, -(-fam.min_inflight // m)))
+    kind = fam.case_kinds.get(case, case)
+    lmul = lmul_for(fam.case_lmul.get(case), m, kind)
+    if lmul is not None:
+        if "rvv-LMUL" in params and str(lmul) != str(params["rvv-LMUL"]):
+            return _skip(dt, (case, m), f"lmul {lmul} and rvv-LMUL {params['rvv-LMUL']} both")
+        params["rvv-LMUL"] = str(lmul)
+        if kind in ("vec", "gather"):
+            # m vectors, registers: m / lmul groups of them
+            params["m"] = str(m // lmul)
     try:
         ctx, result, _ = run_unrolled(params, "n")
     except Exception as err:
         return _skip(dt, (case, m), err)
     if not result.completed or not ctx.emitted:
         return _skip(dt, (case, m), "the flow didn't complete")
+    from .cgen import split_size
     cdim = str(extent_of(ctx, "m"))
-    symbol = f"bli_{DT_CHAR[dt]}packm_{config_name}_{fam.name}_{case}{size_name(cdim)}"
+    grouped = lmul if lmul and kind in ("vec", "gather") else 1
+    # named by its rows in registers' vectors: vec4v at m2 too
+    vectors, elements = split_size(cdim)
+    named = cdim if 1 == grouped else f"{vectors * grouped}*VL" + (f"+{elements}" if elements else "")
+    symbol = f"bli_{DT_CHAR[dt]}packm_{config_name}_{fam.name}_{case}{size_name(named)}"
     program = ctx.emitted[0]
     # a loop stepping by vectors counts chunks of a vector length - a step by
     # VL, or along an index a component's vectors run along (a fixed vector
@@ -547,7 +597,7 @@ def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: in
                        if b.step is not None) else ""
     return _done(kernel(family=fam.name, dtype=dt, size=(m, 1), mr=cdim, nr="1", symbol=symbol,
                         params=list(program.params), c_layout="col", program=program, case=case, kind=fam.case_kinds.get(case, case),
-                        loop_unit=unit, simd_size_c=ctx.gen.c_simd_size_function),
+                        loop_unit=unit, simd_size_c=ctx.gen.c_simd_size_function, lmul=grouped),
                  detach)
 
 

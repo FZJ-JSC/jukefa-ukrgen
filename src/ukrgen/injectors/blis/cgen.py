@@ -486,8 +486,9 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: l
         kind = kind_of(ks[0])
         along = "inca == 1" if "vec" == kind else "lda == 1"
         # taking P's leading dimension: any cdim from theirs, the most vectors first
+        # by rows: a kernel's vectors its LMUL's groups (k.lmul)
         strided = sorted([k for k in ks if "stride(Y,n)" in k.params],
-                         key=lambda k: tuple(-x for x in split_size(k.mr)))
+                         key=lambda k: (-split_size(k.mr)[0] * k.lmul, -split_size(k.mr)[1]))
         full = [k for k in ks if k not in strided]
         if strided:
             note = "A's rows inca apart, gathered into vectors along cdim" if "gather" == kind else name

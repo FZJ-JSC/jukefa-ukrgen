@@ -119,9 +119,11 @@ def key_params(kind: str, entry: dict) -> dict:
     addr-pattern (rotate, blocked:<n or an expression of m, n, k and R>, phase).
     A packm family's own keys (not ukrgen parameters): dispatch, the cases
     its dispatch tries in order by name - the others neither built nor
-    tried (default: every case, vec, gather, trans); a case's name, its
+    tried (default: every case, vec, gather, trans); vec-rest, the rows a vec
+    or gather case packs beyond its own (default 16); a case's name, its
     kind's unless given (two strategies of a kind side by side:
-    name: trans_shuffle)
+    name: trans_shuffle). pre- and post-specialize-irmods take names (the
+    list run) or changes to the defaults only: [+structfuse, -cluster]
     """
     params = {}
     if "unroll" in entry:
@@ -193,6 +195,10 @@ class family:
     #: packm: the cases the dispatch tries, in this order, by name - the
     #: others neither built nor tried; None: every case, vec, gather, trans
     dispatch: list | None = None
+    #: packm: the rows a vec or gather case packs beyond its own - the
+    #: reference packing the rest (cdim from its rows to its rows + vec_rest);
+    #: None: cgen's PACKM_REST
+    vec_rest: int | None = None
     #: a split microtile: the index split, and per part its parameters and
     #: sizes along that index
     split: str | None = None
@@ -270,7 +276,11 @@ class family:
                 except ValueError as err:
                     raise ValueError(f"{kind} family {entry['family']}{where}: schedule {err}") from err
         inflight = entry.get("min-inflight")
-        return family(kind=kind, name=entry["family"], case_kinds=case_kinds, dispatch=dispatch, dtypes=list(entry.get("dtypes", ["FP64"])),
+        vec_rest = entry.get("vec-rest")
+        if vec_rest is not None and (not isinstance(vec_rest, int) or vec_rest < 0):
+            raise ValueError(f"{kind} family {entry['family']}: vec-rest {vec_rest!r} - rows, 0 or more")
+        return family(kind=kind, name=entry["family"], case_kinds=case_kinds, dispatch=dispatch,
+                      vec_rest=vec_rest, dtypes=list(entry.get("dtypes", ["FP64"])),
                       params=params, sizes=sizes, default=default, cases=cases,
                       split=split, parts=parts, ratios=ratios,
                       min_inflight=int(inflight) if inflight is not None else None,

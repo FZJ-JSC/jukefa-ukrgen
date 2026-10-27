@@ -282,6 +282,25 @@ class test_packm_dispatch_choices(unittest.TestCase):
         self.assertIn("cdim - done <= 4 )", packm_dispatch("ukrgen_avx512", "FP64", built, rest=4))
         self.assertIn("cdim - done <= 16 )", packm_dispatch("ukrgen_avx512", "FP64", built))
 
+    def test_lmul(self):
+        # RVV's LMUL by size: a number where it divides (1 elsewhere; a trans
+        # case's every size), or a map; only 1, 2, 4, 8
+        from ukrgen.injectors.blis.families import family, lmul_for, build_packm
+        self.assertEqual([1, 2, 1, 2, 1, 2], [lmul_for(2, m, "vec") for m in range(1, 7)])
+        self.assertEqual([1, 4, 2], [lmul_for({2: 4, 3: 2}, m, "vec") for m in (1, 2, 3)])
+        self.assertEqual(2, lmul_for(2, 3, "trans"))
+        self.assertIsNone(lmul_for(None, 3, "vec"))
+        with self.assertRaises(ValueError):
+            family.from_yaml("packm", {"family": "pk", "dtypes": ["FP64"], "cases": [{"kind": "vec", "m": [1], "lmul": 3}]})
+        fam = family.from_yaml("packm", {"family": "pk", "dtypes": ["FP64"], "lmul": 2, "cases": [
+            {"kind": "vec", "m": [2], "params": {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+                                                 "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"],
+                                                 "Y-layout": ["m:c", "n:p"], "rvv-LMUL": "1"}}]})
+        self.assertEqual({"vec": 2}, fam.case_lmul)        # the family's, for its cases
+        built, skipped = build_packm("rvv", "ukrgen_rvv", fam)
+        self.assertEqual([], built)
+        self.assertIn("lmul 2 and rvv-LMUL 1", str(skipped[0][2]))
+
     def test_order_and_what_is_built(self):
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import packm_dispatch

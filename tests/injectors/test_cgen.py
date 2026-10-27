@@ -37,19 +37,20 @@ def build(isa, dt, m, n, default=None):
 
 class test_cgen(unittest.TestCase):
 
-    def run_c(self, isa, sources, kernels, runners, defines=()):
+    def run_c(self, isa, sources, kernels, runners, defines=(), cc=None):
+        cc = cc or CC
         with tempfile.TemporaryDirectory() as d:
             objs = []
             for i, k in enumerate(kernels):
                 with open(os.path.join(d, f"k{i}.s"), "w") as f:
                     f.write(asm_source(k))
-                r = subprocess.run(CC + ["-c", os.path.join(d, f"k{i}.s"), "-o", os.path.join(d, f"k{i}.o")],
+                r = subprocess.run(cc + ["-c", os.path.join(d, f"k{i}.s"), "-o", os.path.join(d, f"k{i}.o")],
                                    capture_output=True, text=True)
                 self.assertEqual(0, r.returncode, r.stderr)
                 objs.append(os.path.join(d, f"k{i}.o"))
             with open(os.path.join(d, "w.c"), "w") as f:
                 f.write(sources)
-            r = subprocess.run(CC + ["-O1", f"-I{HERE}", *defines, os.path.join(d, "w.c"), *objs,
+            r = subprocess.run(cc + ["-O1", f"-I{HERE}", *defines, os.path.join(d, "w.c"), *objs,
                                      "-o", os.path.join(d, "run")], capture_output=True, text=True)
             self.assertEqual(0, r.returncode, r.stderr)
             return [subprocess.run(q + [os.path.join(d, "run")], capture_output=True, text=True,
@@ -194,6 +195,42 @@ int main( void )
                           ["-DPACKM=bli_dpackm_ukrgen_sve"])
         for out in outs:
             # three full panels by the generated cases, three by the reference
+            self.assertIn("6 runs, 3 by generated cases, 0 wrong", out)
+
+    def test_packm_lmul_by_size(self):
+        # RVV's vec cases at LMUL 2 where it divides their vectors, 1 where it
+        # doesn't: 2v and 4v one and two m2 groups, 1v and 3v m1 - each its
+        # vector length's function, the dispatch by rows - against the
+        # reference at two VLENs
+        from ukrgen.injectors.blis.families import build_packm
+        from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
+        cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
+        if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
+            self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+               "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:p"]}
+        fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"],
+                                         "cases": [{"kind": "vec", "m": [1, 2, 3, 4], "lmul": 2, "params": vec}]})
+        built, skipped = build_packm("rvv", "ukrgen_rvv", fam)
+        self.assertEqual([], skipped)
+        self.assertEqual({"vec1v": 1, "vec2v": 2, "vec3v": 1, "vec4v": 2},
+                         {k.symbol.rsplit("_", 1)[1]: k.lmul for k in built})
+        for k in built:
+            self.assertEqual(2 == k.lmul, ", m2" in asm_source(k), k.symbol)
+        src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
+              vl_helpers(built, make_generator("rvv")) + \
+              "\n#define bli_ddpackm_ukrgen_rvv_ref REF\n" + \
+              "typedef int conj_t;\ntypedef int pack_t;\n" + \
+              "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
+              "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
+              packm_dispatch("ukrgen_rvv", "FP64", built) + \
+              "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( double ) ); }\n"
+        harness = open(os.path.join(HERE, "packm_harness.c")).read() \
+            .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
+        outs = self.run_c("rvv", src + harness, built,
+                          [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"] for v in (128, 256)],
+                          ["-DPACKM=bli_dpackm_ukrgen_rvv"], cc=cc)
+        for out in outs:
             self.assertIn("6 runs, 3 by generated cases, 0 wrong", out)
 
     def test_packm_trans(self):
