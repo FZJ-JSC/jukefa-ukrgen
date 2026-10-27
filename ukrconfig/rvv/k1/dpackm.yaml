@@ -1,10 +1,18 @@
 # FP64 packm, rvv on the SpacemiT K1 (X60): vectors along cdim - P's leading dimension a parameter, so a
 # vec kernel packs the vectors of any cdim up to 16 rows more (a split's 2*VL + 2), the reference the rest,
-# and along the panel (trans). The chip's cycle-slots and immediate window are the gemm profile's; the
-# distances and buckets are the base packm's own - no sweep of packm on this core yet
+# and along the panel (trans). Measured at cdim 8 with any-kernel mode: the vec case's fastest L1 plan is
+# the gemm model without sl's rate limit, 119.8 cycles a step (4.27 B/cycle), but the base packm's model
+# streams L2 at 2.55 B/cycle against 2.06 - it is the one kept, since panels come from L2/L3; the trans
+# case keeps vf:5 with the base model. No max-imm-offset: a packm's offsets stay within one vector
+#
+# 4 X and 2 Y address registers, rotated (the default gives a single-direction component one register,
+# i.e. one long add chain per direction). Measured with --blis at cdim 32 (panel verified): 10.92
+# B/cycle at L1 (n=64) against 9.13, and 5.54/5.42 at n=256/1024 against 4.72/4.54.
 isa: rvv
 family: pk
 min-inflight: 16
+max-addr-regs: {X: 4, Y: 2}
+addr-pattern: {X: rotate, Y: rotate}
 cases:
 - kind: vec
   m: 1..8
@@ -13,10 +21,8 @@ cases:
     store-tileop: ['Y.VEC:direct']
     X-layout: ['m:c', 'n:s']
     Y-layout: ['m:c', 'n:s']
-    sched-cycle-slots: "2:vl*3|vs|vf,sl/2,addr|i"
-    max-imm-offset: 127
+    sched-cycle-slots: "2:vl|vs|vf,sl,i;vf-sl"
   schedule: ['RAW:data::::13', 'WAW:data::::13', 'WAR:data::::13', 'RAW:address:greg:::3']
-  buckets: "vf:5"
 - kind: trans
   m: 1..16
   params:
@@ -24,7 +30,6 @@ cases:
     store-tileop: ['Y.VEC:strided']
     X-layout: ['n:c', 'm:s']
     Y-layout: ['m:c', 'n:p']
-    sched-cycle-slots: "2:vl*3|vs|vf,sl/2,addr|i"
-    max-imm-offset: 127
+    sched-cycle-slots: "2:vl|vs|vf,sl,i;vf-sl"
   schedule: ['RAW:data::::13', 'WAW:data::::13', 'WAR:data::::13', 'RAW:address:greg:::3']
   buckets: "vf:5"

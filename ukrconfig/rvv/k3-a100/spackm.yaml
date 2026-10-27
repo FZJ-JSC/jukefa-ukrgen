@@ -1,8 +1,10 @@
 # FP32 packm, rvv on the SpacemiT K3's A100 "AI" cores (8-15) - run with ukropt's k3_ai prologue. Vectors
 # along cdim - P's leading dimension a parameter, so a vec kernel packs the vectors of any cdim up to 16 rows
-# more (a split's 2*VL + 2), the reference the rest, and along the panel (trans). The chip's cycle-slots and
-# immediate window are the gemm profile's; the distances and buckets are the base packm's own - no sweep of
-# packm on this core yet
+# more (a split's 2*VL + 2), the reference the rest, and along the panel (trans). Measured at cdim 8 with
+# any-kernel mode, cycles a step: the vec case takes the gemm profile's model with vf:8 - 110.4 (18.55
+# B/cycle at L1) against 143.4 (14.3) for the base packm model, unlike the K1 where the base model wins;
+# the trans case is store-bound (0.58 B/cycle, every variant within 0.5%), base model, no buckets.
+# No max-imm-offset: a packm's offsets stay within one vector
 isa: rvv
 family: pk
 min-inflight: 16
@@ -15,9 +17,8 @@ cases:
     X-layout: ['m:c', 'n:s']
     Y-layout: ['m:c', 'n:s']
     sched-cycle-slots: "2:vl*2|vs|vf,sl/2,addr|i"
-    max-imm-offset: 63
   schedule: ['RAW:data::::13', 'WAW:data::::13', 'WAR:data::::13', 'RAW:address:greg:::3']
-  buckets: "vf:5"
+  buckets: "vf:8"
 - kind: trans
   m: 1..16
   params:
@@ -25,7 +26,6 @@ cases:
     store-tileop: ['Y.VEC:strided']
     X-layout: ['n:c', 'm:s']
     Y-layout: ['m:c', 'n:p']
-    sched-cycle-slots: "2:vl*2|vs|vf,sl/2,addr|i"
-    max-imm-offset: 63
+    sched-cycle-slots: "2:vl|vs|vf,sl,i;vf-sl"
   schedule: ['RAW:data::::13', 'WAW:data::::13', 'WAR:data::::13', 'RAW:address:greg:::3']
   buckets: "vf:5"

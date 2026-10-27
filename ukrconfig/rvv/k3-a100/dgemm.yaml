@@ -2,7 +2,8 @@
 # VLEN 1024, dual issue, 8 FLOP/cycle FP64; a vector FMA holds the vector pipe 4 cycles, a 1024-bit
 # vector load ~2.3 (no shadow at all with 4-cycle FMAs), scalar loads ride along free. Tuned on
 # jsc-k3-3 cores 9 and 11 (vm 2x14): 117.4-118.2 cycles a k step = 7.6 FLOP/cycle, 95% of peak.
-# unroll 8 and sl:16 - longer buckets pay here; max-imm-offset 127 for B's 112 B k-step walk
+# unroll 8 and sl:16 - longer buckets pay here; max-imm-offset min(ne+e, 16e-1), B's k-step walk of
+# n doubles with an element of slack (120 B), the bump landing between steps
 isa: rvv
 blocksizes: {mr-in-mc: 16, nr-in-nc: 64, kc: 256}
 families:
@@ -17,12 +18,11 @@ families:
     B-layout: ['n:c', 'k:p']
     sched-cycle-slots: "2:vl*2|vs|vf,sl/2,addr|i"
     order: kmn
-    max-imm-offset: 127
+    max-imm-offset: "min(me+e, 16e-1)"
   schedule: ['RAW:data:freg:::8', 'RAW:data:vreg:::13', 'WAR:data::::8', 'RAW:address:greg:::12']
   buckets: "vf:8,sl:16"
   max-addr-regs: {A: 2, B: 2}
   addr-pattern: {A: rotate, B: "blocked:mnk/R"}
-  default: 8x3
   c-storage: [row, any]
 - family: vm
   preset: gemm_fma_vf
@@ -35,9 +35,10 @@ families:
     B-layout: ['n:c', 'k:p']
     sched-cycle-slots: "2:vl*2|vs|vf,sl/2,addr|i"
     order: kmn
-    max-imm-offset: 127
+    max-imm-offset: "min(ne+e, 16e-1)"
   schedule: ['RAW:data:freg:::8', 'RAW:data:vreg:::13', 'WAR:data::::8', 'RAW:address:greg:::12']
   buckets: "vf:8,sl:16"
   max-addr-regs: {A: 4, B: 2}
   c-storage: [col, any]
   addr-pattern: {A: rotate, B: "blocked:mnk/R"}
+  default: 2x14

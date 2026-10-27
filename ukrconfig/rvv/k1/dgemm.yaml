@@ -1,8 +1,10 @@
 # FP64 gemm, rvv on the SpacemiT K1 (X60): vector-scalar FMA (vfmacc.vf), scalars in FP registers;
 # C across vectors by strided loads and stores (LMUL 1)
 # Tuned on jsc-k1-1 cores 2 and 5 (vm 2x14): 32.7 cycles a k step, 6.9 FLOP/cycle.
-# max-imm-offset 127: one k step of B's walk (14 doubles, 112 B) inside the measured 16-element
-# immediate window (63 B FP32, 127 B FP64) - over it the core adds microops, under it a k step splits
+# max-imm-offset min(ne+e, 16e-1): one k step of B's walk plus an element of slack (n+1 doubles,
+# 120 B), so the bump lands between steps rather than inside one; the 16-element window's top
+# (63 B FP32, 127 B FP64) is stated in the expression - it is not clamped for us - and the vn
+# families take min(me+e, 16e-1)
 isa: rvv
 blocksizes: {mr-in-mc: 16, nr-in-nc: 64, kc: 256}
 families:
@@ -17,11 +19,10 @@ families:
     B-layout: ['n:c', 'k:p']
     sched-cycle-slots: "2:vl*3|vs|vf,sl/2,addr|i"
     order: kmn
-    max-imm-offset: 127
+    max-imm-offset: "min(me+e, 16e-1)"
   schedule: ['RAW:data:freg:::8', 'RAW:data:vreg:::13', 'WAR:data::::8', 'RAW:address:greg:::12']
   max-addr-regs: {A: 2, B: 2}
   addr-pattern: {A: rotate, B: "blocked:mnk/R"}
-  default: 8x3
   c-storage: [row, any]
 - family: vm
   preset: gemm_fma_vf
@@ -34,8 +35,9 @@ families:
     B-layout: ['n:c', 'k:p']
     sched-cycle-slots: "2:vl*3|vs|vf,sl/2,addr|i"
     order: kmn
-    max-imm-offset: 127
+    max-imm-offset: "min(ne+e, 16e-1)"
   schedule: ['RAW:data:freg:::8', 'RAW:data:vreg:::13', 'WAR:data::::8', 'RAW:address:greg:::12']
   max-addr-regs: {A: 4, B: 2}
   c-storage: [col, any]
   addr-pattern: {A: rotate, B: "blocked:mnk/R"}
+  default: 2x14
