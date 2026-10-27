@@ -154,3 +154,31 @@ class test_irmod_metadata(unittest.TestCase):
         finally:
             registry.IRMODS.remove(marker)
         self.assertEqual([3], calls)
+
+
+class test_irmod_choice(unittest.TestCase):
+    """an IR modification chosen that the ISA can't do, or that doesn't exist: said"""
+    def build(self, irmods):
+        import tests.specializers.test_pack as tp
+        from ukrgen.flow.stages.stage import stage_error
+        params = dict(tp.PARAMS)
+        params.update({"X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"], "m": "4", "n": "1",
+                       "pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"],
+                       "store-tileop": ["Y.VEC:scatter"], "pre-specialize-irmods": irmods})
+        saved, tp.PARAMS = tp.PARAMS, params
+        try:
+            with self.assertRaises(stage_error) as caught:
+                tp.pack("avx512")
+        finally:
+            tp.PARAMS = saved
+        return str(caught.exception)
+
+    def test_unavailable(self):
+        self.assertIn("structfuse isn't available for this kernel: avx512 has no structure stores",
+                      self.build(["structfuse"]))
+
+    def test_unknown(self):
+        said = self.build(["nosuch"])
+        self.assertIn("no IR modification nosuch", said)
+        self.assertIn("shufflenet", said)
+

@@ -70,6 +70,14 @@ class irmod_stage_base(stage):
         by_name = {m.name: m for m in self.available}
         chosen = self.params[self.option].value if self.option in self.params else []
         for name in chosen or []:
+            if name not in by_name:
+                # one this kernel's ISA doesn't meet the requirements of, or
+                # none of that name: said, not looked up
+                known = {m.name: m for m in lsc_irmods.irmods_at(self.placement)}
+                if name in known:
+                    unmet = known[name].unmet_requirements(self.context)
+                    raise stage_error(f"{name} isn't available for this kernel: {', '.join(unmet)}")
+                raise stage_error(f"no IR modification {name} here; these are: {', '.join(sorted(known))}")
             self.run(by_name[name])
         self.finish()
         self.context.params.update(self.params)
