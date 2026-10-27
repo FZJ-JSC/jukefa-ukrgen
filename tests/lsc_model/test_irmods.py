@@ -222,3 +222,13 @@ class test_irmod_changes(unittest.TestCase):
             self.pack("sve", ["+nosuch"])
         self.assertIn("no IR modification nosuch", str(caught.exception))
 
+
+class test_structfuse_split(unittest.TestCase):
+    def test_parse(self):
+        from ukrgen.irmod.lsc.structfuse import parse_split
+        self.assertEqual({12: [4, 8], 5: [2, 3]}, parse_split("12=4+8, 5=2+3"))
+        self.assertEqual({}, parse_split(""))
+        for bad in ("12=4+7", "12", "12=4+x", "=4+8", "12=0+12"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                parse_split(bad)
+

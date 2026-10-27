@@ -98,6 +98,26 @@ def runs(program, ops: list):
         i += 1
 
 
+def parse_split(text) -> dict[int, list[int]]:
+    """
+    --structfuse-split: rows=part+part, comma separated - 12=4+8,5=2+3 - the
+    parts a step's rows go in, in that order (a part of 1 row its strided
+    store); the rows not given parted greedily under fields
+    """
+    splits = {}
+    for item in str(text or "").replace(" ", "").split(","):
+        if not item:
+            continue
+        rows, eq, parts = item.partition("=")
+        if not eq or not rows.isdigit() or not all(p.isdigit() and int(p) > 0 for p in parts.split("+")):
+            raise ValueError(f"--structfuse-split {text}: rows=part+part, comma separated (12=4+8,5=2+3)")
+        numbers = [int(p) for p in parts.split("+")]
+        if sum(numbers) != int(rows):
+            raise ValueError(f"--structfuse-split {item}: its parts take {sum(numbers)} rows, not {rows}")
+        splits[int(rows)] = numbers
+    return splits
+
+
 class structfuse(lsc_irmod):
     """
     A panel packed across the grain - packm's trans case, its rows
@@ -115,7 +135,11 @@ class structfuse(lsc_irmod):
                           description="the most rows one structure store takes (0: the ISA's most); a "
                                       "step's rows beyond it parted - as many of them as fit, then the "
                                       "rest - each part a strided structure store (RVV's vssseg) where "
-                                      "the ISA has them")]
+                                      "the ISA has them"),
+              irmod_param(name="split", default={}, parse=parse_split,
+                          description="parts by row count, in order - rows=part+part, comma separated: "
+                                      "12=4+8,5=2+3 - over fields' greedy ones for those rows (a part of "
+                                      "1 row its strided store)")]
     name = "structfuse"
     description = "a trans case's row stores fused into one interleaving (structure) store"
     placement = irmod_placement.PRE_SPECIALIZE
@@ -144,11 +168,21 @@ class structfuse(lsc_irmod):
                 cap = min(most, self.values["fields"]) if self.values["fields"] else most
                 if cap < 2:
                     continue
-                # one structure, or parts of cap rows and the rest - each part's
-                # rows interleaved into the columns, a stride apart (strided)
-                parts = [n] if n <= cap else [cap] * (n // cap) + ([n % cap] if n % cap else [])
+                # the parts given for these rows (split); else one structure,
+                # or parts of cap rows and the rest - each part's rows
+                # interleaved into the columns, a stride apart (strided)
+                given = self.values["split"].get(n)
+                if given is not None:
+                    if max(given) > most:
+                        raise ValueError(f"--structfuse-split {n}={'+'.join(map(str, given))}: a part of "
+                                         f"{max(given)} rows, the ISA's structures take {most} at most")
+                    parts = list(given)
+                else:
+                    parts = [n] if n <= cap else [cap] * (n // cap) + ([n % cap] if n % cap else [])
                 strided = len(parts) > 1
                 sigs = {s: struct_sigs(gen, "store", dt, s, strided) for s in set(parts) if s > 1}
+                if not sigs:
+                    continue                # all parts single rows: the strided stores they are
                 ways = max(parts)
                 known = program.groups.get(comp)
                 if not sigs or not all(sigs.values()) or (known is not None and len(known) < 3):

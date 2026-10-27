@@ -329,6 +329,35 @@ int main( void )
                          isas={"rvv": (None, cc, [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"]
                                                   for v in (128, 256)], available)})
 
+    def test_packm_trans_structfuse_split(self):
+        # parts given by row count (structfuse-split), in their order - the
+        # K1 config's trans case, its schedule reordering: 12 = 4+8, 3+3+3+3;
+        # a part wider than the ISA's structures refused
+        import copy
+        from ukrgen.injectors.blis.families import configuration, build_packm
+        from ukrgen.injectors.blis.cgen import asm_source
+        cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
+        available = bool(shutil.which(cc[0]) and shutil.which("qemu-riscv64-static"))
+        cfg = configuration.from_files({("packm", "FP64"): os.path.join(HERE, "..", "..", "ukrconfig", "rvv", "k1",
+                                                                        "dpackm.yaml")})
+        base = cfg.families[0]
+        name, _, params = next(c for c in base.cases if "trans" == base.case_kinds.get(c[0], c[0]))
+        runners = [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"] for v in (128, 256)]
+        for split, expect in (("12=4+8", ("vssseg4e64.v", "vssseg8e64.v")), ("12=3+3+3+3", ("vssseg3e64.v",))):
+            fam = copy.deepcopy(base)
+            fam.cases = [(name, [12], dict(params, **{"pre-specialize-irmods": ["+structfuse"], "X-data-regs": "4",
+                                                       "structfuse-split": split}))]
+            for inst in expect:
+                with self.subTest(split=split, inst=inst):
+                    self.packm_trans(m=12, fam=fam, expect={"rvv": inst},
+                                     isas={"rvv": (None, cc, runners, available)})
+        fam = copy.deepcopy(base)
+        fam.cases = [(name, [12], dict(params, **{"pre-specialize-irmods": ["+structfuse"],
+                                                   "structfuse-split": "12=9+3"}))]
+        built, skipped = build_packm(cfg.isa, cfg.name, fam)
+        self.assertEqual([], built)
+        self.assertIn("a part of 9 rows, the ISA's structures take 8 at most", str(skipped[0][2]))
+
     def test_packm_trans_shufflenet(self):
         # a block of rows - as many as a vector's lanes - transposed in
         # registers, its columns stored contiguously (the shuffle stores,

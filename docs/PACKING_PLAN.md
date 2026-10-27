@@ -163,7 +163,9 @@ ukropt's `--blis` grid to sweep:
   `fields` (ukrgen 0202) - the most rows one structure store takes, a
   step's rows beyond it parted greedily (12 = 8 + 4; `fields` 3: 5 = 3 +
   2), each part a strided segment store on RVV (asmgen 0090); a flow
-  parameter, `structfuse-fields`, under a case's `params:`.
+  parameter, `structfuse-fields`, under a case's `params:`. Parts by hand
+  (ukrgen 0206): `structfuse-split: "12=4+8,5=2+3"` - by row count, in
+  order, over fields' greedy ones (a part of 1 row its strided store).
 - **Masks** (sketched as `masks: on`): a vec case's `mask: true` (ukrgen
   0203) - size N packs N vectors and a last one masked to the rows left,
   cdim from N*VL to (N+1)*VL in one pass. SVE's; AVX-512's and RVV's to
