@@ -1,0 +1,44 @@
+# FP32 gemm, rvv on the SpacemiT K3's A100 "AI" cores (8-15) - run with ukropt's k3_ai prologue.
+# VLEN 1024, dual issue, 32 FLOP/cycle FP32; a vector FMA holds the vector pipe 2 cycles, a 1024-bit
+# vector load ~2.3, scalar loads ride along free. Tuned on jsc-k3-3 cores 9 and 11 (vm 2x14):
+# 58.0-58.5 cycles a k step = 30.9 FLOP/cycle, 96% of the FMA-only peak.
+# unroll 6: the loop's adds and branch amortise over six k steps; buckets vf/sl help here, unlike the K1.
+# max-imm-offset 63: one k step of B's walk (14 floats, 56 B) inside the 16-element immediate window
+isa: rvv
+blocksizes: {mr-in-mc: 16, nr-in-nc: 64, kc: 256}
+families:
+- family: vn
+  preset: gemm_fma_vf
+  vectorize: n
+  unroll: 6
+  m: [4, 6, 8, 12, 14]
+  n: 1..4
+  params:
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    sched-cycle-slots: "2:vl*2|vs|vf,sl/2,addr|i"
+    order: knm
+    max-imm-offset: 63
+  schedule: ['RAW:data:freg:::8', 'RAW:data:vreg:::13', 'WAR:data::::8', 'RAW:address:greg:::12']
+  buckets: "vf:8,sl:8"
+  max-addr-regs: {A: 2, B: 4}
+  addr-pattern: {A: "blocked:mnk/R", B: rotate}
+  default: 8x3
+  c-storage: [row, any]
+- family: vm
+  preset: gemm_fma_vf
+  vectorize: m
+  unroll: 6
+  m: 1..4
+  n: [4, 6, 8, 12, 14]
+  params:
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    sched-cycle-slots: "2:vl*2|vs|vf,sl/2,addr|i"
+    order: kmn
+    max-imm-offset: 63
+  schedule: ['RAW:data:freg:::8', 'RAW:data:vreg:::13', 'WAR:data::::8', 'RAW:address:greg:::12']
+  buckets: "vf:8,sl:8"
+  max-addr-regs: {A: 4, B: 2}
+  c-storage: [col, any]
+  addr-pattern: {A: rotate, B: "blocked:mnk/R"}

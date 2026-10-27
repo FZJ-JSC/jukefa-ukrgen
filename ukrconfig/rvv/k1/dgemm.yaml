@@ -1,0 +1,41 @@
+# FP64 gemm, rvv on the SpacemiT K1 (X60): vector-scalar FMA (vfmacc.vf), scalars in FP registers;
+# C across vectors by strided loads and stores (LMUL 1)
+# Tuned on jsc-k1-1 cores 2 and 5 (vm 2x14): 32.7 cycles a k step, 6.9 FLOP/cycle.
+# max-imm-offset 127: one k step of B's walk (14 doubles, 112 B) inside the measured 16-element
+# immediate window (63 B FP32, 127 B FP64) - over it the core adds microops, under it a k step splits
+isa: rvv
+blocksizes: {mr-in-mc: 16, nr-in-nc: 64, kc: 256}
+families:
+- family: vn
+  preset: gemm_fma_vf
+  vectorize: n
+  unroll: 2
+  m: [4, 6, 8, 12, 14]
+  n: 1..4
+  params:
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    sched-cycle-slots: "2:vl*3|vs|vf,sl/2,addr|i"
+    order: kmn
+    max-imm-offset: 127
+  schedule: ['RAW:data:freg:::8', 'RAW:data:vreg:::13', 'WAR:data::::8', 'RAW:address:greg:::12']
+  max-addr-regs: {A: 2, B: 2}
+  addr-pattern: {A: rotate, B: "blocked:mnk/R"}
+  default: 8x3
+  c-storage: [row, any]
+- family: vm
+  preset: gemm_fma_vf
+  vectorize: m
+  unroll: 2
+  m: 1..4
+  n: [4, 6, 8, 12, 14]
+  params:
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    sched-cycle-slots: "2:vl*3|vs|vf,sl/2,addr|i"
+    order: kmn
+    max-imm-offset: 127
+  schedule: ['RAW:data:freg:::8', 'RAW:data:vreg:::13', 'WAR:data::::8', 'RAW:address:greg:::12']
+  max-addr-regs: {A: 4, B: 2}
+  c-storage: [col, any]
+  addr-pattern: {A: rotate, B: "blocked:mnk/R"}
