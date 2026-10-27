@@ -4,6 +4,8 @@ IR modifications on LSC IR programs, one per module:
     lanefuse                lane loads fused into one load        before specialization
     structfuse              a trans case's row stores fused into
                             one interleaving store                before specialization
+    shufflenet              a trans case's row stores as an in-
+                            register transpose, stored contiguously before specialization
     addrmerge               an address register's moves with
                             nothing between using it, one         after specialization
     ldinc                   address computations fused into
@@ -18,13 +20,14 @@ from .ldinc import ldinc
 from .addrmerge import addrmerge
 from .widen import widen
 from .structfuse import structfuse
+from .shufflenet import shufflenet
 from .hoist import hoist
 from .vectorize import vectorize_loops
 from .unroll import unroll_loops
 from .slices import fuse_slices, forward_slices, hoist_slices
 from .cluster import cluster
 
-IRMODS : list[type[lsc_irmod]] = [widen, structfuse, vectorize_loops, fuse_slices, forward_slices, hoist_slices,
+IRMODS : list[type[lsc_irmod]] = [widen, structfuse, shufflenet, vectorize_loops, fuse_slices, forward_slices, hoist_slices,
                                   unroll_loops, hoist, cluster, lanefuse, addrmerge, ldinc]
 
 

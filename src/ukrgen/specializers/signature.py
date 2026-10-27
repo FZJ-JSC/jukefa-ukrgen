@@ -445,6 +445,11 @@ class signature_specializer:
                 inserted += done[:-1]
             op.refresh()
             return inserted + [op]
+        if isinstance(op, lsc_store) and "shuffle" == op.rsln:
+            raise specialization_error(
+                f"{op.indices[1]}: a shuffle store is a row of a transpose in registers - "
+                f"shufflenet (--pre-specialize-irmods) stores its columns; alone it would "
+                f"store the row contiguously")
         if isinstance(op, (lsc_load, lsc_store)):
             return self.adapt_access(op)
         if isinstance(op, lsc_transformation):

@@ -50,6 +50,8 @@ class strided_provider(resolution_provider):
     strided:        one strided load or store (RVV vlse/vsse)
     gather/scatter: one indexed load or store, the address model supplying the
                     index vector (SVE scalar+vector, AVX gathers, RVV indexed)
+    shuffle:        stores only: the rows transposed in registers and their
+                    columns stored contiguously (irmod shufflenet, which it needs)
     lanes:          one load or store per lane (NEON ld1/st1 to a lane); only
                     where the lane immediate covers every lane of the vector
 
@@ -80,6 +82,13 @@ class strided_provider(resolution_provider):
                 load(op_mod_reqs={memmod.VINDEX}, forbidden_opd_mods=no_lanes_in)]))
             registry.add_resolution(key_out, tr(unique_tag="scatter", steps=[
                 store(op_mod_reqs={memmod.VINDEX}, forbidden_opd_mods=no_lanes_out)]))
+            # a transpose in registers stores the rows' columns contiguously
+            # (irmod shufflenet): until it runs, each row's store stands for
+            # it - a plain store, which alone would be wrong, refused when
+            # specializing where shufflenet didn't replace it
+            registry.add_resolution(key_out, tr(unique_tag="shuffle", explicit=True, steps=[
+                store(forbidden_op_mods={memmod.VINDEX, memmod.GSTRIDE, memmod.STRUCT},
+                      forbidden_opd_mods=no_lanes_out)]))
 
             no_gather = {memmod.VINDEX, memmod.GSTRIDE, memmod.STRUCT}
             registry.add_resolution(key_in, tr(unique_tag="lanes", steps=[

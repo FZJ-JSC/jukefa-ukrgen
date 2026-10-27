@@ -83,17 +83,17 @@ def _columns(state: tuple, lanes: int) -> tuple | None:
 _FOUND: dict = {}
 
 
-def transpose_network(gen, dt, lanes: int | None = None, max_rounds: int | None = None) -> network | None:
+def transpose_network(gen, dt, max_rounds: int | None = None) -> network | None:
     """
-    The fewest rounds of the ISA's permutes transposing a block of lanes rows
-    of dt - lanes the register's elements - found by a breadth-first search
+    The fewest rounds of the ISA's permutes transposing a block of rows of
+    dt, as many as the register's elements (its lanes) - found by a breadth-first search
     over the rounds' forms and pairings, checked by permuted(); None where the
     ISA's permutes don't make one (or the vector's length isn't known)
     """
     if gen.is_vla:
         return None
     ebits = 8 * adt_size(dt)
-    lanes = lanes or gen.simd_size // adt_size(dt)
+    lanes = gen.simd_size // adt_size(dt)
     if lanes < 2 or lanes & (lanes - 1):
         return None
     depth = (lanes.bit_length() - 1) + 1 if max_rounds is None else max_rounds

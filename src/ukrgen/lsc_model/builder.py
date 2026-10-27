@@ -625,8 +625,10 @@ class program_builder:
                     if lane is not None:
                         op.add_property("lane", lane)
                         op.add_property("stride_index", self.vector_index(tiling, comp))
-                    if {"GSTRIDE", "VINDEX"} & {m.name for m in (step.op_mod_reqs or set())}:
-                        # a strided access or a gather: its stride is the
+                    if {"GSTRIDE", "VINDEX"} & {m.name for m in (step.op_mod_reqs or set())} \
+                            or "shuffle" == tag:
+                        # a strided access or a gather - or a row of a
+                        # transpose in registers: its stride is the
                         # component's along the register's index
                         op.add_property("stride_index", self.vector_index(tiling, comp))
                     ops.append(op)

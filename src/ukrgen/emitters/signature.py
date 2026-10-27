@@ -43,7 +43,7 @@ from ..lsc_model.addressing import sym
 from ..lsc_model.ir import ir_program, ir_block
 from ..components.tile import scalar_tile
 from ..models.load_store_operations import (
-    lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop)
+    lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop, lsc_permute)
 from ..models.lsc.index import lsc_reg_index
 
 
@@ -1394,9 +1394,25 @@ class signature_emitter:
                                                                op.indices[0].indices[0])])]
         if isinstance(op, lsc_addr_compute):
             return self.address(op)
+        if isinstance(op, lsc_permute):
+            return [self.permute(op)]
         if isinstance(op, lsc_move):
             return [self.move(op)]
         raise specialization_error(f"cannot emit {type(op).__name__}")
+
+    def permute(self, op: lsc_permute) -> str:
+        """
+        Two registers permuted into a third through the operation's signature
+        (asmgen's opmove PERMUTE)
+        """
+        regs = [self.reg(idx, rtype) for idx, rtype in zip(op.indices, op.rtypes)]
+        first = op.indices[0]
+        dt = self.dts[(first.component, first.indices[0])]
+        for sig in _sigs(op.sigs):
+            call = dict(dregs=regs, dts=[dt] * 3, modifiers=set(sig.modifiers), **sig.structural_params)
+            if self.gen.move.fits(**call):
+                return self.gen.move(**call)
+        raise specialization_error(f"no permute signature takes {regs}")
 
     def move(self, op: lsc_move, src=None, dst=None) -> str:
         """

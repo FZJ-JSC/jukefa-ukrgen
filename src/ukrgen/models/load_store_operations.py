@@ -365,6 +365,25 @@ class lsc_move(lsc_operation):
         return f"{self.indices[1]} <- MOVE {self.indices[0]}"
 
 
+class lsc_permute(lsc_move):
+    """
+    Two registers' elements permuted into a third - asmgen's opmove PERMUTE,
+    its signature saying how (pattern, bits, segment): a round of an
+    in-register transpose. A move to the scheduler (a vector permute).
+    """
+    def __init__(self, a : lsc_reg_index, b : lsc_reg_index, dest : lsc_reg_index,
+                 tiles : list[tile], *, sig, rtypes : list):
+        lsc_operation.__init__(self, tiles=tiles, indices=[a, b, dest], reads=[0, 1], writes=[2],
+                               reg_types=[lsc_reg_type.data] * 3)
+        self.rsln = None
+        self.step = None
+        self.sigs = [sig]
+        self.rtypes = rtypes
+
+    def __str__(self):
+        return f"{self.indices[2]} <- PERMUTE {self.indices[0]}, {self.indices[1]}"
+
+
 class tr_modifier(Enum):
     np = auto()
     

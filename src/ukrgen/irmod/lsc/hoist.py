@@ -2,7 +2,7 @@
 Loads a loop doesn't change, once before it
 """
 
-from ...models.load_store_operations import lsc_load, lsc_store, lsc_transformation, lsc_move, lsc_loop
+from ...models.load_store_operations import lsc_load, lsc_store, lsc_transformation, lsc_move, lsc_loop, lsc_permute
 from .base import irmod_placement, lsc_irmod
 
 
@@ -29,7 +29,9 @@ class hoist(lsc_irmod):
         """
         # a load's data and a move's destination are their second index, an
         # arithmetic operation's result its first
-        if isinstance(op, (lsc_load, lsc_move)):
+        if isinstance(op, lsc_permute):
+            idx = op.indices[2]
+        elif isinstance(op, (lsc_load, lsc_move)):
             idx = op.indices[1]
         elif isinstance(op, lsc_transformation):
             idx = op.indices[0]

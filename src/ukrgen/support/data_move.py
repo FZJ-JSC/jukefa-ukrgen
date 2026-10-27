@@ -158,6 +158,9 @@ class transformation_resolution:
     :param op_mod_reqs: Modifiers required in the signature of the arithmetic operation
     :param opd_mod_reqs: Operand modifiers required in the signature of the arithmetic
                          operation, mapped to register references as used in the dm steps
+    :param explicit: offered only where a tileop names it - a resolution standing for
+                     what an irmod does (shuffle: shufflenet's transpose), never chosen
+                     on its own
     """
     unique_tag:   str
     steps:        list[dm_step]
@@ -169,6 +172,7 @@ class transformation_resolution:
     forbidden_op_mods: set[opmod] = field(default_factory=set)
     opd_mod_reqs: set[omod] = field(default_factory=set)
     forbidden_opd_mods: set[omod] = field(default_factory=set)
+    explicit:     bool = False
 
 
 class dm_location(Enum):

@@ -100,9 +100,12 @@ lack, in what order to build it, and how SME + SVE kernels' panels
   - `shufflenet` (AVX2, AVX-512, NEON - refused where `is_vla`) - its
     networks found (ukrgen 0189: `support/transpose.py`, the fewest rounds
     of the ISA's permutes by a search checked with `permuted()`: NEON
-    doubles 1, singles 2; AVX2 2 and 3; AVX-512 3 - AMD's - and 4); still
-    to come: the IR's permute op, the emitter writing it, the irmod
-    rewriting a step's row stores. N = the
+    doubles 1, singles 2; AVX2 2 and 3; AVX-512 3 - AMD's - and 4); done
+    (ukrgen 0192): `lsc_permute` and the emitter writing it, the irmod
+    rewriting a step's row stores (in place, one spare register), the
+    `shuffle` store resolution for ISAs without scatters (named only, refused
+    without the irmod) - AVX-512 8 and 16 rows, AVX2 4 and 8, NEON 2 and 4
+    against the reference; the configs' cases still to come. N = the
     lanes' count (or blocks of it: AMD's 24 = 3 x 8 doubles), log2(lanes)
     rounds of permutes (A4) by a recipe per ISA (x86: in-lane unpacks, then
     block selects; NEON: `trn` per element, then per 64 bits), then N

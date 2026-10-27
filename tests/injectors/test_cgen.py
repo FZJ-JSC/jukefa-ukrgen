@@ -219,6 +219,35 @@ int main( void )
             with self.subTest(m=m):
                 self.packm_trans(m=m, isas=isas)
 
+    def test_packm_trans_shufflenet(self):
+        # a block of rows - as many as a vector's lanes - transposed in
+        # registers, its columns stored contiguously: AVX-512's doubles in 3
+        # rounds (AMD's zen4 network, replacing scatters), AVX2's in 2 and
+        # NEON's in 1 (where there were no trans cases: no scatters, no
+        # strided stores) - the same panels as the reference's
+        from tests.specializers.test_native import cpu_has
+        neon_cc = ["aarch64-linux-gnu-gcc", "-static"]
+        runs = (("avx512", "Y.VEC:scatter", ["gcc", "-mavx512f"], [[]], cpu_has("avx512f"), (8, 16), "vshuff64x2"),
+                ("avx256", "Y.VEC:shuffle", ["gcc", "-mavx2", "-mfma"], [[]], cpu_has("avx2"), (4, 8), "vperm2f128"),
+                ("neon", "Y.VEC:shuffle", neon_cc, [[QEMU, "-cpu", "max"]],
+                 bool(shutil.which(neon_cc[0]) and shutil.which(QEMU)), (2, 4), "trn1"))
+        for isa, store, cc, runners, available, rows, inst in runs:
+            for m in rows:
+                with self.subTest(isa=isa, m=m):
+                    self.packm_trans(irmods=["shufflenet", "hoist", "cluster"], expect={isa: inst}, m=m,
+                                     isas={isa: (store, cc, runners, available)})
+
+    def test_shuffle_needs_shufflenet(self):
+        # a shuffle store alone would store its row contiguously: refused
+        from ukrgen.injectors.blis.families import build_packm
+        trans = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"],
+                 "store-tileop": ["Y.VEC:shuffle"], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"]}
+        fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "unroll": 2,
+                                         "cases": [{"kind": "trans", "m": [4], "params": trans}]})
+        built, skipped = build_packm("avx256", "ukrgen_avx256", fam)
+        self.assertEqual([], built)
+        self.assertIn("shufflenet", str(skipped[0][2]))
+
     def packm_trans(self, irmods=None, expect=None, m=3, isas=None):
         """
         A trans family of m rows built and run through BLIS's dispatch
@@ -247,7 +276,8 @@ int main( void )
             if irmods is not None:
                 trans["pre-specialize-irmods"] = irmods
             if m > 4:
-                trans.update({"X-data-regs": str(m), "Y-data-regs": str(m)})
+                # Y a register a row; X streams the rows into the multiply
+                trans.update({"X-data-regs": "4", "Y-data-regs": str(m)})
             fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "unroll": 2,
                                              "cases": [{"kind": "trans", "m": [m], "params": trans}]})
             built, skipped = build_packm(isa, f"ukrgen_{isa}", fam)

@@ -350,6 +350,9 @@ class solve_stage(stage):
         for every register type and vector direction an earlier STO could leave
         it in, into the memory it is stored to
         """
+        # resolutions offered only where named: this STO's tileop values
+        requested = self.params[f"{sto.name}-tileop"].value or [] \
+            if f"{sto.name}-tileop" in self.params else []
         per_component = []
         for comp in sto.store_components:
             memory = sto.memory_of(comp)
@@ -363,6 +366,9 @@ class solve_stage(stage):
                     key = tfr_key(tfs=tfs, rtype=rtype, ddir=dmd.OUT, loc=loc)
                     for rsln in registry.tfr_map.get(key, []):
                         if rsln.unique_tag in seen or not self.steps_supported(rsln, dt):
+                            continue
+                        if rsln.explicit and not any(f"{comp}.{rtype.name}:{rsln.unique_tag}" in v
+                                                     for v in requested):
                             continue
                         seen.add(rsln.unique_tag)
                         stores.append(store_candidate(component=comp, rtype=rtype,
