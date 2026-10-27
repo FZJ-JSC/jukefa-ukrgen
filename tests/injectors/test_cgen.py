@@ -308,6 +308,27 @@ int main( void )
                 with self.subTest(m=m, inst=inst):
                     self.packm_trans(irmods=["+structfuse"], expect={"rvv": inst}, m=m, isas=isas, extra=extra)
 
+    def test_packm_trans_structfuse_scheduled(self):
+        # the K1's trans case - its schedule reorders - with structfuse: 12
+        # rows in 8 and 4, the second step's 8 from row 12. Each part its
+        # registers consecutive wherever its first row's is, and the fused
+        # store reading every one: else a row's multiply was scheduled after
+        # the store (vssseg8 v20 before vfmul v27) - wrong panels from the
+        # second step on
+        import copy
+        from ukrgen.injectors.blis.families import configuration
+        cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
+        available = bool(shutil.which(cc[0]) and shutil.which("qemu-riscv64-static"))
+        cfg = configuration.from_files({("packm", "FP64"): os.path.join(HERE, "..", "..", "ukrconfig", "rvv", "k1",
+                                                                        "dpackm.yaml")})
+        base = cfg.families[0]
+        name, _, params = next(c for c in base.cases if "trans" == base.case_kinds.get(c[0], c[0]))
+        fam = copy.deepcopy(base)
+        fam.cases = [(name, [12], dict(params, **{"pre-specialize-irmods": ["+structfuse"], "X-data-regs": "4"}))]
+        self.packm_trans(m=12, fam=fam, expect={"rvv": "vssseg8e64.v"},
+                         isas={"rvv": (None, cc, [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"]
+                                                  for v in (128, 256)], available)})
+
     def test_packm_trans_shufflenet(self):
         # a block of rows - as many as a vector's lanes - transposed in
         # registers, its columns stored contiguously (the shuffle stores,

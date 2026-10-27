@@ -151,20 +151,35 @@ class structfuse(lsc_irmod):
                 sigs = {s: struct_sigs(gen, "store", dt, s, strided) for s in set(parts) if s > 1}
                 ways = max(parts)
                 known = program.groups.get(comp)
-                if not sigs or not all(sigs.values()) or (known is not None and known[0] != ways):
+                if not sigs or not all(sigs.values()) or (known is not None and len(known) < 3):
                     continue
-                program.groups[comp] = (ways, "STRUCT")
+                # each part a group of its own - its registers consecutive,
+                # wherever its first row's is (a step's rows needn't start at
+                # a multiple of the widest part: 12 rows in 8 and 4, the
+                # second step's 8 from row 12)
+                partitions = dict(known[2]) if known is not None else {}
                 row = 0
                 for s in parts:
                     if s > 1:
-                        fused = copy.deepcopy(ops[members[row]])
+                        part = [ops[members[row + p]] for p in range(s)]
+                        fused = copy.deepcopy(part[0])
                         if not strided:
                             fused.properties.pop("stride_index", None)
                         fused.add_property("group", s)
                         fused.sigs = sigs[s]
+                        # it reads every row's register, each with its row's
+                        # tile: schedulers see the members, not only the first
+                        extra = range(len(fused.indices), len(fused.indices) + s - 1)
+                        fused.indices = list(fused.indices) + [op.indices[1] for op in part[1:]]
+                        fused.tiles = list(fused.tiles) + [op.tiles[1] for op in part[1:]]
+                        fused.reads = list(fused.reads) + list(extra)
+                        fused.rtypes = list(fused.rtypes) + [op.rtypes[1] for op in part[1:]]
+                        fused.reg_types = list(fused.reg_types) + [op.reg_types[1] for op in part[1:]]
+                        partitions[part[0].indices[1].indices[0]] = s
                         fused_at[members[row]] = fused
                         dropped.update(members[row + 1:row + s])
                     row += s
+                program.groups[comp] = (ways, "STRUCT", partitions)
             if fused_at:
                 setattr(block, section, [fused_at.get(k, op) for k, op in enumerate(ops) if k not in dropped])
                 changed += len(fused_at)

@@ -447,7 +447,26 @@ class signature_emitter:
         """
         key = (idx.component, idx.indices[0], rtype)
         group = self.program.groups.get(idx.component)
-        if key not in self.phys and group is not None and rgt.VEC == rtype:
+        parts = group[2] if group is not None and len(group) > 2 else None
+        if key not in self.phys and parts is not None and rgt.VEC == rtype:
+            # a group's parts each a group of its own (structfuse): a part's
+            # registers consecutive wherever there's room, its rows wherever
+            # its first is; a register in none ungrouped
+            part = next(((s, n) for s, n in parts.items() if s <= idx.indices[0] < s + n), None)
+            if part is not None:
+                first, size = part
+                used = self.rt.get_used_regs("vreg")
+                start = next((s for s in range(0, self.gen.max_vregs() - size + 1)
+                              if not any(s + p in used for p in range(size))), None)
+                if start is None:
+                    raise specialization_error(f"no {size} consecutive vector registers left for "
+                                               f"{idx.component}{first}")
+                for p in range(size):
+                    self.rt.reserve_specific_reg("vreg", start + p)
+                    member = (idx.component, first + p, rtype)
+                    self.phys[member] = self.gen.vreg(start + p)
+                    self.numbers[member] = ("vreg", start + p)
+        elif key not in self.phys and group is not None and rgt.VEC == rtype:
             # a group of registers: all of them at once, consecutive and
             # starting at a multiple of their number (RVV's groups need that,
             # SVE's structure loads and stores take consecutive ones)

@@ -42,7 +42,11 @@ def _key(op, pos, groups=None) -> tuple:
     number = idx.indices[0]
     group = (groups or {}).get(idx.component)
     if group is not None and isinstance(number, int):
-        number -= number % group[0]
+        if len(group) > 2:
+            # parts each a group of their own (structfuse): a member its part
+            number = next((s for s, n in group[2].items() if s <= number < s + n), number)
+        else:
+            number -= number % group[0]
     return (op.reg_types[pos], idx.component, number,
             rtypes[pos] if pos < len(rtypes) else None)
 
