@@ -205,6 +205,14 @@ class test_irmod_changes(unittest.TestCase):
         self.assertTrue(res.completed, res.output)
         self.assertTrue(any(line.startswith("st3d") for line in ctx.emitted[0].code))
 
+    def test_a_string_of_changes(self):
+        # a sweep's grid gives one value, a string: its changes by commas or spaces
+        for value in ("+structfuse", "+structfuse, -cluster"):
+            with self.subTest(value=value):
+                ctx, res = self.pack("sve", value)
+                self.assertTrue(res.completed, res.output)
+                self.assertTrue(any(line.startswith("st3d") for line in ctx.emitted[0].code))
+
     def test_names_or_changes(self):
         from ukrgen.flow.stages.stage import stage_error
         with self.assertRaises(stage_error) as caught:

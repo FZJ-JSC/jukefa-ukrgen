@@ -108,6 +108,23 @@ PER_COMPONENT = {"max-data-regs": "{c}-max-data-regs", "max-preload": "{c}-max-p
                  "max-addr-regs": "{c}-addr-regs", "addr-pattern": "{c}-addr-pattern"}
 #: the loop a family's unroll is along
 UNROLL = {"gemm": "k", "packm": "n"}
+#: the keys a family's YAML knows, by where they go - a flow parameter of
+#: anything else goes under params:
+_COMMON = set(KEYS) | set(PER_COMPONENT) | {"unroll"}
+FAMILY_KEYS = _COMMON | {"family", "dtypes", "params", "m", "n", "default", "cases", "split", "parts",
+                         "split-ratios", "min-inflight", "align", "c-storage", "dispatch", "vec-rest", "lmul",
+                         # a file of one family is its entry: the file's own keys with it
+                         "isa", "blocksizes"}
+CASE_KEYS = _COMMON | {"kind", "m", "name", "params", "lmul", "mask"}
+PART_KEYS = _COMMON | {"params", "tileop-preset", "tileop-vectorize", "m", "n"}
+
+
+def check_keys(where: str, entry: dict, known: set):
+    """a key the YAML doesn't know refused - not dropped without a word"""
+    unknown = sorted(set(entry) - known)
+    if unknown:
+        raise ValueError(f"{where}: no key {', '.join(unknown)} there - a flow parameter goes under "
+                         f"params: (the keys there: {', '.join(sorted(known - {'params'}))})")
 
 
 def key_params(kind: str, entry: dict) -> dict:
@@ -229,6 +246,12 @@ class family:
 
     @staticmethod
     def from_yaml(kind: str, entry: dict) -> "family":
+        check_keys(f"{kind} family {entry.get('family')}", entry, FAMILY_KEYS)
+        for case in entry.get("cases") or []:
+            check_keys(f"{kind} family {entry.get('family')}, case {case.get('name') or case.get('kind')}",
+                       case, CASE_KEYS)
+        for i, part in enumerate(entry.get("parts") or []):
+            check_keys(f"{kind} family {entry.get('family')}, part {i}", part, PART_KEYS)
         sizes = {idx: parse_sizes(entry[idx]) for idx in ("m", "n") if idx in entry}
         default = {}
         for dt, size in (entry.get("default") or {}).items():

@@ -149,30 +149,38 @@ structures cdim apart:
 
 ## A family's choices (YAML)
 
-Done in part (ukrgen 0197): `dispatch: [trans_shuffle, gather, vec]` - the
-cases the dispatch tries, in order, by name, the others not built - and a
-case's `name` (two strategies of a kind side by side); ukropt's grid sweeps
-them (`--blis`). Then (ukrgen 0200): `vec-rest` - the rows a vec case packs beyond its own -
-and passes toggled without restating the defaults (`pre-specialize-irmods: [+structfuse,
--cluster]`); RVV's LMUL by size (ukrgen 0201: `lmul: 2` - m2 where it divides a vec case's vectors,
-m1 for the odd counts - or a map). Possible: copy cases for kappa 1 (the dispatch trying them where
-`*kappa == 1`; today every case multiplies). Splits (ukrgen 0202): `structfuse`'s `fields` - the most rows one structure store takes, a
-step's rows beyond it parted greedily (12 = 8 + 4; `fields` 3: 5 = 3 + 2), each part a strided
-segment store (asmgen 0090, A7: RVV's vlsseg, vssseg) - sweepable as `structfuse-fields`; SVE,
-with no strided structures, keeps its rows beyond 4. Still to come: `masks`.
+What the plan's sketches became - each a packm family's to choose, and
+ukropt's `--blis` grid to sweep:
 
-- **Splits**: per cdim, how its rows are parted among structure stores -
-  `struct-split: {7: [4, 3], 5: [2, 3]}`; by default as many of the widest
-  as fit, then the rest (7: 4 + 3 on RVV); all ones (`[1, 1, 1]`) the
-  strided stores of today - the old trans implementation by the same key.
-- **Implementations in the dispatch**: which a packm family's dispatch
-  tries, in order - `packm-dispatch: [vec, maskvec, shuffle, struct, tile,
-  masktile]` - each where the ISA has it (struct where it stores
-  structures, shuffle where vectors are fixed, tile on SME), the reference
-  for the rest.
-- **Masks** as a switch rather than methods of their own: `masks: on`
-  making vec and tile take a last partial vector or tile under a mask of
-  its first M lanes (maskvec, masktile), off keeping them to whole ones.
+- **Which cases, in which order** (sketched as `packm-dispatch: [vec,
+  maskvec, shuffle, struct, tile, masktile]`): the family's `dispatch:
+  [names]` (ukrgen 0197) - the cases its dispatch tries, in that order, the
+  others not built. A strategy is a case: its `kind` (vec, gather, trans)
+  says what it packs, its `name` which of a kind it is - `name:
+  trans_shuffle` with `store-tileop: ['Y.VEC:shuffle']`, `name: vtail` with
+  `mask: true`. Default: masked vec cases, vec, gather, trans.
+- **Splits** (sketched as `struct-split: {7: [4, 3]}`): structfuse's
+  `fields` (ukrgen 0202) - the most rows one structure store takes, a
+  step's rows beyond it parted greedily (12 = 8 + 4; `fields` 3: 5 = 3 +
+  2), each part a strided segment store on RVV (asmgen 0090); a flow
+  parameter, `structfuse-fields`, under a case's `params:`.
+- **Masks** (sketched as `masks: on`): a vec case's `mask: true` (ukrgen
+  0203) - size N packs N vectors and a last one masked to the rows left,
+  cdim from N*VL to (N+1)*VL in one pass. SVE's; AVX-512's and RVV's to
+  come.
+- And: `vec-rest` (0200), the rows a vec case packs beyond its own; `lmul`
+  (0201), RVV's LMUL by size; passes toggled against the defaults,
+  `pre-specialize-irmods: [+structfuse, -cluster]` (0200) - a flow
+  parameter, so under `params:`; a string in a grid (`+structfuse`). Keys a
+  family's YAML doesn't know are refused (0204) - a flow parameter beside
+  `m:` used to vanish.
+
+Where each goes: `dispatch`, `vec-rest`, `lmul` (a default) on the family;
+`kind`, `name`, `m`, `mask`, `lmul` on a case; flow parameters - irmods,
+`structfuse-fields`, layouts, tileops - under a case's (or the family's)
+`params:`. Possible: copy cases for kappa 1 - gemm's alpha and beta cases'
+mechanism (a branch in the kernel) or the dispatch trying them where
+`*kappa == 1`; today every case multiplies.
 
 ## Vectors along cdim under a predicate: cdim = n·VL + M
 

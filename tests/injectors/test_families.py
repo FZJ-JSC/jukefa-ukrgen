@@ -301,6 +301,20 @@ class test_packm_dispatch_choices(unittest.TestCase):
         self.assertEqual([], built)
         self.assertIn("lmul 2 and rvv-LMUL 1", str(skipped[0][2]))
 
+    def test_unknown_keys_refused(self):
+        # a key a family's YAML doesn't know - a flow parameter beside m: -
+        # refused, pointing to params:, not dropped without a word
+        from ukrgen.injectors.blis.families import family
+        trans = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"]}
+        for entry in ({"family": "pk", "dtypes": ["FP64"],
+                       "cases": [{"kind": "trans", "m": [4], "pre-specialize-irmods": ["+structfuse"], "params": trans}]},
+                      {"family": "pk", "dtypes": ["FP64"], "pre-specialize-irmods": ["+structfuse"],
+                       "cases": [{"kind": "trans", "m": [4], "params": trans}]}):
+            with self.subTest(entry=sorted(entry)), self.assertRaises(ValueError) as caught:
+                family.from_yaml("packm", entry)
+            self.assertIn("no key pre-specialize-irmods", str(caught.exception))
+            self.assertIn("params:", str(caught.exception))
+
     def test_order_and_what_is_built(self):
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import packm_dispatch

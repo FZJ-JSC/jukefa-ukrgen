@@ -66,7 +66,12 @@ class irmod_stage_base(stage):
         changes (+name, -name), the defaults with those added and removed, in
         the modifications' usual order (a sweep toggling one)
         """
-        given = list((self.params[self.option].value if self.option in self.params else None) or [])
+        value = self.params[self.option].value if self.option in self.params else None
+        # a string - one given as a value, not a list (a sweep's grid): its
+        # names or changes, by commas or spaces
+        if isinstance(value, str):
+            value = [v for v in value.replace(",", " ").split() if v]
+        given = list(value or [])
         changes = [g for g in given if g[:1] in "+-"]
         if not changes:
             return given
