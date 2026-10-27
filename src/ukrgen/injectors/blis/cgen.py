@@ -408,76 +408,92 @@ def packm_prototype(config_name: str, dtype: str) -> str:
     return f"void bli_{DT_CHAR[dtype]}packm_{config_name}\n{PACKM_SIGNATURE};"
 
 
-def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel]) -> str:
+def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: list | None = None) -> str:
     """
-    The data type's packm: a full panel - cdim of cdim_max rows, n of n_max,
-    no broadcast, P's rows cdim apart - of a size a case packs goes to that
-    case: vec where A is contiguous along cdim (inca 1), trans where along
-    the panel (lda 1); everything else to the reference, which also fills
-    the edges
+    The data type's packm: each case a block of its own, tried in order -
+    the family's dispatch (by case name), else vec, gather, trans as the
+    config has them - and everything else the reference's, which also fills
+    the edges. vec, gather cases taking P's leading dimension pack the
+    vectors of any cdim from theirs to theirs plus PACKM_REST (inca 1 for
+    vec, lda 1 for gather), the reference the rows left; a full panel - cdim
+    of cdim_max rows, n of n_max, no broadcast, P's rows cdim apart - of a
+    size a case packs goes to that case: vec where A is contiguous along
+    cdim (inca 1), trans where along the panel (lda 1)
     """
     ctype, ch = CTYPE[dtype], DT_CHAR[dtype]
     mine = [k for k in kernels if dtype == k.dtype and k.case]
-    decls, branches = [], {"vec": [], "trans": []}
-    # vec cases taking P's leading dimension: the vectors of any cdim from
-    # theirs to theirs plus PACKM_REST, the reference the rows left - and a
-    # narrower panel's edge - the most vectors first
-    strided = sorted([k for k in mine if k.case in ("vec", "gather") and "stride(Y,n)" in k.params],
-                     key=lambda k: tuple(-x for x in split_size(k.mr)))
-    bad = [k.symbol for k in mine if "gather" == k.case and k not in strided]
+    kind_of = lambda k: k.kind or k.case
+    bad = [k.symbol for k in mine if "gather" == kind_of(k) and "stride(Y,n)" not in k.params]
     if bad:
         raise ValueError(f"gather cases take P's leading dimension (Y-layout [m:c, n:s]): {bad}")
-    rows = {"vec": [], "gather": []}
-    for k in strided:
-        unknown = [p for p in k.params if p not in PACKM_ARGS]
-        if unknown:
-            raise ValueError(f"{k.symbol}: no BLIS argument for its parameters {unknown}")
-        decls.append(f"void {asm_symbol(k)}( {', '.join(PACKM_ARGS[p][0] for p in k.params)} );")
-        args = ", ".join(PACKM_ARGS[p][1].format(ctype=ctype) for p in k.params)
-        rows[k.case].append(f"""\
-		{{
-			const dim_t done = {c_expr(k.mr, ctype, k.vl_fn)};
-			if ( done <= cdim && cdim - done <= {PACKM_REST} )
-			{{
-				{asm_symbol(k)}( {args} );
-				if ( done < cdim_max )
-					bli_{ch}{ch}packm_{config_name}_ref( conja, schema, cdim - done, cdim_max - done,
-					    cdim_bcast, n, n_max, kappa, ( const {ctype}* )a + done * inca, inca, lda,
-					    ( {ctype}* )p + done, ldp, params, cntx );
-				return;
-			}}
-		}}""")
-    vectors_first = "\n".join(rows["vec"])
-    gathered_first = "\n".join(rows["gather"])
-    mine = [k for k in mine if k not in strided]
     for k in mine:
         unknown = [p for p in k.params if p not in PACKM_ARGS]
         if unknown:
             raise ValueError(f"{k.symbol}: no BLIS argument for its parameters {unknown}")
-        decls.append(f"void {asm_symbol(k)}( {', '.join(PACKM_ARGS[p][0] for p in k.params)} );")
+    names = list(dict.fromkeys(k.case for k in mine))
+    if order is None:
+        rank = {"vec": 0, "gather": 1, "trans": 2}
+        names.sort(key=lambda n: rank.get(kind_of(next(k for k in mine if n == k.case)), 3))
+    else:
+        names = [n for n in order if n in names]
+    decls = [f"void {asm_symbol(k)}( {', '.join(PACKM_ARGS[p][0] for p in k.params)} );"
+             for n in names for k in mine if n == k.case]
+
+    def row(k):
+        args = ", ".join(PACKM_ARGS[p][1].format(ctype=ctype) for p in k.params)
+        return f"""\
+\t\t{{
+\t\t\tconst dim_t done = {c_expr(k.mr, ctype, k.vl_fn)};
+\t\t\tif ( done <= cdim && cdim - done <= {PACKM_REST} )
+\t\t\t{{
+\t\t\t\t{asm_symbol(k)}( {args} );
+\t\t\t\tif ( done < cdim_max )
+\t\t\t\t\tbli_{ch}{ch}packm_{config_name}_ref( conja, schema, cdim - done, cdim_max - done,
+\t\t\t\t\t    cdim_bcast, n, n_max, kappa, ( const {ctype}* )a + done * inca, inca, lda,
+\t\t\t\t\t    ( {ctype}* )p + done, ldp, params, cntx );
+\t\t\t\treturn;
+\t\t\t}}
+\t\t}}"""
+
+    def branch(k):
         if "VL" == k.loop_unit:
             # chunks of a vector length along the panel; the reference takes
             # what's left of one - A and P from the first column it packs
             vl = f"{k.vl_fn}( sizeof( {ctype} ) )"
             args = ", ".join("chunks" if "n" == p else PACKM_ARGS[p][1].format(ctype=ctype)
                              for p in k.params)
-            branches[k.case].append(f"""\
-		if ( cdim == {c_expr(k.mr, ctype, k.vl_fn)} )
-		{{
-			const dim_t chunks = n / {vl}, done = chunks * {vl};
-			if ( chunks ) {asm_symbol(k)}( {args} );
-			if ( done < n )
-				bli_{ch}{ch}packm_{config_name}_ref( conja, schema, cdim, cdim_max, cdim_bcast,
-				    n - done, n_max - done, kappa, ( const {ctype}* )a + done * lda, inca, lda,
-				    ( {ctype}* )p + done * ldp, ldp, params, cntx );
-			return;
-		}}""")
-        else:
-            args = ", ".join(PACKM_ARGS[p][1].format(ctype=ctype) for p in k.params)
-            branches[k.case].append(
-                f"\t\tif ( cdim == {c_expr(k.mr, ctype, k.vl_fn)} ) {{ {asm_symbol(k)}( {args} ); return; }}")
-    vec = "\n".join(branches["vec"])
-    trans = "\n".join(branches["trans"])
+            return f"""\
+\t\tif ( cdim == {c_expr(k.mr, ctype, k.vl_fn)} )
+\t\t{{
+\t\t\tconst dim_t chunks = n / {vl}, done = chunks * {vl};
+\t\t\tif ( chunks ) {asm_symbol(k)}( {args} );
+\t\t\tif ( done < n )
+\t\t\t\tbli_{ch}{ch}packm_{config_name}_ref( conja, schema, cdim, cdim_max, cdim_bcast,
+\t\t\t\t    n - done, n_max - done, kappa, ( const {ctype}* )a + done * lda, inca, lda,
+\t\t\t\t    ( {ctype}* )p + done * ldp, ldp, params, cntx );
+\t\t\treturn;
+\t\t}}"""
+        args = ", ".join(PACKM_ARGS[p][1].format(ctype=ctype) for p in k.params)
+        return f"\t\tif ( cdim == {c_expr(k.mr, ctype, k.vl_fn)} ) {{ {asm_symbol(k)}( {args} ); return; }}"
+
+    blocks = []
+    for name in names:
+        ks = [k for k in mine if name == k.case]
+        kind = kind_of(ks[0])
+        along = "inca == 1" if "vec" == kind else "lda == 1"
+        # taking P's leading dimension: any cdim from theirs, the most vectors first
+        strided = sorted([k for k in ks if "stride(Y,n)" in k.params],
+                         key=lambda k: tuple(-x for x in split_size(k.mr)))
+        full = [k for k in ks if k not in strided]
+        if strided:
+            note = "A's rows inca apart, gathered into vectors along cdim" if "gather" == kind else name
+            blocks.append(f"\t// {note}\n\tif ( cdim_bcast == 1 && n == n_max && {along} )\n\t{{\n"
+                          + "\n".join(row(k) for k in strided) + "\n\t}")
+        if full:
+            blocks.append(f"\t// {name}: a full panel\n\tif ( cdim_bcast == 1 && cdim == cdim_max && n == n_max "
+                          f"&& ldp == cdim && {along} )\n\t{{\n" + "\n".join(branch(k) for k in full)
+                          + "\n\t}")
+    body = "\n".join(blocks)
     return f"""\
 {chr(10).join(decls)}
 
@@ -488,27 +504,8 @@ void bli_{ch}{ch}packm_{config_name}_ref
 void bli_{ch}packm_{config_name}
 {PACKM_SIGNATURE}
 {{
-	if ( cdim_bcast == 1 && n == n_max && inca == 1 )
-	{{
-{vectors_first}
-	}}
-	if ( cdim_bcast == 1 && n == n_max && lda == 1 )
-	{{
-		// A's rows inca apart, gathered into vectors along cdim
-{gathered_first}
-	}}
-	if ( cdim_bcast == 1 && cdim == cdim_max && n == n_max && ldp == cdim )
-	{{
-		if ( inca == 1 )
-		{{
-{vec}
-		}}
-		if ( lda == 1 )
-		{{
-{trans}
-		}}
-	}}
-	bli_{ch}{ch}packm_{config_name}_ref( conja, schema, cdim, cdim_max, cdim_bcast, n, n_max,
-	                              kappa, a, inca, lda, p, ldp, params, cntx );
+{body}
+\tbli_{ch}{ch}packm_{config_name}_ref( conja, schema, cdim, cdim_max, cdim_bcast, n, n_max,
+\t                              kappa, a, inca, lda, p, ldp, params, cntx );
 }}
 """

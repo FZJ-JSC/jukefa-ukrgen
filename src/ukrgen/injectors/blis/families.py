@@ -139,7 +139,12 @@ def key_params(kind: str, entry: dict) -> dict:
     The ukrgen parameters a family's keys set: unroll (k for gemm, n for
     packm), loop-order, resolve-order, schedule (scheduler distance specs),
     and per component max-data-regs, max-preload, max-addr-regs and
-    addr-pattern (rotate, blocked:<n or an expression of m, n, k and R>, phase)
+    addr-pattern (rotate, blocked:<n or an expression of m, n, k and R>, phase).
+    A packm family's own keys (not ukrgen parameters): dispatch, the cases
+    its dispatch tries in order by name - the others neither built nor
+    tried (default: every case, vec, gather, trans); a case's name, its
+    kind's unless given (two strategies of a kind side by side:
+    name: trans_shuffle)
     """
     params = {}
     if "unroll" in entry:
@@ -201,10 +206,16 @@ class family:
     params: dict
     sizes: dict[str, list[int]]
     default: dict[str, tuple] = field(default_factory=dict)
-    #: packm: the cases accelerated - (kind, sizes, params): vec (cdim m
-    #: vectors, A contiguous along cdim), trans (cdim m elements, A
-    #: contiguous along the panel's length)
+    #: packm: the cases accelerated - (name, sizes, params): vec (cdim m
+    #: vectors, A contiguous along cdim), gather, trans (cdim m elements, A
+    #: contiguous along the panel's length); a case's name its kind's unless
+    #: it names itself (name: trans_shuffle) - two of a kind side by side
     cases: list[tuple] = field(default_factory=list)
+    #: packm: each case's kind by its name (vec, gather, trans)
+    case_kinds: dict = field(default_factory=dict)
+    #: packm: the cases the dispatch tries, in this order, by name - the
+    #: others neither built nor tried; None: every case, vec, gather, trans
+    dispatch: list | None = None
     #: a split microtile: the index split, and per part its parameters and
     #: sizes along that index
     split: str | None = None
@@ -227,9 +238,23 @@ class family:
             # 8x3, or a split's parts along an index: 2+2x4
             default[dt] = tuple(parse_sizes(v)[0] for side in str(size).replace(" ", "").split("x")
                                 for v in side.split("+"))
-        cases = [(case["kind"], parse_sizes(case["m"]),
+        cases = [(case.get("name") or case["kind"], parse_sizes(case["m"]),
                   {**key_params(kind, case), **dict(case.get("params") or {})})
                  for case in (entry.get("cases") or [])]
+        # a name's cases one kind (unnamed ones of a kind: its sizes apart)
+        named = {}
+        for case in entry.get("cases") or []:
+            named.setdefault(case.get("name") or case["kind"], set()).add(case["kind"])
+        mixed = {name: sorted(kinds) for name, kinds in named.items() if len(kinds) > 1}
+        if mixed:
+            raise ValueError(f"{kind} family {entry['family']}: a name's cases of kinds {mixed}")
+        case_kinds = {name: kinds.pop() for name, kinds in named.items()}
+        dispatch = entry.get("dispatch")
+        if dispatch is not None:
+            unknown = [d for d in dispatch if d not in case_kinds]
+            if unknown:
+                raise ValueError(f"{kind} family {entry['family']}: dispatch names no case {unknown} "
+                                 f"(the cases: {sorted(case_kinds)})")
         # the keys first, explicit params over them
         params = key_params(kind, entry)
         params.update(entry.get("params") or {})
@@ -268,7 +293,7 @@ class family:
                 except ValueError as err:
                     raise ValueError(f"{kind} family {entry['family']}{where}: schedule {err}") from err
         inflight = entry.get("min-inflight")
-        return family(kind=kind, name=entry["family"], dtypes=list(entry.get("dtypes", ["FP64"])),
+        return family(kind=kind, name=entry["family"], case_kinds=case_kinds, dispatch=dispatch, dtypes=list(entry.get("dtypes", ["FP64"])),
                       params=params, sizes=sizes, default=default, cases=cases,
                       split=split, parts=parts, ratios=ratios,
                       min_inflight=int(inflight) if inflight is not None else None,
@@ -362,6 +387,8 @@ class kernel:
     vl_fn: str = "ukrgen_vl"
     #: packm: the case (vec, trans)
     case: str = ""
+    #: a packm case's kind (vec, gather, trans) - its name (case) its own
+    kind: str = ""
     #: its loop parameter counts chunks of a vector length ("VL"), not elements
     loop_unit: str = ""
     #: its assembly where built in another process (the program stays there)
@@ -538,7 +565,7 @@ def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: in
                        for p in ctx.programs for b in p.blocks
                        if b.step is not None) else ""
     return _done(kernel(family=fam.name, dtype=dt, size=(m, 1), mr=cdim, nr="1", symbol=symbol,
-                        params=list(program.params), c_layout="col", program=program, case=case,
+                        params=list(program.params), c_layout="col", program=program, case=case, kind=fam.case_kinds.get(case, case),
                         loop_unit=unit, simd_size_c=ctx.gen.c_simd_size_function),
                  detach)
 
@@ -550,8 +577,10 @@ def build_packm(isa: str, config_name: str, fam: family,
     a full panel of cdim (mr) rows, n long, scaled by kappa - and (data type,
     (case, size), reason) for each it can't
     """
+    # the cases the dispatch tries, where it names them: only those built
     tasks = [(isa, config_name, fam, dt, case, m, case_params)
-             for dt in fam.dtypes for case, ms, case_params in fam.cases for m in ms]
+             for dt in fam.dtypes for case, ms, case_params in fam.cases for m in ms
+             if fam.dispatch is None or case in fam.dispatch]
     return _collect(run_tasks(packm_one, tasks, jobs))
 
 

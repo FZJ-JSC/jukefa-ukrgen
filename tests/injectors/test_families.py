@@ -234,6 +234,55 @@ class test_family_schedule(unittest.TestCase):
         self.assertEqual("vn", family.from_yaml("gemm", entry).name)
 
 
+class test_packm_dispatch_choices(unittest.TestCase):
+    """
+    A packm family's dispatch - which cases it tries, in which order - and
+    its cases' names (two of a kind side by side): the family's to choose,
+    for tuning
+    """
+    TRANS = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"],
+             "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"], "X-data-regs": "4", "Y-data-regs": "8"}
+    GATHER = {"pack-tileop": ["mul(X.VEC:gather, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+              "store-tileop": ["Y.VEC:direct"], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:s"]}
+
+    def family(self, **extra):
+        from ukrgen.injectors.blis.families import family
+        return family.from_yaml("packm", {"family": "pk", "dtypes": ["FP64"], **extra, "cases": [
+            {"kind": "gather", "m": [1], "params": self.GATHER},
+            {"kind": "trans", "name": "trans_shuffle", "m": [8],
+             "params": dict(self.TRANS, **{"store-tileop": ["Y.VEC:shuffle"]})},
+            {"kind": "trans", "name": "trans_scatter", "m": [8],
+             "params": dict(self.TRANS, **{"store-tileop": ["Y.VEC:scatter"]})}]})
+
+    def test_names_and_kinds(self):
+        fam = self.family()
+        self.assertEqual({"gather": "gather", "trans_shuffle": "trans", "trans_scatter": "trans"}, fam.case_kinds)
+        from ukrgen.injectors.blis.families import family
+        with self.assertRaises(ValueError):
+            self.family(dispatch=["trans", "gather"])        # no case named trans
+        with self.assertRaises(ValueError):
+            family.from_yaml("packm", {"family": "pk", "dtypes": ["FP64"], "cases": [
+                {"kind": "vec", "name": "x", "m": [1]}, {"kind": "trans", "name": "x", "m": [4]}]})
+
+    def test_order_and_what_is_built(self):
+        from ukrgen.injectors.blis.families import build_packm
+        from ukrgen.injectors.blis.cgen import packm_dispatch
+        # AVX-512: both trans strategies of 8 rows beside each other, gather
+        fam = self.family()
+        built, skipped = build_packm("avx512", "ukrgen_avx512", fam)
+        self.assertEqual(["gather", "trans_scatter", "trans_shuffle"], sorted({k.case for k in built}), skipped)
+        self.assertEqual({"trans"}, {k.kind for k in built if k.case.startswith("trans")})
+        default = packm_dispatch("ukrgen_avx512", "FP64", built)
+        self.assertLess(default.index("gathered into vectors"), default.index("trans_shuffle: a full panel"))
+        chosen = packm_dispatch("ukrgen_avx512", "FP64", built, ["trans_shuffle", "gather", "trans_scatter"])
+        self.assertLess(chosen.index("trans_shuffle: a full panel"), chosen.index("gathered into vectors"))
+        self.assertLess(chosen.index("gathered into vectors"), chosen.index("trans_scatter: a full panel"))
+        # the cases the dispatch doesn't name: not built
+        built, _ = build_packm("avx512", "ukrgen_avx512", self.family(dispatch=["trans_shuffle", "gather"]))
+        self.assertEqual(["gather", "trans_shuffle"], sorted({k.case for k in built}))
+
+
+
 
 if __name__ == "__main__":
     unittest.main()
