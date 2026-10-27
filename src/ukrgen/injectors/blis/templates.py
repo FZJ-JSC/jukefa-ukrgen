@@ -34,120 +34,12 @@ components = {
 
 */
 """,
-    "cntx_set_kernels" : """
-    bli_cntx_set_ukrs(
-        cntx,
-    // inherited kernels
-    % for kind,type,name in existing_kernels:
-        BLIS_${kind}, BLIS_${type}, ${name},
-    % endfor
-
-    // generated kernels
-    % for kind,type,name in kernels:
-        BLIS_${kind}, BLIS_${type}, ${name},
-    % endfor
-
-        BLIS_VA_END
-    );
-""",
-    "cntx_set_kernel_prefs" : """
-    bli_cntx_set_ukr_prefs(
-        cntx,
-
-    % for kind,type,_ in kernels:
-        BLIS_${kind}_ROW_PREF, BLIS_${type}, FALSE,
-    % endfor
-
-        BLIS_VA_END
-    );
-""",
-    "cntx_set_blocksizes" : """
-
-    const uint32_t mr_in_mc_d = bli_env_get_var("BLIS_MR_IN_MC_D", 16);
-    const uint32_t mr_in_mc_s = bli_env_get_var("BLIS_MR_IN_MC_S", 16);
-    const uint32_t nr_in_nc_d = bli_env_get_var("BLIS_NR_IN_NC_D", 200);
-    const uint32_t nr_in_nc_s = bli_env_get_var("BLIS_NR_IN_NC_S", 200);
-    const uint32_t kc_d = bli_env_get_var("BLIS_KC_D", 256);
-    const uint32_t kc_s = bli_env_get_var("BLIS_KC_S", 256);
-
-    // TODO: vecdir
-    const uint32_t mr_d = ${mr_d};
-    const uint32_t mr_s = ${mr_s};
-    const uint32_t nr_d = ${nr_d};
-    const uint32_t nr_s = ${nr_s};
-
-    const uint32_t nc_d = nr_in_nc_d*nr_d;
-    const uint32_t nc_s = nr_in_nc_s*nr_s;
-
-    const uint32_t mc_d = mr_in_mc_d*mr_d;
-    const uint32_t mc_s = mr_in_mc_s*mr_s;
-
-    // Initialize level-3 blocksize objects with architecture-specific values.
-    //                                              s        d        c        z
-    bli_blksz_init_easy( &blkszs[ BLIS_MR ],     mr_s,    mr_d,      -1,      -1 );
-    bli_blksz_init_easy( &blkszs[ BLIS_NR ],     nr_s,    nr_d,      -1,      -1 );
-    bli_blksz_init_easy( &blkszs[ BLIS_MC ],     mc_s,    mc_d,      -1,      -1 );
-    bli_blksz_init_easy( &blkszs[ BLIS_KC ],     kc_s,    kc_d,      -1,      -1 );
-    bli_blksz_init_easy( &blkszs[ BLIS_NC ],     nc_s,    nc_d,      -1,      -1 );
-
-    bli_cntx_set_blkszs
-    (
-      cntx,
-
-      // level-3
-      BLIS_NC, &blkszs[ BLIS_NC ], BLIS_NR,
-      BLIS_KC, &blkszs[ BLIS_KC ], BLIS_KR,
-      BLIS_MC, &blkszs[ BLIS_MC ], BLIS_MR,
-      BLIS_NR, &blkszs[ BLIS_NR ], BLIS_NR,
-      BLIS_MR, &blkszs[ BLIS_MR ], BLIS_MR,
-
-      BLIS_VA_END
-    );
-"""
 }
 
 files = {
     "config/${configname}/bli_kernel_defs_${configname}.h" : """
 ${license}
 // Nothing here atm
-""",
-    "kernels/${configname}/bli_family_${configname}.h" : """
-${license}
-// Nothing here atm
-""",
-    "kernels/${configname}/bli_kernels_${configname}.h" : """
-${license}
-<% dtchars = {"FLOAT" : "s", "DOUBLE" : "d"} %>
-% for kind,type,name in kernels:
-GEMM_UKR_PROT(${type.lower()}, ${dtchars[type]}, ${name[5:]})
-% endfor
-""",
-    "config/${configname}/bli_cntx_init_${configname}.c" : """
-
-${license}
-
-#include "blis.h"
-
-${cntx_extra_defs}
-
-void bli_cntx_init_${configname}( cntx_t* cntx )
-{
-	blksz_t blkszs[ BLIS_NUM_BLKSZS ];
-
-	// Set default kernel blocksizes and functions.
-	bli_cntx_init_${configname}_ref( cntx );
-
-	// -------------------------------------------------------------------------
-
-    ${cntx_init_extra}
-
-
-    ${cntx_set_kernels}
-
-    ${cntx_set_kernel_prefs}
-
-    ${cntx_set_blocksizes}
-}
 """,
     "config/${configname}/make_defs.mk" : """
 THIS_CONFIG    := ${configname}
