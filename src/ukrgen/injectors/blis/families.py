@@ -114,7 +114,8 @@ def key_params(kind: str, entry: dict) -> dict:
     """
     The ukrgen parameters a family's keys set: unroll (k for gemm, n for
     packm), loop-order, resolve-order, schedule (scheduler distance specs),
-    and per component max-data-regs, max-preload, max-addr-regs and
+    and per component max-data-regs, max-preload, max-addr-regs (a number or
+    an expression of m, n, k, e) and
     addr-pattern (rotate, blocked:<n or an expression of m, n, k and R>, phase).
     A packm family's own keys (not ukrgen parameters): dispatch, the cases
     its dispatch tries in order by name - the others neither built nor

@@ -66,9 +66,6 @@ class test_patterns(unittest.TestCase):
                     addr_pattern.parse(spec)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
     def test_blocked_expressions(self):
         # the kernel's sizes and its address registers: 2vx14, k unrolled 4, 2 registers
         values = dict(m=2, n=14, k=4, R=2)
@@ -89,7 +86,10 @@ if __name__ == "__main__":
         self.assertEqual(127, arg_value("min(2ne, 16e-1)", values))
         self.assertEqual(14, arg_value("max(n, mk)", values))
         self.assertEqual(28, arg_value("2max(m, n)", values))
-        for expr in ("foo(1)", "min()", "min(n e)"):
+        # spaces are stripped, so a space does not separate arguments: side by
+        # side is a product, min(n e) is min(ne)
+        self.assertEqual(112, arg_value("min(n e)", values))
+        for expr in ("foo(1)", "min()", "n+", "min(n,,)"):
             with self.subTest(expr=expr), self.assertRaises(ValueError):
                 arg_value(expr, values)
 
@@ -98,3 +98,6 @@ if __name__ == "__main__":
             with self.subTest(spec=spec), self.assertRaises(ValueError):
                 addr_pattern.parse(spec, dict(m=2, n=14, k=4, R=2))
 
+
+if __name__ == "__main__":
+    unittest.main()

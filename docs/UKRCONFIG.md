@@ -112,7 +112,11 @@ case of their own. `docs/BLISGEN_PLAN.md` has the details of each.
   (`RAW/WAW/WAR:data:vreg:::13`) and an address bump 3 from its uses
   (`RAW:address:greg:::3`); A and B each on two address registers taken in
   turn (`max-addr-regs: {A: 2, B: 2}`, `addr-pattern: rotate`), so the
-  bumps spread. Specs are `dependency:register type:register tag:op:op:distance`,
+  bumps spread. A count may be an expression of the kernel's sizes and
+  element size (`max-addr-regs: {A: "m/4", B: "2n-2"}`) where the shape
+  varies within one family - the same names as `addr-pattern`'s
+  `blocked:` and `max-imm-offset`, except `R`, which a count itself
+  decides. Specs are `dependency:register type:register tag:op:op:distance`,
   an empty field matching any.
 - Out-of-order cores (AVX, NEON, SVE): `RAW:data:vreg:::4`.
 - An issue model, for in-order cores: `--sched-cycle-slots "[N:]slot,..."`

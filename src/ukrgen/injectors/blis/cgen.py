@@ -239,7 +239,9 @@ def cntx_init(config_name: str, gen, kernels: list[kernel], defaults: dict, bloc
     dts = [dt for dt in ("FP32", "FP64") if any(dt == k.dtype and not k.case for k in kernels)]
     packs = [dt for dt in ("FP32", "FP64") if any(dt == k.dtype and k.case for k in kernels)]
     protos = "\n".join([gemm_prototype(k.symbol) for k in kernels if not k.case] +
-                       [packm_prototype(config_name, dt) for dt in packs])
+                       [packm_prototype(config_name, dt) for dt in packs] +
+                       # defined below, called by the init: C99 wants it declared first
+                       [f"void bli_cntx_init_{config_name}_ref( cntx_t* cntx );"])
     lines = []
     for dt in ("FP32", "FP64"):
         ch, ctype = DT_CHAR[dt], CTYPE[dt]

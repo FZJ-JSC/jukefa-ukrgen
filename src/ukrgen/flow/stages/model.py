@@ -10,7 +10,7 @@ from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
 from .ukr.ukr import storage_class, read_access, write_access, sto_kind
-from ...lsc_model.addressing import addr_pattern, kernel_values
+from ...lsc_model.addressing import addr_pattern, arg_value, kernel_values
 from ...lsc_model.builder import program_builder, addressing_plan, model_error
 
 
@@ -53,7 +53,9 @@ class model_stage(stage):
             both = comp in loaded and comp in stored
             self.params[f"{comp}-addr-regs"] = stage_param(
                     value="2" if both else "1", default="2" if both else "1",
-                    description=f"Address registers for {comp}", required=False)
+                    description=f"Address registers for {comp} - a number, or an "
+                                f"expression of the kernel's sizes m, n, k and its "
+                                f"element size e (m/4, 2n-2, min(m+1, 4))", required=False)
             self.params[f"{comp}-addr-pattern"] = stage_param(
                     value="phase" if both else "rotate",
                     default="phase" if both else "rotate",
@@ -122,15 +124,23 @@ class model_stage(stage):
     def progress(self):
         addressing = {}
         for comp in self.memory:
-            count = str(self.params[f"{comp}-addr-regs"].value)
-            if not count.isdigit() or int(count) < 1:
-                raise stage_error(f"--{comp}-addr-regs must be a positive integer, got {count}")
+            esize = adt_size(self.context.component_dts[comp])
+            spec = str(self.params[f"{comp}-addr-regs"].value)
+            try:
+                # a number, or an expression of the kernel's sizes (m, n, k) and
+                # its element size e - R would be what this expression computes
+                count = arg_value(spec, kernel_values(self.context.dims, esize))
+            except ValueError as err:
+                raise stage_error(f"--{comp}-addr-regs: {err}") from err
+            if count < 1:
+                raise stage_error(f"--{comp}-addr-regs must be a positive number, "
+                                  f"got {spec} ({count})")
             try:
                 pattern = addr_pattern.parse(self.params[f"{comp}-addr-pattern"].value,
-                                             kernel_values(self.context.dims, adt_size(self.context.component_dts[comp]), int(count)))
+                                             kernel_values(self.context.dims, esize, count))
             except ValueError as err:
                 raise stage_error(f"--{comp}-addr-pattern: {err}") from err
-            addressing[comp] = addressing_plan(int(count), pattern)
+            addressing[comp] = addressing_plan(count, pattern)
 
         data_regs = {}
         for comp in self.data_components:

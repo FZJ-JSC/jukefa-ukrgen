@@ -265,6 +265,26 @@ class test_model_stage(unittest.TestCase):
         with self.assertRaisesRegex(stage_error, "--A-addr-pattern"):
             run(stages=TO_STAGES + [model_stage], **{"A-addr-pattern": "spiral"})
 
+    def test_addr_regs_expression(self):
+        # a count may be an expression of the kernel's sizes (m 2, n 2, k 1) and
+        # its element size (e 8), evaluated where the pattern's R then is
+        def ir(**extra):
+            ctx, res = run(stages=TO_STAGES + [model_stage], **extra)
+            self.assertTrue(res.completed, res.output)
+            return ctx.programs[0].render()
+        two = ir(**{"A-addr-regs": "2", "A-addr-pattern": "blocked:mn/R"})
+        for spec in ("m", "2n-2", "min(m, 2)", "16/e"):
+            with self.subTest(spec=spec):
+                self.assertEqual(two, ir(**{"A-addr-regs": spec,
+                                            "A-addr-pattern": "blocked:mn/R"}))
+        # a count that is not one of the names, or not positive, is refused
+        with self.assertRaisesRegex(stage_error, r"--A-addr-regs: R\b"):
+            run(stages=TO_STAGES + [model_stage], **{"A-addr-regs": "R"})
+        for spec in ("0", "m-2", "nope", "min()"):
+            with self.subTest(spec=spec):
+                with self.assertRaisesRegex(stage_error, "--A-addr-regs"):
+                    run(stages=TO_STAGES + [model_stage], **{"A-addr-regs": spec})
+
 
 if __name__ == "__main__":
     unittest.main()
