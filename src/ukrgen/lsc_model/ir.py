@@ -157,6 +157,9 @@ class ir_program:
     vector_indices : dict[str, str] = field(default_factory=dict)
     #: components whose registers are groups: how many registers, the method
     groups : dict[str, tuple[int, str]] = field(default_factory=dict)
+    #: indices whose last vector is masked (irmod tailmask): its elements a
+    #: run-time parameter, tail(<index>), the mask set from it once
+    tails : set[str] = field(default_factory=set)
 
     def render(self) -> str:
         db = self.offsets

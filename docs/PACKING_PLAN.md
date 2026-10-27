@@ -176,6 +176,15 @@ with no strided structures, keeps its rows beyond 4. Still to come: `masks`.
 
 ## Vectors along cdim under a predicate: cdim = n·VL + M
 
+Done for SVE (ukrgen 0203): a vec case with `mask: true` - size N packs N
+vectors and a last one under a mask of its first M rows, M = cdim - N*VL a
+run-time parameter (`tail(m)`), the mask set once after the ISA's setup
+(whilelo) - cdim from N*VL to (N+1)*VL in one pass, below VL with N = 0.
+The dispatch tries masked cases first; the reference only zeroes rows past
+cdim. Still to come: AVX-512 (a mask from a register: a scratch register),
+RVV's routes (the vector length switched for the last vector; v0 - masked
+accesses, A8).
+
 With masks of the first M lanes (A3) the `vec` route - vectors along
 cdim, X contiguous along it - packs what isn't whole vectors too, where
 today the reference does: cdim = n·VL + M, n whole vectors and a last one

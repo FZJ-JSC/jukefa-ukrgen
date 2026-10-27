@@ -197,6 +197,43 @@ int main( void )
             # three full panels by the generated cases, three by the reference
             self.assertIn("6 runs, 3 by generated cases, 0 wrong", out)
 
+    def test_packm_masked_tail(self):
+        # cdim = N*VL + M in one pass: N vectors and the last one masked to
+        # the M rows left (SVE's whilelo, tail(m)) - cdim below VL too - the
+        # reference only zeroing rows past cdim; exact multiples the vec
+        # case's, rows past the masked cases' vec and the reference
+        from ukrgen.injectors.blis.families import build_packm
+        from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+               "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
+        fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "cases": [
+            {"kind": "vec", "m": [1, 2], "params": vec},
+            {"kind": "vec", "name": "vtail", "mask": True, "m": [0, 1], "params": vec}]})
+        built, skipped = build_packm("sve", "ukrgen_sve", fam)
+        self.assertEqual([], skipped)
+        self.assertEqual(["vec1v", "vec2v", "vtail0vt", "vtail1vt"],
+                         sorted(k.symbol.rsplit("_", 1)[1] for k in built))
+        self.assertTrue(all(k.tail == k.symbol.endswith("t") for k in built))
+        src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
+              vl_helpers(built, make_generator("sve")) + \
+              "\n#define bli_ddpackm_ukrgen_sve_ref REF\n" + \
+              "typedef int conj_t;\ntypedef int pack_t;\n" + \
+              "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
+              "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
+              packm_dispatch("ukrgen_sve", "FP64", built) + \
+              "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( double ) ); }\n"
+        harness = open(os.path.join(HERE, "packm_harness.c")).read() \
+            .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
+        # cdim, cdim_max, n, inca, lda, the reference calls expected
+        cases = ("{ 3, 3, 7, 1, 5, 0 }, { vl + 3, vl + 3, 9, 1, vl + 5, 0 }, "
+                 "{ 2 * vl - 1, 2 * vl, 6, 1, 2 * vl + 2, 1 }, { vl, vl, 5, 1, vl + 3, 0 }, "
+                 "{ 2 * vl + 1, 2 * vl + 1, 4, 1, 2 * vl + 1, 1 }")
+        outs = self.run_c("sve", src + harness, built,
+                          [[QEMU, "-cpu", f"max,sve{v}=on"] for v in (256, 512)],
+                          ["-DPACKM=bli_dpackm_ukrgen_sve", f"-DCASES={cases}"])
+        for out in outs:
+            self.assertIn("5 runs, 3 by generated cases, 0 wrong", out)
+
     def test_packm_lmul_by_size(self):
         # RVV's vec cases at LMUL 2 where it divides their vectors, 1 where it
         # doesn't: 2v and 4v one and two m2 groups, 1v and 3v m1 - each its

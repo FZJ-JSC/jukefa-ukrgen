@@ -1103,14 +1103,22 @@ class signature_emitter:
                 f"offset {immediate}: specialize the IR first")
         return [line]
 
-    def _predicate(self, sig, kwargs: dict, prefix: list | None = None, dt=None) -> bool:
+    def _predicate(self, sig, kwargs: dict, prefix: list | None = None, dt=None, op=None) -> bool:
         """
-        Bind a signature's mask operands: to the all-true predicate under
-        explicit predication; to a mask register set all-true right before
-        the instruction where the instruction clears it (prefix gets the
-        setting). False if neither applies
+        Bind a signature's mask operands: an access to a last vector masked
+        to its run-time count (tailmask) to that mask; else to the all-true
+        predicate under explicit predication; to a mask register set
+        all-true right before the instruction where the instruction clears
+        it (prefix gets the setting). False if none applies
         """
         masks = [n for n, o in sig.operands.items() if orl.MASK == o.orole]
+        tail = op.properties.get("tail") if op is not None else None
+        if tail is not None:
+            if not masks or tail not in self.tails:
+                return False                # a last vector only under its mask
+            for name in masks:
+                kwargs[name] = self.tails[tail]
+            return True
         if not masks:
             return True
         predicate = _all_true(self.ctx, self.rt)
@@ -1292,7 +1300,7 @@ class signature_emitter:
             elif mods or immediate:
                 continue
             prefix = []
-            if not self._predicate(sig, kwargs, prefix, dt):
+            if not self._predicate(sig, kwargs, prefix, dt, op):
                 continue
             # a tile slice's index: the loop's register and immediate
             for name in sig.operands:
@@ -1551,6 +1559,21 @@ class signature_emitter:
             self.reg(lsc_reg_index(key[0], [key[1]]), key[2])
         setup = lines(isa.setup(rt=self.rt, dt=dt))
         self.isa_setup_lines = len(setup)
+        # the last vectors' masks (tailmask): their first tail(<index>)
+        # elements, set once - here, while the parameters are where the call
+        # put them - each in a mask register of its own for the whole kernel
+        self.tails = {}
+        for index in sorted(self.program.tails):
+            tdt = next((self.ctx.component_dts[c] for c, i in self.program.vector_indices.items()
+                        if i == index), dt)
+            mreg = self.gen.mreg(self.rt.reserve_any_reg("mreg"))
+            call = dict(dreg=mreg, dt=tdt, modifiers={opset_modifier.MASKAVL},
+                        avlreg=self.params[f"tail({index})"])
+            why = self.gen.set.refusal(**call)
+            if why:
+                raise specialization_error(f"the mask of tail({index}): {why}")
+            setup += lines(self.gen.set(**call))
+            self.tails[index] = mreg
         # the element type the ISA's setup leaves in place, where it is state
         # the instructions run under: the narrowest, its registers ungrouped
         self.vtype = (adt_size(dt), 1) if isa.element_type_is_state() else None
@@ -1683,6 +1706,8 @@ class signature_emitter:
                 for term in dict(stride.terms):
                     factors.update(f for f in term if f.startswith("stride("))
         names += sorted(factors)
+        # the last vectors' elements, where they're masked (tailmask)
+        names += [f"tail({index})" for index in sorted(self.program.tails)]
         # C's storages' alias components take C's parameters: base(Cr) is
         # base(C), stride(Cr,m) stride(C,m) - none of their own
         self.aliases = dict(self.ctx.composition.storage_aliases or {})

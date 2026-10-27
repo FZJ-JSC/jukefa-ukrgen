@@ -383,6 +383,8 @@ PACKM_ARGS = {
     "stride(X,n)": ("inc_t", "lda * (inc_t)sizeof({ctype})"),
     "stride(X,m)": ("inc_t", "inca * (inc_t)sizeof({ctype})"),
     "stride(Y,n)": ("inc_t", "ldp * (inc_t)sizeof({ctype})"),
+    # a masked vec case's rows past its whole vectors (its row() computes it)
+    "tail(m)": ("dim_t", "tail"),
 }
 
 #: rows a vec case's kernel leaves to the reference at most - cdim of the
@@ -436,8 +438,11 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: l
             raise ValueError(f"{k.symbol}: no BLIS argument for its parameters {unknown}")
     names = list(dict.fromkeys(k.case for k in mine))
     if order is None:
-        rank = {"vec": 0, "gather": 1, "trans": 2}
-        names.sort(key=lambda n: rank.get(kind_of(next(k for k in mine if n == k.case)), 3))
+        # masked vec cases first: one pass, where a vec case and the
+        # reference take two
+        rank = {"vec": 1, "gather": 2, "trans": 3}
+        first = lambda n: next(k for k in mine if n == k.case)
+        names.sort(key=lambda n: 0 if first(n).tail else rank.get(kind_of(first(n)), 4))
     else:
         names = [n for n in order if n in names]
     decls = [f"void {asm_symbol(k)}( {', '.join(PACKM_ARGS[p][0] for p in k.params)} );"
@@ -445,6 +450,26 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: l
 
     def row(k):
         args = ", ".join(PACKM_ARGS[p][1].format(ctype=ctype) for p in k.params)
+        if k.tail:
+            # its whole vectors, then the last one masked to the rows left -
+            # any cdim between, in one pass; the reference zeroes the rows
+            # past cdim, where cdim_max has more
+            vl = c_expr("VL", ctype, k.vl_fn)
+            vectors, _ = split_size(k.mr)
+            return f"""\
+\t\t{{
+\t\t\tconst dim_t full = {vectors - 1} * {vl};
+\t\t\tif ( full < cdim && cdim - full < {vl} )
+\t\t\t{{
+\t\t\t\tconst dim_t tail = cdim - full;
+\t\t\t\t{asm_symbol(k)}( {args} );
+\t\t\t\tif ( cdim < cdim_max )
+\t\t\t\t\tbli_{ch}{ch}packm_{config_name}_ref( conja, schema, 0, cdim_max - cdim,
+\t\t\t\t\t    cdim_bcast, n, n_max, kappa, ( const {ctype}* )a + cdim * inca, inca, lda,
+\t\t\t\t\t    ( {ctype}* )p + cdim, ldp, params, cntx );
+\t\t\t\treturn;
+\t\t\t}}
+\t\t}}"""
         return f"""\
 \t\t{{
 \t\t\tconst dim_t done = {c_expr(k.mr, ctype, k.vl_fn)};

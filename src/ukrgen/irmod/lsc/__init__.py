@@ -6,6 +6,8 @@ IR modifications on LSC IR programs, one per module:
                             one interleaving store                before specialization
     shufflenet              a trans case's row stores as an in-
                             register transpose, stored contiguously before specialization
+    tailmask                a vec case's last vector masked to a
+                            run-time count, tail(<index>)        before specialization
     addrmerge               an address register's moves with
                             nothing between using it, one         after specialization
     ldinc                   address computations fused into
@@ -21,13 +23,14 @@ from .addrmerge import addrmerge
 from .widen import widen
 from .structfuse import structfuse
 from .shufflenet import shufflenet
+from .tailmask import tailmask
 from .hoist import hoist
 from .vectorize import vectorize_loops
 from .unroll import unroll_loops
 from .slices import fuse_slices, forward_slices, hoist_slices
 from .cluster import cluster
 
-IRMODS : list[type[lsc_irmod]] = [widen, structfuse, shufflenet, vectorize_loops, fuse_slices, forward_slices, hoist_slices,
+IRMODS : list[type[lsc_irmod]] = [widen, structfuse, shufflenet, tailmask, vectorize_loops, fuse_slices, forward_slices, hoist_slices,
                                   unroll_loops, hoist, cluster, lanefuse, addrmerge, ldinc]
 
 

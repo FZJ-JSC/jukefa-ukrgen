@@ -125,7 +125,9 @@ def key_params(kind: str, entry: dict) -> dict:
     name: trans_shuffle); lmul (RVV, a case's or the family's for its
     cases): a number - the LMUL of the sizes it divides, 1 for the others (a
     trans case's every size) - or {size: LMUL}, a vec or gather case's size
-    counted in registers whatever its LMUL. pre- and post-specialize-irmods
+    counted in registers whatever its LMUL; mask (a vec case's): size N
+    packs N vectors and a last one masked to the rows left - cdim from N*VL
+    to (N+1)*VL in one pass. pre- and post-specialize-irmods
     take names (the list run) or changes to the defaults only:
     [+structfuse, -cluster]
     """
@@ -207,6 +209,10 @@ class family:
     #: family's) - a number, for the sizes it divides (1 for the others; a
     #: trans case's every size), or {size: LMUL}
     case_lmul: dict = field(default_factory=dict)
+    #: packm: the vec cases (by name) whose size N packs N vectors and a last
+    #: one masked to the rows left (mask: true) - cdim from N*VL to (N+1)*VL
+    #: in one pass, the rows left a parameter (tail(m))
+    case_mask: set = field(default_factory=set)
     #: a split microtile: the index split, and per part its parameters and
     #: sizes along that index
     split: str | None = None
@@ -295,11 +301,18 @@ class family:
                 raise ValueError(f"{kind} family {entry['family']}: lmul {spec!r} - 1, 2, 4 or 8, "
                                  f"or sizes to them")
             case_lmul[case.get("name") or case["kind"]] = spec
+        case_mask = set()
+        for case in entry.get("cases") or []:
+            if case.get("mask"):
+                if "vec" != case["kind"]:
+                    raise ValueError(f"{kind} family {entry['family']}: mask on a {case['kind']} case - vec "
+                                     f"cases' last vector only")
+                case_mask.add(case.get("name") or case["kind"])
         vec_rest = entry.get("vec-rest")
         if vec_rest is not None and (not isinstance(vec_rest, int) or vec_rest < 0):
             raise ValueError(f"{kind} family {entry['family']}: vec-rest {vec_rest!r} - rows, 0 or more")
         return family(kind=kind, name=entry["family"], case_kinds=case_kinds, dispatch=dispatch,
-                      vec_rest=vec_rest, case_lmul=case_lmul, dtypes=list(entry.get("dtypes", ["FP64"])),
+                      vec_rest=vec_rest, case_lmul=case_lmul, case_mask=case_mask, dtypes=list(entry.get("dtypes", ["FP64"])),
                       params=params, sizes=sizes, default=default, cases=cases,
                       split=split, parts=parts, ratios=ratios,
                       min_inflight=int(inflight) if inflight is not None else None,
@@ -398,6 +411,9 @@ class kernel:
     #: its RVV LMUL where a family chose one by size: its VL (mr, vl_fn)
     #: a group's, its size counted in registers (vec4v at m2: 2 groups)
     lmul: int = 1
+    #: a vec case's last vector masked to the rows left (tail(m)): it packs
+    #: cdim from (its vectors - 1)*VL to its vectors*VL
+    tail: bool = False
     #: its loop parameter counts chunks of a vector length ("VL"), not elements
     loop_unit: str = ""
     #: its assembly where built in another process (the program stays there)
@@ -561,10 +577,18 @@ def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: in
     params.update(case_params)
     for comp in ("X", "Y"):
         params[f"{comp}-data-type"] = dt
-    params["m"] = str(m)
+    masked = case in fam.case_mask
+    if masked:
+        # N vectors and the last one masked to the rows left: N+1 of them,
+        # P's leading dimension a parameter (its rows aren't the kernel's)
+        if "n:s" not in [e.replace(" ", "") for e in params.get("Y-layout", [])]:
+            return _skip(dt, (case, m), "a masked vec case takes P's leading dimension (Y-layout [m:c, n:s])")
+        mods = list(params.get("pre-specialize-irmods") or [])
+        params["pre-specialize-irmods"] = mods + (["+tailmask"] if all(x[:1] in "+-" for x in mods) else ["tailmask"])
+    params["m"] = str(m + 1 if masked else m)
     if fam.min_inflight:
         # at least min_inflight vectors an iteration: m a copy
-        params["n"] = str(max(1, -(-fam.min_inflight // m)))
+        params["n"] = str(max(1, -(-fam.min_inflight // (m + 1 if masked else m))))
     kind = fam.case_kinds.get(case, case)
     lmul = lmul_for(fam.case_lmul.get(case), m, kind)
     if lmul is not None:
@@ -586,7 +610,9 @@ def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: in
     # named by its rows in registers' vectors: vec4v at m2 too
     vectors, elements = split_size(cdim)
     named = cdim if 1 == grouped else f"{vectors * grouped}*VL" + (f"+{elements}" if elements else "")
-    symbol = f"bli_{DT_CHAR[dt]}packm_{config_name}_{fam.name}_{case}{size_name(named)}"
+    # a masked case by its whole vectors and t: vec0vt, vec2vt
+    named = f"{m}*VL" if masked else named
+    symbol = f"bli_{DT_CHAR[dt]}packm_{config_name}_{fam.name}_{case}{size_name(named)}{'t' if masked else ''}"
     program = ctx.emitted[0]
     # a loop stepping by vectors counts chunks of a vector length - a step by
     # VL, or along an index a component's vectors run along (a fixed vector
@@ -597,7 +623,8 @@ def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: in
                        if b.step is not None) else ""
     return _done(kernel(family=fam.name, dtype=dt, size=(m, 1), mr=cdim, nr="1", symbol=symbol,
                         params=list(program.params), c_layout="col", program=program, case=case, kind=fam.case_kinds.get(case, case),
-                        loop_unit=unit, simd_size_c=ctx.gen.c_simd_size_function, lmul=grouped),
+                        loop_unit=unit, simd_size_c=ctx.gen.c_simd_size_function, lmul=grouped,
+                        tail=masked),
                  detach)
 
 
