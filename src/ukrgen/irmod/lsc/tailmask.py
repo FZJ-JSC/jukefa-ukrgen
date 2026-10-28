@@ -165,4 +165,20 @@ class tailmask(lsc_irmod):
         if program.tail_vl:
             for block, section in blocks_and_sections(program):
                 setattr(block, section, self.short_regions(list(getattr(block, section) or [])))
+        # the mask route: each mask set once, first thing in the first block's
+        # prologue - before every path, before any data register - as state
+        # its last-vector accesses read (the schedulers order them after it)
+        masked = sorted(program.tails - program.tail_vl)
+        if masked and program.blocks:
+            first = program.blocks[0]
+            sets = []
+            for index in masked:
+                comp = next(c for c, i in program.vector_indices.items() if i == index)
+                sets.append(lsc_state({f"mask({index})": f"tail({index})"}, self.ctx.component_dts[comp]))
+            first.prologue = sets + list(first.prologue or [])
+            for block, section in blocks_and_sections(program):
+                for op in getattr(block, section) or []:
+                    index = op.properties.get("tail")
+                    if index in masked:
+                        op.extra_reads_state.add(f"mask({index})")
         return marked

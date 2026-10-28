@@ -386,9 +386,10 @@ column's load). The state check runs at the end of ISA specialization
 after scheduling. RVV's element type switches lsc_states from the
 specializer (ukrgen 0222): each section beginning and ending in the
 setup's type, a transformation whose signatures disagree left to the
-emitter. Next: the masked tails' setup as an IR operation (the mask an IR
-register, the count a parameter's register); smstart and smstop as
-lsc_states.
+emitter. The masked tails' mask an lsc_state (ukrgen 0223): set
+first in the first block's prologue, read by the last-vector accesses as
+state; the emitter writes it through the ISA's MASKAVL form. Next:
+smstart and smstop as lsc_states.
 
 The suggestion as it stood:
 

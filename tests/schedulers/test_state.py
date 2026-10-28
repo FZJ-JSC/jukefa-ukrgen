@@ -50,5 +50,48 @@ class test_state_dependencies(unittest.TestCase):
             op_with_state(writes={"vlen"}), op_with_state(reads={"vlen"})))
 
 
+
+
+class test_check_state(unittest.TestCase):
+    """
+    The state through a program: a state set once in the first block's
+    prologue (a masked tail's mask) begins every later section; an
+    operation's own reads (extra_reads_state) must be set; a section ends
+    with the setup's states as they were
+    """
+    class reader:
+        def __init__(self, *names):
+            self.extra_reads_state = set(names)
+
+    class block:
+        def __init__(self, prologue=(), body=()):
+            self.prologue, self.body = list(prologue), list(body)
+            self.epilogue, self.tail, self.subtail = [], [], []
+
+    class program:
+        def __init__(self, *blocks):
+            self.blocks, self.cases = list(blocks), []
+
+    def check(self, *blocks):
+        from ukrgen.lsc_model.state import check_state
+        return check_state(self.program(*blocks), {"vlen": "max"})
+
+    def test_mask_set_once(self):
+        from ukrgen.models.load_store_operations import lsc_state
+        self.assertEqual([], self.check(self.block(prologue=[lsc_state({"mask(m)": "tail(m)"})],
+                                                   body=[self.reader("mask(m)")])))
+
+    def test_mask_unset(self):
+        problems = self.check(self.block(body=[self.reader("mask(m)")]))
+        self.assertTrue(any("reads mask(m) before it's set" in p for p in problems), problems)
+
+    def test_setup_state_restored(self):
+        from ukrgen.models.load_store_operations import lsc_state
+        problems = self.check(self.block(body=[lsc_state({"vlen": "tail(m)"})]))
+        self.assertTrue(any("ends with other state" in p for p in problems), problems)
+        self.assertEqual([], self.check(self.block(body=[lsc_state({"vlen": "tail(m)"}),
+                                                         lsc_state({"vlen": "max"})])))
+
+
 if __name__ == "__main__":
     unittest.main()

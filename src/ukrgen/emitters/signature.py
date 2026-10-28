@@ -1092,6 +1092,31 @@ class signature_emitter:
         """
         return self._memory(op)
 
+    def tail_mask(self, index: str, count: str, dt) -> list[str]:
+        """
+        A masked tail's mask (its lsc_state, first in the first prologue): the
+        first count elements, where the ISA's MASKAVL form puts it - a mask
+        register, or a vector: RVV's masked accesses take v0 - with a scratch
+        register where the form takes one; reserved for the whole kernel
+        """
+        form = next(iter(self.gen.set.forms(modifiers={opset_modifier.MASKAVL}, dts={"dreg": dt})), None)
+        if form is not None and rgt.VEC == form.operands["dreg"].rtype:
+            self.rt.reserve_specific_reg("vreg", 0)
+            mreg = self.gen.vreg(0)
+        else:
+            mreg = self.gen.mreg(self.rt.reserve_any_reg("mreg"))
+        call = dict(dreg=mreg, dt=dt, modifiers={opset_modifier.MASKAVL}, avlreg=self.params[count])
+        taken = self.scratch(form, call) if form is not None else []
+        if taken is None:
+            raise specialization_error(f"the mask of {count}: no free register for its scratch")
+        why = self.gen.set.refusal(**call)
+        if why:
+            raise specialization_error(f"the mask of {count}: {why}")
+        text = self.gen.set(**call)
+        self.unscratch(taken)
+        self.tails[index] = mreg
+        return [l.strip() for l in text.splitlines() if l.strip()]
+
     def state(self, op) -> list[str]:
         """
         Processor state an lsc_state sets, through the generator's signature
@@ -1102,6 +1127,9 @@ class signature_emitter:
         from asmgen.asmblocks.op.opset import opset_modifier as setmod
         lines = []
         for name, value in op.values.items():
+            if name.startswith("mask(") and name.endswith(")"):
+                lines += self.tail_mask(name[5:-1], value, op.dt)
+                continue
             if "vtype" == name:
                 # the element type and grouping, the vector length kept (RVV's
                 # vsetvli zero, zero): the setup's switch
@@ -1687,29 +1715,6 @@ class signature_emitter:
         # adjacent short-length regions one, the schedule final (the state's
         # requirements were checked when specializing)
         merge_switches(self.program)
-        for index in sorted(self.program.tails - self.program.tail_vl):
-            tdt = next((self.ctx.component_dts[c] for c, i in self.program.vector_indices.items()
-                        if i == index), dt)
-            # the mask where the ISA's form puts it - a mask register, or a
-            # vector: RVV's masked accesses take v0 - and a scratch register
-            # where it takes one (RVV's indices, AVX-512's bits), the setup's
-            form = next(iter(self.gen.set.forms(modifiers={opset_modifier.MASKAVL}, dts={"dreg": tdt})), None)
-            if form is not None and rgt.VEC == form.operands["dreg"].rtype:
-                self.rt.reserve_specific_reg("vreg", 0)
-                mreg = self.gen.vreg(0)
-            else:
-                mreg = self.gen.mreg(self.rt.reserve_any_reg("mreg"))
-            call = dict(dreg=mreg, dt=tdt, modifiers={opset_modifier.MASKAVL},
-                        avlreg=self.params[f"tail({index})"])
-            taken = self.scratch(form, call) if form is not None else []
-            if taken is None:
-                raise specialization_error(f"the mask of tail({index}): no free register for its scratch")
-            why = self.gen.set.refusal(**call)
-            if why:
-                raise specialization_error(f"the mask of tail({index}): {why}")
-            setup += lines(self.gen.set(**call))
-            self.unscratch(taken)
-            self.tails[index] = mreg
         # the element type the ISA's setup leaves in place, where it is state
         # the instructions run under: the narrowest, its registers ungrouped
         self.vtype = (adt_size(dt), 1) if isa.element_type_is_state() else None
@@ -1899,8 +1904,8 @@ class signature_emitter:
         """
         aliases = self.aliases
         for name in sorted(self.live_params):
-            if name.startswith("tail(") and name[5:-1] in self.tail_vl:
-                continue            # the vl route's count: every last vector's
+            if name.startswith("tail("):
+                continue            # a tail's count: its lsc_states' (a mask, the vl route's lengths)
             comp = self.param_comp(name)
             # C's parameters are its storages' aliases' too
             needed = (comp in later or ("C" == comp and any(a in later for a in aliases))) \

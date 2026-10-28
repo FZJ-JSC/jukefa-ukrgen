@@ -35,12 +35,20 @@ def check_state(program, initial: dict[str, str]) -> list[str]:
     iterations would differ - a problem. The problems, empty where none
     """
     problems = []
+    # states set once, in the first block's prologue (a masked tail's mask):
+    # every later section begins with them
+    first = program.blocks[0] if program.blocks else None
+    once = {k: v for op in ((first.prologue or []) if first else []) if isinstance(op, lsc_state)
+            for k, v in op.values.items() if k not in initial}
     for block, section in blocks_and_sections(program):
-        state = dict(initial)
+        state = dict(initial) if (block is first and "prologue" == section) else {**initial, **once}
         for op in getattr(block, section) or []:
             if isinstance(op, lsc_state):
                 state.update(op.values)
                 continue
+            for name in sorted(op.extra_reads_state):
+                if state.get(name) is None:
+                    problems.append(f"{section}: {type(op).__name__[4:]} reads {name} before it's set")
             if not isinstance(op, (lsc_load, lsc_store)):
                 continue
             sigs = op.state_sigs()
@@ -52,7 +60,8 @@ def check_state(program, initial: dict[str, str]) -> list[str]:
                                 f"{', '.join(f'{k}={v}' for k, v in sorted(state.items())) or 'none'})")
             elif len(held) < len(sigs):
                 op.sigs = held
-        if state != dict(initial):
+        # the setup's states as they were (states set once may stay)
+        if any(state.get(k) != v for k, v in initial.items()):
             problems.append(f"{section}: ends with other state than it began with "
                             f"({', '.join(f'{k}={v}' for k, v in sorted(state.items()))})")
     return problems
