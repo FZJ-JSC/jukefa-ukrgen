@@ -569,3 +569,25 @@ class lsc_loop(lsc_operation):
             self.reg_types.append(lsc_reg_type.address)
             self.reads.append(len(self.indices) - 1)
             self.writes.append(len(self.indices) - 1)
+
+
+class lsc_state(lsc_operation):
+    """
+    Sets processor state: values, name -> value - "vlen": "tail(m)" (the
+    count a kernel parameter holds), "max" - as asmgen's signatures'
+    state_writes name them; emitted through the generator's signature
+    writing them. It writes each state it sets: the schedulers keep every
+    operation reading one on its side of it
+    """
+    def __init__(self, values: dict[str, str], dt=None):
+        super().__init__(tiles=[], indices=[], reads=[], writes=[], reg_types=[])
+        self.values = dict(values)
+        #: the element type a vector length is set for (RVV's vtype)
+        self.dt = dt
+        self.extra_writes_state = set(values)
+
+    def __str__(self) -> str:
+        return "state(" + ", ".join(f"{k}={v}" for k, v in self.values.items()) + ")"
+
+    def __repr__(self) -> str:
+        return self.__str__()

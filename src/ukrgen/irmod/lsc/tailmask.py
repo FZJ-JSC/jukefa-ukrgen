@@ -7,7 +7,7 @@ from asmgen.asmblocks.op import register_type as rgt
 from asmgen.asmblocks.op.opset import opset_modifier
 
 from ...lsc_model.addressing import sym
-from ...models.load_store_operations import lsc_load, lsc_store
+from ...models.load_store_operations import lsc_load, lsc_state, lsc_store
 from ...specializers.signature import _sigs
 from .base import lsc_irmod, irmod_param, irmod_placement, blocks_and_sections
 
@@ -108,7 +108,23 @@ class tailmask(lsc_irmod):
                     op.sigs = masked
                 else:
                     program.tail_vl.add(index)
+                    op.add_property("tail_vl", index)
                 op.add_property("tail", index)
                 program.tails.add(index)
                 marked += 1
+        if program.tail_vl:
+            # the vl route: each last-vector access between an lsc_state at the
+            # tail's count and one at the full length - every vector operation
+            # reads the length, so the schedulers keep them out of between
+            for block, section in blocks_and_sections(program):
+                ops = list(getattr(block, section) or [])
+                out = []
+                for op in ops:
+                    index = op.properties.get("tail_vl")
+                    if index is None:
+                        out.append(op)
+                        continue
+                    dt = self.ctx.component_dts[op.indices[1].component]
+                    out += [lsc_state({"vlen": f"tail({index})"}, dt), op, lsc_state({"vlen": "max"}, dt)]
+                setattr(block, section, out)
         return marked

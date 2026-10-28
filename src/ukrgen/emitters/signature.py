@@ -39,10 +39,11 @@ from asmgen.asmblocks.op.opset import opset_modifier
 from asmgen.registers import adt_size, asm_data_type as adt
 from asmgen.asmblocks.op.constraint import ConstraintDoesNotApplyError
 
+from ..lsc_model.state import check_state
 from ..lsc_model.addressing import sym
 from ..lsc_model.ir import ir_program, ir_block
 from ..components.tile import scalar_tile
-from ..models.load_store_operations import (
+from ..models.load_store_operations import (lsc_state, 
     lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop, lsc_permute)
 from ..models.lsc.index import lsc_reg_index
 
@@ -1085,20 +1086,40 @@ class signature_emitter:
     def memory(self, op) -> list[str]:
         """
         A load or store through the signature taking its offset from its address
-        register, which specializing has made a constant some signature takes -
-        a last vector's (tailmask route vl) at the tail's vector length, the
-        full one set back right after: nothing else runs short
+        register, which specializing has made a constant some signature takes
         """
-        tail = op.properties.get("tail")
-        if tail is not None and tail in self.tail_vl:
-            from asmgen.asmblocks.op.opset import opset_modifier as setmod
-            zero = next((self.gen.greg(i) for i in range(64) if "zero" == str(self.gen.greg(i))), None)
-            tdt = self.ctx.component_dts[op.indices[0].component]
-            short = self.gen.set(dreg=zero, dt=tdt, modifiers={setmod.VLEN}, avlreg=self.params[f"tail({tail})"])
-            full = self.gen.set(dreg=zero, dt=tdt, modifiers={setmod.VLEN}, avlreg=self.tail_vl[tail])
-            split = lambda text: [l.strip() for l in text.splitlines() if l.strip()]
-            return split(short) + self._memory(op) + split(full)
         return self._memory(op)
+
+    def state(self, op) -> list[str]:
+        """
+        Processor state an lsc_state sets, through the generator's signature
+        writing it (asmgen's state_writes): a value \"max\" the signature
+        writing \"max\" (a scratch destination); a parameter's count the one
+        writing its avl operand's (RVV's vsetvli zero, avl)
+        """
+        from asmgen.asmblocks.op.opset import opset_modifier as setmod
+        lines = []
+        for name, value in op.values.items():
+            kind = "max" if "max" == value else "avl"
+            form = next((f for f in self.gen.set.forms() if kind == f.state_writes.get(name)), None)
+            if form is None:
+                raise specialization_error(f"{op}: the ISA sets {name} to {value} with no signature")
+            call = dict(dt=op.dt, modifiers=set(form.modifiers))
+            taken = []
+            if "avl" == kind:
+                if value not in self.params:
+                    raise specialization_error(f"{op}: no parameter {value}")
+                zero = next((self.gen.greg(i) for i in range(64) if "zero" == str(self.gen.greg(i))), None)
+                call.update(dreg=zero, avlreg=self.params[value])
+            else:
+                taken = [("greg", self.rt.reserve_any_reg("greg"))]
+                call["dreg"] = self.gen.greg(taken[0][1])
+            why = self.gen.set.refusal(**call)
+            if why:
+                raise specialization_error(f"{op}: {why}")
+            lines += [l.strip() for l in self.gen.set(**call).splitlines() if l.strip()]
+            self.unscratch(taken)
+        return lines
 
     def _memory(self, op) -> list[str]:
         comp, reg = op.indices[0].component, op.indices[0].indices[0]
@@ -1473,6 +1494,8 @@ class signature_emitter:
             return self.loop(op)
         if isinstance(op, (lsc_load, lsc_store)):
             return self.memory(op)
+        if isinstance(op, lsc_state):
+            return self.state(op)
         if isinstance(op, lsc_transformation):
             return [self.compute(op)]
         if isinstance(op, lsc_zero) and rgt.TILE == op.rtypes[0]:
@@ -1646,14 +1669,13 @@ class signature_emitter:
         # elements, set once - here, while the parameters are where the call
         # put them - each in a mask register of its own for the whole kernel
         self.tails = {}
-        #: the vl route's: the full vector length's register, set once
-        self.tail_vl = {}
-        for index in sorted(self.program.tail_vl):
-            full = self.gen.greg(self.rt.reserve_any_reg("greg"))
-            tdt = next((self.ctx.component_dts[c] for c, i in self.program.vector_indices.items()
-                        if i == index), dt)
-            setup += lines(self.gen.set(dreg=full, dt=tdt, modifiers={opset_modifier.VLEN}))
-            self.tail_vl[index] = full
+        #: the vl route's indices: their counts read at every last vector
+        self.tail_vl = {index: None for index in self.program.tail_vl}
+        # the state the setup leaves, each access's requirements held where
+        # it is (lsc_states setting more) - their signatures pruned to those
+        problems = check_state(self.program, isa.state(dt))
+        if problems:
+            raise specialization_error("processor state: " + "; ".join(problems))
         for index in sorted(self.program.tails - self.program.tail_vl):
             tdt = next((self.ctx.component_dts[c] for c, i in self.program.vector_indices.items()
                         if i == index), dt)

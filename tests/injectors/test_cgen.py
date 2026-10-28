@@ -294,11 +294,25 @@ int main( void )
              "params": dict(vec, **{"tailmask-route": "vl"})}]})
         built, skipped = build_packm("rvv", "ukrgen_rvv", fam)
         self.assertEqual([], skipped)
+        import re
         for asm in [asm_source(k) for k in built if k.tail]:
             self.assertNotIn("v0.t", asm)
-            # a pair around each last-vector load and store: the tail's, the full
-            switches = [l for l in asm.split("\n") if l.strip().startswith("vsetvli zero,")]
-            self.assertTrue(len(switches) >= 4 and 0 == len(switches) % 2, switches)
+            # lsc_states around each last-vector load and store - the tail's
+            # length (vsetvli zero, tail), then the full (vsetvli t, zero) -
+            # the schedulers keeping every other vector instruction out
+            short, regions = False, []
+            for line in (l.strip() for l in asm.split("\n")):
+                if re.match(r"vsetvli zero, \w+,", line):
+                    self.assertFalse(short, "two short lengths in a row")
+                    short = True
+                    regions.append([])
+                elif re.match(r"vsetvli \w+, zero,", line):
+                    short = False
+                elif short and line.startswith("v"):
+                    regions[-1].append(line.split()[0])
+            self.assertFalse(short)
+            self.assertTrue(len(regions) >= 2)
+            self.assertTrue(all(1 == len(r) and r[0] in ("vle64.v", "vse64.v") for r in regions), regions)
         src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
               vl_helpers(built, make_generator("rvv")) + \
               "\n#define bli_ddpackm_ukrgen_rvv_ref REF\n" + \
@@ -317,6 +331,25 @@ int main( void )
                           ["-DPACKM=bli_dpackm_ukrgen_rvv", f"-DCASES={cases}"], cc=cc)
         for out in outs:
             self.assertIn("5 runs, 4 by generated cases, 0 wrong", out)
+
+    def test_packm_sme_scatters_need_fa64(self):
+        # streaming mode runs scatters only with FEAT_SME_FA64 (asmgen: their
+        # signatures require sm == 0 without it): the SME trans case's
+        # scatters - the kernel in streaming mode (sm = 1) - refused where a
+        # config says FA64 is off (Apple's parts), built where it's on (LX2's)
+        import copy
+        from ukrgen.injectors.blis.families import configuration, build_packm
+        cfg = configuration.from_files({("packm", "FP64"): os.path.join(HERE, "..", "..", "ukrconfig", "sme",
+                                                                        "fopa_bc_vindex", "dpackm.yaml")})
+        base = cfg.families[0]
+        for fa64, expect in (("on", 1), ("off", 0)):
+            fam = copy.deepcopy(base)
+            fam.cases = [(c, [4], dict(p, **{"sme-FA64": fa64})) for c, _, p in base.cases if "trans" == c]
+            built, skipped = build_packm(cfg.isa, cfg.name, fam)
+            with self.subTest(fa64=fa64):
+                self.assertEqual(expect, len(built))
+                if not built:
+                    self.assertIn("no form whose state requirements hold (sm ==0", str(skipped[0][2]))
 
     def test_packm_masked_tail_avx512(self):
         # AVX-512's masked vec cases, run here: the last vector's vmovupd

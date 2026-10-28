@@ -356,9 +356,16 @@ RVV's vector forms and vsetvli, SME's tiles, its gathers and scatters
 without FA64; the setups' state). ukrgen's operations read and write the
 state their signatures do (reads_state, writes_state: ukrgen 0214), and
 both dependency analyses order them by it like registers; distance specs
-`RAW:state::::N`. Next: lsc_state (an operation setting state), the
+`RAW:state::::N`. Then (ukrgen 0215): lsc_state, an operation setting
+state, emitted through the signature writing it; every access's
 requirements checked against the state the setup and lsc_states leave,
-and the vector length route on them.
+its signatures pruned to those they hold for, a kernel refused where none
+does - FA64 enforced so (Z5's part: streaming scatters refused where a
+config says `sme-FA64: 'off'`); the vector length route an IR of
+lsc_states around each last-vector access, the schedulers keeping every
+other vector operation out. Next: merging adjacent switches (a column's
+last-vector load and store under one short length), smstart and smstop
+as lsc_states.
 
 The suggestion as it stood:
 
