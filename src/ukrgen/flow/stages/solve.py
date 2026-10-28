@@ -100,12 +100,33 @@ class to_io:
                  run along as the implementation leaves it (None for a scalar)
     :param memory: for a store: operand -> the memory component it is stored
                    into
+    :param slices: for a store of a tile: operand -> the direction of the
+                   slices it stores, "row" or "col"
+    :param filled: for a computation leaving an operand in a tile through its
+                   slices: operand -> their direction, "row" or "col"
     """
     reads : dict[str, rgt]
     writes : dict[str, rgt]
     stores : dict[str, dml] = field(default_factory=dict)
+    slices : dict[str, str] = field(default_factory=dict)
+    filled : dict[str, str] = field(default_factory=dict)
     axes : dict[str, str | None] = field(default_factory=dict)
     memory : dict[str, str] = field(default_factory=dict)
+
+
+def produced_slices(impl: resolved_operation_chain, component: str) -> str | None:
+    """
+    The direction of the tile slices an implementation's last write to a
+    component goes through (slice_vec_row, slice_vec_col): "row", "col" -
+    None where it doesn't
+    """
+    for res, step in zip(reversed(impl.resolved_chain), reversed(impl.math_chain)):
+        dest = step.hw_ast.left.name
+        if step.name_mapping.get(dest) == component:
+            strat = res.operand_strategies.get((dest, dmd.OUT))
+            tag = strat.rsln.unique_tag if strat is not None else ""
+            return tag.rsplit("_", 1)[1] if tag.startswith("slice_vec_") else None
+    return None
 
 
 def produced_rtype(impl: resolved_operation_chain, component: str) -> rgt | None:
@@ -171,11 +192,17 @@ def io_of(sto: sto_description, impl: resolved_operation_chain | store_choice,
     in, and for the operands it writes, the index their vectors run along
     """
     if sto_kind.STORE == sto.kind:
+        # a tile stored slice by slice: its slices' direction (slices_row,
+        # slices_col) decides the access, not the vectors that filled it
+        slices = {s.component: tag.rsplit("_", 1)[1] for s in impl.stores
+                  if rgt.TILE == s.rtype and (tag := s.rsln.unique_tag).startswith("slices_")
+                  and tag.rsplit("_", 1)[1] in ("row", "col")}
         return to_io(reads={s.component: s.rtype for s in impl.stores}, writes={},
                      stores={s.component: s.loc for s in impl.stores},
-                     memory={s.component: sto.memory_of(s.component) for s in impl.stores})
+                     memory={s.component: sto.memory_of(s.component) for s in impl.stores},
+                     slices=slices)
 
-    reads, writes, axes = {}, {}, {}
+    reads, writes, axes, filled = {}, {}, {}, {}
     for op in sto.operands:
         is_read, is_written = sto.io(op)
         if is_read and (rtype := consumed_rtype(impl, op)) is not None:
@@ -184,7 +211,9 @@ def io_of(sto: sto_description, impl: resolved_operation_chain | store_choice,
             writes[op] = rtype
             if gen is not None:
                 axes[op] = vector_axis(gen, impl, sto, op)
-    return to_io(reads=reads, writes=writes, axes=axes)
+            if rgt.TILE == rtype and (direction := produced_slices(impl, op)) is not None:
+                filled[op] = direction
+    return to_io(reads=reads, writes=writes, axes=axes, filled=filled)
 
 
 def check_part_chain(composition: type[ukr_composition],
@@ -214,6 +243,7 @@ def check_part_chain(composition: type[ukr_composition],
         flow = composition.dataflow(path)
         held: dict[str, tuple[rgt, str]] = {}
         axes: dict[str, str | None] = {}
+        fills: dict[str, str | None] = {}
         for block in path:
             for name in block.stos:
                 io = ios[name]
@@ -225,7 +255,17 @@ def check_part_chain(composition: type[ukr_composition],
                         problems.append(f"{where}{name} reads {op} from {reads.name}, but "
                                         f"{left[1]} leaves it in {left[0].name}")
                     if op in io.stores and left is not None and op in axes:
-                        needed = access_for(axes[op], layouts or {}, io.memory.get(op, op))
+                        axis = axes[op]
+                        stored, fill = io.slices.get(op), fills.get(op)
+                        if rgt.TILE == left[0] and stored and fill and stored != fill:
+                            # a tile filled through slices of one direction
+                            # (its vectors along axis) and stored through the
+                            # other: those run along its other index - a
+                            # transpose (the producer's indices: a store's has
+                            # none)
+                            others = [i for i in composition.get_sto(left[1]).live_indices(op) if i != axis]
+                            axis = others[0] if 1 == len(others) else axis
+                        needed = access_for(axis, layouts or {}, io.memory.get(op, op))
                         if io.stores[op] != needed:
                             problems.append(f"{where}{name} stores {op} {how[io.stores[op]]}, "
                                             f"but as {left[1]} leaves it the store has to be "
@@ -234,6 +274,7 @@ def check_part_chain(composition: type[ukr_composition],
                     held[op] = (rtype, name)
                     if op in io.axes:
                         axes[op] = io.axes[op]
+                    fills[op] = io.filled.get(op)
     return list(dict.fromkeys(problems))
 
 

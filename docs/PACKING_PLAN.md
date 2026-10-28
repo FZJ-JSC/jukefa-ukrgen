@@ -333,9 +333,16 @@ so the tests can't tell.
 
 ### Steps
 
-1. **Z1** the chain check (a test: gemm's SME epilogues unchanged).
+1. **Z1** the chain check - done (ukrgen 0217): a tile filled through
+   slices of one direction and stored through the other is a transpose -
+   its store's access along the tile's other index; gemm's C (filled and
+   stored by columns) as before.
 2. **Z2** tile stores inside loops (1, 2, 3 chunks under qemu, SVL 256
-   and 512).
+   and 512). Found: the slice loops walk their address registers (A's a row
+   a slice, P's a column), the n loop adds its chunk on top, and its last
+   iteration takes one back - one chunk writes before P (two and three
+   come out right). Each slice loop to leave its address where it found
+   it, the loop's own advance and the last iteration's then plain.
 3. **Z3** a `ztrans` case sized in tiles (m: 1..4 - za0.d-za3.d of eight
    for doubles, four for singles) for the SME configs: full panels of k·VL
    rows - SME gemm's MR and NR (NR = 4 tiles, 4·VL rows, today past the

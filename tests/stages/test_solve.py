@@ -7,6 +7,7 @@ import unittest
 from asmgen.asmblocks.op import register_type as rgt
 
 from ukrgen.flow.ukr_context import ukr_context
+from ukrgen.injectors.blis.cgen import asm_source
 from ukrgen.flow.stage_engine import stage_engine
 from ukrgen.flow.stages.setup import setup_stage
 from ukrgen.flow.stages.datatype import datatype_stage
@@ -198,6 +199,35 @@ class test_solve_pack(unittest.TestCase):
         for line in pack:
             self.assertNotIn("Y.VEC:", line)
         self.assertIn('--store-tileop "Y.VEC:direct"', out)
+
+
+class test_tile_stores(unittest.TestCase):
+    """
+    A tile stored by slices (SME's ZA): the slices' direction decides the
+    store's access, not the vectors that filled the tile - rows moved into
+    horizontal slices, its vertical slices stored as P's contiguous columns:
+    the ZA transpose; its horizontal slices into P strided, refused
+    """
+    def build(self, store):
+        from ukrgen.injectors.blis.families import family, build_packm
+        ztrans = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){m=1, i=n}"],
+                  "store-tileop": [store], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"],
+                  "sme-F64F64": "on"}
+        fam = family.from_yaml("packm", {"family": "pk", "dtypes": ["FP64"], "cases": [
+            {"kind": "trans", "name": "ztrans", "m": [1], "params": ztrans}]})
+        return build_packm("sme", "ukrgen_sme", fam)
+
+    def test_columns_contiguous(self):
+        built, skipped = self.build("Y.TILE:slices_col")
+        self.assertEqual([], skipped)
+        asm = asm_source(built[0])
+        self.assertIn("mova za0h.d", asm)
+        self.assertIn("st1d {za0v.d", asm)
+
+    def test_rows_refused(self):
+        built, skipped = self.build("Y.TILE:slices_row")
+        self.assertEqual([], built)
+        self.assertIn("disagree", str(skipped[0][2]))
 
 
 if __name__ == "__main__":
