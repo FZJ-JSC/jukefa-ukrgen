@@ -278,28 +278,39 @@ int main( void )
             self.assertIn("5 runs, 4 by generated cases, 0 wrong", out)
 
     def test_packm_masked_tail_rvv_vl(self):
-        # RVV's other route (tailmask route vl): the last vector's load and
-        # store at the tail's vector length - vsetvli zero, tail around each,
-        # the full length (set once) back right after - not masked, v0 free
+        # RVV's other route (tailmask route vl): the last vector at the tail's
+        # vector length between lsc_states - vsetvli zero, tail, then vsetvli
+        # t, zero - not masked, v0 free. Preloaded, each last-vector access its
+        # own short region; its own registers, not preloaded, a column's load,
+        # multiply and store one (two switches, not four)
         from ukrgen.injectors.blis.families import build_packm
-        from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
         cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
         if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
             self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
         vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
-        fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "cases": [
-            {"kind": "vec", "m": [1, 2], "params": vec},
-            {"kind": "vec", "name": "vtail", "mask": True, "m": [0, 1],
-             "params": dict(vec, **{"tailmask-route": "vl"})}]})
-        built, skipped = build_packm("rvv", "ukrgen_rvv", fam)
-        self.assertEqual([], skipped)
+        for merged in (False, True):
+            with self.subTest(merged=merged):
+                tail = dict(vec, **{"tailmask-route": "vl"})
+                if merged:
+                    tail.update({"X-data-regs": "4", "Y-data-regs": "4"})
+                case = {"kind": "vec", "name": "vtail", "mask": True, "m": [0, 1], "params": tail}
+                if merged:
+                    case["max-preload"] = {"X": 0}
+                fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "cases": [
+                    {"kind": "vec", "m": [1, 2], "params": vec}, case]})
+                built, skipped = build_packm("rvv", "ukrgen_rvv", fam)
+                self.assertEqual([], skipped)
+                self.check_vl_route(built, merged, cc)
+
+    def check_vl_route(self, built, merged, cc):
         import re
+        from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
+        whole = ["vle64.v", "vfmul.vv", "vse64.v"]
+        merges = []
         for asm in [asm_source(k) for k in built if k.tail]:
             self.assertNotIn("v0.t", asm)
-            # lsc_states around each last-vector load and store - the tail's
-            # length (vsetvli zero, tail), then the full (vsetvli t, zero) -
-            # the schedulers keeping every other vector instruction out
+            # the schedulers keep every other vector instruction out of a region
             short, regions = False, []
             for line in (l.strip() for l in asm.split("\n")):
                 if re.match(r"vsetvli zero, \w+,", line):
@@ -311,8 +322,14 @@ int main( void )
                 elif short and line.startswith("v"):
                     regions[-1].append(line.split()[0])
             self.assertFalse(short)
-            self.assertTrue(len(regions) >= 2)
-            self.assertTrue(all(1 == len(r) and r[0] in ("vle64.v", "vse64.v") for r in regions), regions)
+            self.assertTrue(regions and all(r for r in regions))
+            # last vectors' loads, stores, multiplies only - a full vector at the
+            # short length would pack wrong panels, which the runs below catch
+            self.assertTrue(all(set(r) <= set(whole) for r in regions), regions)
+            merges.append(any(len(r) > 1 for r in regions))
+        # regions merged somewhere: a pipelined loop's store and next load
+        # (merge_switches), or a column's load, multiply and store (tailmask)
+        self.assertTrue(any(merges))
         src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
               vl_helpers(built, make_generator("rvv")) + \
               "\n#define bli_ddpackm_ukrgen_rvv_ref REF\n" + \

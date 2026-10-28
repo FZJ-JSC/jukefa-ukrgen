@@ -56,3 +56,53 @@ def check_state(program, initial: dict[str, str]) -> list[str]:
             problems.append(f"{section}: ends with other state than it began with "
                             f"({', '.join(f'{k}={v}' for k, v in sorted(state.items()))})")
     return problems
+
+
+def merge_switches(program) -> int:
+    """
+    Adjacent short-length regions as one, after scheduling: an lsc_state
+    setting a value back (vlen max) followed by one setting the same value the
+    region before had (tail(m)), nothing between reading or writing that
+    state - both dropped. A pipelined loop's last-vector store and the next
+    column's load so share their region. How many pairs it dropped
+    """
+    dropped = 0
+    for block, section in blocks_and_sections(program):
+        ops = list(getattr(block, section) or [])
+        out, k = [], 0
+        while k < len(ops):
+            op = ops[k]
+            if isinstance(op, lsc_state) and len(out) and _drop_pair(out, ops, k):
+                k = _next_switch(ops, k) + 1
+                dropped += 1
+                continue
+            out.append(op)
+            k += 1
+        setattr(block, section, out)
+    return dropped
+
+
+def _previous_values(out: list) -> dict | None:
+    """the values the last lsc_state already placed set"""
+    for op in reversed(out):
+        if isinstance(op, lsc_state):
+            return op.values
+    return None
+
+
+def _next_switch(ops: list, k: int) -> int:
+    """the next operation after k reading or writing state k's lsc_state sets"""
+    names = set(ops[k].values)
+    for j in range(k + 1, len(ops)):
+        if names & (ops[j].reads_state | ops[j].writes_state):
+            return j
+    return len(ops)
+
+
+def _drop_pair(out: list, ops: list, k: int) -> bool:
+    """whether ops[k] sets back what the next switch sets again, unread between"""
+    before = _previous_values(out)
+    j = _next_switch(ops, k)
+    if before is None or j >= len(ops) or not isinstance(ops[j], lsc_state):
+        return False
+    return ops[j].values == before and set(ops[k].values) == set(before)

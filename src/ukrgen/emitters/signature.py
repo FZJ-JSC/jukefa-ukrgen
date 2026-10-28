@@ -39,7 +39,7 @@ from asmgen.asmblocks.op.opset import opset_modifier
 from asmgen.registers import adt_size, asm_data_type as adt
 from asmgen.asmblocks.op.constraint import ConstraintDoesNotApplyError
 
-from ..lsc_model.state import check_state
+from ..lsc_model.state import check_state, merge_switches
 from ..lsc_model.addressing import sym
 from ..lsc_model.ir import ir_program, ir_block
 from ..components.tile import scalar_tile
@@ -1673,6 +1673,7 @@ class signature_emitter:
         self.tail_vl = {index: None for index in self.program.tail_vl}
         # the state the setup leaves, each access's requirements held where
         # it is (lsc_states setting more) - their signatures pruned to those
+        merge_switches(self.program)
         problems = check_state(self.program, isa.state(dt))
         if problems:
             raise specialization_error("processor state: " + "; ".join(problems))

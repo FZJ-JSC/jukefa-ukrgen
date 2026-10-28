@@ -72,6 +72,56 @@ class tailmask(lsc_irmod):
             return [f"{type(ctx.gen).__name__} has no masks of a register's count"]
         return []
 
+    def short_regions(self, ops: list) -> list:
+        """
+        The vl route: the operations at the tail's length between an lsc_state
+        at its count and one at the full length - a last vector's chain where
+        it closes in the section (its load, what reads what the chain writes,
+        the last-vector store of it: one region, half the switches), else each
+        last-vector access alone. Every other vector operation reads the
+        length, so the schedulers keep them out of between
+        """
+        from ...schedulers.list_scheduler import _key
+        tails = [k for k, op in enumerate(ops) if op.properties.get("tail_vl") is not None]
+        if not tails:
+            return ops
+        region_of = {}
+        for k in (k for k in tails if isinstance(ops[k], lsc_load)):
+            chain, written = [k], {_key(ops[k], p) for p in ops[k].writes}
+            for j in range(k + 1, len(ops)):
+                if j in region_of:
+                    continue
+                if written & {_key(ops[j], p) for p in ops[j].reads}:
+                    chain.append(j)
+                    written |= {_key(ops[j], p) for p in ops[j].writes}
+            # it closes where it ends in last-vector stores and nothing outside
+            # it reads what it writes
+            stores = [j for j in chain if isinstance(ops[j], lsc_store)]
+            closes = stores and all(ops[j].properties.get("tail_vl") is not None for j in stores) \
+                and all(j in chain or not (written & {_key(ops[j], p) for p in ops[j].reads})
+                        for j in range(len(ops)))
+            if closes:
+                for j in chain:
+                    region_of[j] = k
+        state = lambda op, value: lsc_state({"vlen": value}, self.ctx.component_dts[op.indices[1].component])
+        out, placed = [], set()
+        for k, op in enumerate(ops):
+            head = region_of.get(k)
+            if head is not None:
+                members = sorted(j for j, h in region_of.items() if h == head)
+                if k == members[-1]:
+                    first = ops[members[0]]
+                    index = first.properties["tail_vl"]
+                    out += [state(first, f"tail({index})"), *(ops[j] for j in members), state(first, "max")]
+                    placed.update(members)
+                continue
+            if op.properties.get("tail_vl") is not None:
+                index = op.properties["tail_vl"]
+                out += [state(op, f"tail({index})"), op, state(op, "max")]
+                continue
+            out.append(op)
+        return out
+
     def apply(self, program) -> int:
         route = self.values["route"]
         if "vl" == route and not [f for f in self.ctx.gen.set.forms(modifiers={opset_modifier.VLEN})
@@ -113,18 +163,6 @@ class tailmask(lsc_irmod):
                 program.tails.add(index)
                 marked += 1
         if program.tail_vl:
-            # the vl route: each last-vector access between an lsc_state at the
-            # tail's count and one at the full length - every vector operation
-            # reads the length, so the schedulers keep them out of between
             for block, section in blocks_and_sections(program):
-                ops = list(getattr(block, section) or [])
-                out = []
-                for op in ops:
-                    index = op.properties.get("tail_vl")
-                    if index is None:
-                        out.append(op)
-                        continue
-                    dt = self.ctx.component_dts[op.indices[1].component]
-                    out += [lsc_state({"vlen": f"tail({index})"}, dt), op, lsc_state({"vlen": "max"}, dt)]
-                setattr(block, section, out)
+                setattr(block, section, self.short_regions(list(getattr(block, section) or [])))
         return marked

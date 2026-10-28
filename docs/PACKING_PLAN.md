@@ -363,9 +363,12 @@ its signatures pruned to those they hold for, a kernel refused where none
 does - FA64 enforced so (Z5's part: streaming scatters refused where a
 config says `sme-FA64: 'off'`); the vector length route an IR of
 lsc_states around each last-vector access, the schedulers keeping every
-other vector operation out. Next: merging adjacent switches (a column's
-last-vector load and store under one short length), smstart and smstop
-as lsc_states.
+other vector operation out. Switches merged (ukrgen 0216): a column's
+last-vector chain - load, multiply, store - one short region where its
+registers are its own and its load not preloaded (tailmask); after
+scheduling, adjacent regions one where nothing between reads the length
+(merge_switches: a pipelined loop's last-vector store and the next
+column's load). Next: smstart and smstop as lsc_states.
 
 The suggestion as it stood:
 
