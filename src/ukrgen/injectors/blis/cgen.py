@@ -413,7 +413,7 @@ def packm_prototype(config_name: str, dtype: str) -> str:
 
 
 def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: list | None = None,
-                   rest: int | None = None) -> str:
+                   rest: int | None = None, tail: str = "overlap") -> str:
     """
     The data type's packm: each case a block of its own, tried in order -
     the family's dispatch (by case name), else vec, gather, trans as the
@@ -450,7 +450,13 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: l
     decls = [f"void {asm_symbol(k)}( {', '.join(PACKM_ARGS[p][0] for p in k.params)} );"
              for n in names for k in mine if n == k.case]
 
-    def row(k):
+    def at(q, start):
+        """a kernel's arguments, A's and P's rows from start"""
+        return ", ".join({"base(X)": f"( const {ctype}* )a + {start} * inca",
+                          "base(Y)": f"( {ctype}* )p + {start}"}.get(p) or PACKM_ARGS[p][1].format(ctype=ctype)
+                         for p in q.params)
+
+    def row(k, peers=()):
         args = ", ".join(PACKM_ARGS[p][1].format(ctype=ctype) for p in k.params)
         if k.tail:
             # its whole vectors, then the last one masked to the rows left -
@@ -478,13 +484,36 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: l
 \t\t\tif ( done <= cdim && cdim - done <= {PACKM_REST if rest is None else rest} )
 \t\t\t{{
 \t\t\t\t{asm_symbol(k)}( {args} );
-\t\t\t\tif ( done < cdim_max )
-\t\t\t\t\tbli_{ch}{ch}packm_{config_name}_ref( conja, schema, cdim - done, cdim_max - done,
-\t\t\t\t\t    cdim_bcast, n, n_max, kappa, ( const {ctype}* )a + done * inca, inca, lda,
-\t\t\t\t\t    ( {ctype}* )p + done, ldp, params, cntx );
+\t\t\t\tif ( done < cdim )
+\t\t\t\t{{
+{overlap(k, peers)}\t\t\t\t}}
+\t\t\t\tif ( cdim < cdim_max )
+\t\t\t\t\tbli_{ch}{ch}packm_{config_name}_ref( conja, schema, 0, cdim_max - cdim,
+\t\t\t\t\t    cdim_bcast, n, n_max, kappa, ( const {ctype}* )a + cdim * inca, inca, lda,
+\t\t\t\t\t    ( {ctype}* )p + cdim, ldp, params, cntx );
 \t\t\t\treturn;
 \t\t\t}}
 \t\t}}"""
+
+    def overlap(k, peers):
+        """
+        The rows left past a vec kernel's: a kernel of the case ending at
+        cdim - the smallest that covers them and fits in cdim - its first
+        rows packed again, the same values (vec-tail overlap); else, or
+        where the family says reference, the reference
+        """
+        lines = []
+        if "overlap" == tail:
+            for q in sorted((q for q in peers if not q.tail),
+                            key=lambda q: (split_size(q.mr)[0] * q.lmul, split_size(q.mr)[1])):
+                rows = c_expr(q.mr, ctype, q.vl_fn)
+                lines.append(f"\t\t\t\t\t{'else ' if lines else ''}if ( cdim - done <= {rows} && {rows} <= cdim )\n"
+                             f"\t\t\t\t\t\t{asm_symbol(q)}( {at(q, f'( cdim - {rows} )')} );\n")
+        lines.append(f"\t\t\t\t\t{'else' if lines else ''}\n"
+                     f"\t\t\t\t\t\tbli_{ch}{ch}packm_{config_name}_ref( conja, schema, cdim - done, cdim - done,\n"
+                     f"\t\t\t\t\t\t    cdim_bcast, n, n_max, kappa, ( const {ctype}* )a + done * inca, inca, lda,\n"
+                     f"\t\t\t\t\t\t    ( {ctype}* )p + done, ldp, params, cntx );\n")
+        return "".join(lines)
 
     def branch(k):
         if "VL" == k.loop_unit:
@@ -562,7 +591,7 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: l
         if strided:
             note = "A's rows inca apart, gathered into vectors along cdim" if "gather" == kind else name
             blocks.append(f"\t// {note}\n\tif ( cdim_bcast == 1 && n == n_max && {along} )\n\t{{\n"
-                          + "\n".join(row(k) for k in strided) + "\n\t}")
+                          + "\n".join(row(k, strided) for k in strided) + "\n\t}")
         if full:
             blocks.append(f"\t// {name}: a full panel\n\tif ( cdim_bcast == 1 && cdim == cdim_max && n == n_max "
                           f"&& ldp == cdim && {along} )\n\t{{\n" + "\n".join(branch(k) for k in full)

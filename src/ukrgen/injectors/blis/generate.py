@@ -60,10 +60,11 @@ def generate(cfg: configuration, out_dir: str, stack_size: int | None = None,
     # the packm family's dispatch order, where it gives one
     order = next((f.dispatch for f in cfg.families if "packm" == f.kind and f.dispatch), None)
     rest = next((f.vec_rest for f in cfg.families if "packm" == f.kind and f.vec_rest is not None), None)
+    tail = next((f.vec_tail for f in cfg.families if "packm" == f.kind), "overlap")
     if packs:
         write(f"kernels/{cfg.name}/1m/bli_packm_{cfg.name}.c",
               "#include \"blis.h\"\n\n" + helpers + "\n" +
-              "\n".join(packm_dispatch(cfg.name, dt, kernels, order, rest) for dt in packs))
+              "\n".join(packm_dispatch(cfg.name, dt, kernels, order, rest, tail) for dt in packs))
     write(f"config/{cfg.name}/bli_cntx_init_{cfg.name}.c",
           cntx_init(cfg.name, gen, kernels, defaults, cfg.blocksizes))
     size = stack_buf_size(cfg.isa, gen, kernels, stack_size or cfg.stack_buf_size)

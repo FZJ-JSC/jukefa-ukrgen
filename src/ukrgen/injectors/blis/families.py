@@ -113,6 +113,7 @@ UNROLL = {"gemm": "k", "packm": "n"}
 _COMMON = set(KEYS) | set(PER_COMPONENT) | {"unroll"}
 FAMILY_KEYS = _COMMON | {"family", "dtypes", "params", "m", "n", "default", "cases", "split", "parts",
                          "split-ratios", "min-inflight", "align", "c-storage", "dispatch", "vec-rest", "lmul",
+                         "vec-tail",
                          # a file of one family is its entry: the file's own keys with it
                          "isa", "blocksizes"}
 CASE_KEYS = _COMMON | {"kind", "m", "name", "params", "lmul", "mask"}
@@ -144,7 +145,9 @@ def key_params(kind: str, entry: dict) -> dict:
     trans case's every size) - or {size: LMUL}, a vec or gather case's size
     counted in registers whatever its LMUL; mask (a vec case's): size N
     packs N vectors and a last one masked to the rows left - cdim from N*VL
-    to (N+1)*VL in one pass. pre- and post-specialize-irmods
+    to (N+1)*VL in one pass; vec-tail (overlap, reference): the rows a vec
+    case leaves - a kernel of the case ending at cdim, or the reference.
+    pre- and post-specialize-irmods
     take names (the list run) or changes to the defaults only:
     [+structfuse, -cluster]
     """
@@ -222,6 +225,10 @@ class family:
     #: reference packing the rest (cdim from its rows to its rows + vec_rest);
     #: None: cgen's PACKM_REST
     vec_rest: int | None = None
+    #: packm: the rows a vec case leaves - overlap: a kernel of the case
+    #: ending at cdim, packing some rows again (the same values); reference:
+    #: the reference
+    vec_tail: str = "overlap"
     #: packm, RVV: each case's LMUL by its name (lmul: the case's, else the
     #: family's) - a number, for the sizes it divides (1 for the others; a
     #: trans case's every size), or {size: LMUL}
@@ -332,10 +339,14 @@ class family:
                                      f"cases' last vector only")
                 case_mask.add(case.get("name") or case["kind"])
         vec_rest = entry.get("vec-rest")
+        vec_tail = entry.get("vec-tail", "overlap")
+        if vec_tail not in ("overlap", "reference"):
+            raise ValueError(f"{kind} family {entry['family']}: vec-tail {vec_tail!r} - overlap or reference")
         if vec_rest is not None and (not isinstance(vec_rest, int) or vec_rest < 0):
             raise ValueError(f"{kind} family {entry['family']}: vec-rest {vec_rest!r} - rows, 0 or more")
         return family(kind=kind, name=entry["family"], case_kinds=case_kinds, dispatch=dispatch,
-                      vec_rest=vec_rest, case_lmul=case_lmul, case_mask=case_mask, dtypes=list(entry.get("dtypes", ["FP64"])),
+                      vec_rest=vec_rest, case_lmul=case_lmul, case_mask=case_mask,
+                      vec_tail=vec_tail, dtypes=list(entry.get("dtypes", ["FP64"])),
                       params=params, sizes=sizes, default=default, cases=cases,
                       split=split, parts=parts, ratios=ratios,
                       min_inflight=int(inflight) if inflight is not None else None,

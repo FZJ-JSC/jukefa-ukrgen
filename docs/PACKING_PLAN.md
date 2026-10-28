@@ -184,6 +184,18 @@ Where each goes: `dispatch`, `vec-rest`, `lmul` (a default) on the family;
 mechanism (a branch in the kernel) or the dispatch trying them where
 `*kappa == 1`; today every case multiplies.
 
+## The rows a vec case leaves: an overlapping kernel
+
+cdim = N*VL + M with A's columns contiguous - the K1's A panels of 14
+and 6 rows - went to a vec case and the reference for the M rows; BLIS's
+reference cost ~660 cycles a column for 2 rows there (pack A 24-54x
+slower than an exact panel). Done (ukrgen 0208): the rows left packed by
+a kernel of the case ending at cdim - the smallest covering them that
+fits in cdim - its first rows packed again with the same values (14 =
+vec3v + vec1v from row 10); the reference only below a vector and for
+the padding. A family's `vec-tail: reference` keeps the reference.
+Masks (SVE's done, RVV's to come) pack it in one pass.
+
 ## Across the grain on large vectors: blocks of rows
 
 A trans case's kernel packs its rows, 1 to 16, a full panel of them -

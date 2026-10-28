@@ -220,7 +220,7 @@ int main( void )
               "typedef int conj_t;\ntypedef int pack_t;\n" + \
               "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
               "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
-              packm_dispatch("ukrgen_sve", "FP64", built) + \
+              packm_dispatch("ukrgen_sve", "FP64", built, tail="reference") + \
               "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( double ) ); }\n"
         harness = open(os.path.join(HERE, "packm_harness.c")).read() \
             .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
@@ -324,7 +324,9 @@ int main( void )
         base = cfg.families[0]
         name, _, params = next(c for c in base.cases if "trans" == base.case_kinds.get(c[0], c[0]))
         fam = copy.deepcopy(base)
-        fam.cases = [(name, [12], dict(params, **{"pre-specialize-irmods": ["+structfuse"], "X-data-regs": "4"}))]
+        # fields 0, whatever the config's tuning: 12 = 8 + 4
+        fam.cases = [(name, [12], dict(params, **{"pre-specialize-irmods": ["+structfuse"], "X-data-regs": "4",
+                                                   "structfuse-fields": "0"}))]
         self.packm_trans(m=12, fam=fam, expect={"rvv": "vssseg8e64.v"},
                          isas={"rvv": (None, cc, [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"]
                                                   for v in (128, 256)], available)})
@@ -396,6 +398,47 @@ int main( void )
                           ["-DPACKM=bli_dpackm_ukrgen_rvv", f"-DCASES={cases}"], cc=cc)
         for out in outs:
             self.assertIn("3 runs, 1 by generated cases, 0 wrong", out)
+
+    def test_packm_vec_overlap(self):
+        # the rows a vec case leaves - cdim = N*VL + M, the K1's A panels of
+        # 14 and 6 rows - packed by a kernel of the case ending at cdim, its
+        # first rows packed again (the same values): no reference, whose call
+        # for 2 rows cost ~660 cycles a column on the K1; below a vector the
+        # reference. vec-tail: reference keeps the reference for them
+        from ukrgen.injectors.blis.families import build_packm
+        from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
+        cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
+        if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
+            self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+               "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
+        harness = open(os.path.join(HERE, "packm_harness.c")).read() \
+            .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
+        # cdim, cdim_max, n, inca, lda, the reference calls expected
+        for tail, refs, expect in (("overlap", (0, 0), "4 runs, 2 by generated cases, 0 wrong"),
+                                   ("reference", (1, 1), "4 runs, 0 by generated cases, 0 wrong")):
+            with self.subTest(tail=tail):
+                fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "vec-tail": tail,
+                                                 "cases": [{"kind": "vec", "m": [1, 3], "params": vec}]})
+                built, skipped = build_packm("rvv", "ukrgen_rvv", fam)
+                self.assertEqual([], skipped)
+                src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
+                      vl_helpers(built, make_generator("rvv")) + \
+                      "\n#define bli_ddpackm_ukrgen_rvv_ref REF\n" + \
+                      "typedef int conj_t;\ntypedef int pack_t;\n" + \
+                      "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
+                      "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
+                      packm_dispatch("ukrgen_rvv", "FP64", built, tail=fam.vec_tail) + \
+                      "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( double ) ); }\n"
+                cases = (f"{{ 3 * vl + 2, 3 * vl + 2, 9, 1, 3 * vl + 5, {refs[0]} }}, "
+                         f"{{ vl + 2, vl + 2, 7, 1, vl + 2, {refs[1]} }}, "
+                         "{ vl - 1, vl - 1, 5, 1, vl, 1 }, "
+                         f"{{ 3 * vl + 1, 3 * vl + 3, 6, 1, 3 * vl + 1, {1 + refs[0]} }}")
+                outs = self.run_c("rvv", src + harness, built,
+                                  [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"] for v in (128, 256)],
+                                  ["-DPACKM=bli_dpackm_ukrgen_rvv", f"-DCASES={cases}"], cc=cc)
+                for out in outs:
+                    self.assertIn(expect, out)
 
     def test_packm_trans_shufflenet(self):
         # a block of rows - as many as a vector's lanes - transposed in
@@ -629,7 +672,7 @@ int main( void )
               "\n#define bli_ddpackm_ukrgen_sve_ref REF\ntypedef int conj_t;\ntypedef int pack_t;\n" + \
               "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
               "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
-              packm_dispatch("ukrgen_sve", "FP64", built) + \
+              packm_dispatch("ukrgen_sve", "FP64", built, tail="reference") + \
               "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( double ) ); }\n" + \
               open(os.path.join(HERE, "packm_harness.c")).read() \
               .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
@@ -657,7 +700,7 @@ int main( void )
               "\n#define bli_ddpackm_ukrgen_avx2_ref REF\ntypedef int conj_t;\ntypedef int pack_t;\n" + \
               "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
               "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
-              packm_dispatch("ukrgen_avx2", "FP64", built) + \
+              packm_dispatch("ukrgen_avx2", "FP64", built, tail="reference") + \
               "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( double ) ); }\n" + \
               open(os.path.join(HERE, "packm_harness.c")).read() \
               .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
