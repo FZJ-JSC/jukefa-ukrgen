@@ -398,8 +398,10 @@ class signature_specializer:
         plan gave its accesses - C's loads one, its stores another - not
         pointers of its own: each register starts at the first slice of the
         first walk on it in the block (its home), every walk on it an offset
-        from there - another tile's first slice - and the loop leaves it a
-        vector length of steps further. The plan is the emitter's too
+        from there - another tile's first slice - and the loop leaves it where
+        it found it, home: the emitter steps it back by its walk, so code
+        around the loop - an enclosing loop's advance, its last iteration's -
+        finds it there whatever iteration it is. The plan is the emitter's too
         """
         db = self.program.offsets
         order = []
@@ -427,9 +429,8 @@ class signature_specializer:
             to_home = p["home"] - self.positions[(comp, reg)]
             if dict(to_home.terms):
                 inserted.append(lsc_addr_compute(comp, reg, reg, to_home, scalar_tile))
-            # every slice walked: a vector length of steps on
-            self.positions[(comp, reg)] = p["home"] + sym._make(
-                {tuple(sorted(("VL",) + f)): c for f, c in dict(p["step"].terms).items()})
+            # every slice walked, then its walk stepped back: home
+            self.positions[(comp, reg)] = p["home"]
         op.walk_plan = plan
         # it moves them: the scheduler keeps what addresses through them after
         # it, after it

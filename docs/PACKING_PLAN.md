@@ -338,11 +338,13 @@ so the tests can't tell.
    its store's access along the tile's other index; gemm's C (filled and
    stored by columns) as before.
 2. **Z2** tile stores inside loops (1, 2, 3 chunks under qemu, SVL 256
-   and 512). Found: the slice loops walk their address registers (A's a row
-   a slice, P's a column), the n loop adds its chunk on top, and its last
-   iteration takes one back - one chunk writes before P (two and three
-   come out right). Each slice loop to leave its address where it found
-   it, the loop's own advance and the last iteration's then plain.
+   and 512) - done (ukrgen 0218): the slice loops walked their address
+   registers (A's a row a slice, P's a column) and left them there; the
+   specializer planned from there, the n loop's back edge didn't - one
+   chunk wrote before P. Each slice loop now steps its registers back by
+   their walk, the specializer planning from home: one to five chunks
+   right. Z3 next: two and four tiles fail in irmod/lsc/slices.py's hoist
+   (IndexError) - written around gemm's epilogue.
 3. **Z3** a `ztrans` case sized in tiles (m: 1..4 - za0.d-za3.d of eight
    for doubles, four for singles) for the SME configs: full panels of k·VL
    rows - SME gemm's MR and NR (NR = 4 tiles, 4·VL rows, today past the

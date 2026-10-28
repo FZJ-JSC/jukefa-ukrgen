@@ -788,11 +788,19 @@ class signature_emitter:
             for (key, name), ptr in pointer_regs.items():
                 if ptr is not self.aregs[key]:
                     self.rt.unuse_reg("greg", ptr.idx)
-        def settle():
-            # where the loop leaves them: as the specializer has it
+        def settle() -> list[str]:
+            # back where the loop found them: each register stepped back by its
+            # walk (its step, as many slices as the tile has) - code around the
+            # loop finds it home wherever the loop is: an enclosing loop's
+            # advance, its last iteration's moves (a tile stored a chunk of
+            # columns at a time inside n's loop)
+            out = []
             for key, p in (plan or {}).items():
-                self.positions[key] = p["home"] + sym._make(
-                    {tuple(sorted(("VL",) + f)): c for f, c in dict(p["step"].terms).items()})
+                walk = sym._make({tuple(sorted(("VL",) + f)): c for f, c in dict(p["step"].terms).items()})
+                if dict(walk.terms):
+                    out += self.add_bytes(self.aregs[key], self.bytes_of(key[0], sym.const(0) - walk), key[0])
+                self.positions[key] = p["home"]
+            return out
         walkers, deltas, steps, shared = [], [], {}, {}
         for walk in ([] if plan else op.walks):
             anchor = walk.anchor
@@ -916,7 +924,7 @@ class signature_emitter:
             for r in [counter, index] + list(shared.values()) + list(steps.values()):
                 self.rt.unuse_reg("greg", r.idx)
             release_pointers()
-            settle()
+            lines += settle()
             return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
                 if l.strip()]
         for u in range(1 if explicit else unroll):
@@ -970,7 +978,7 @@ class signature_emitter:
         for r in [counter, index] + list(shared.values()) + list(steps.values()):
             self.rt.unuse_reg("greg", r.idx)
         release_pointers()
-        settle()
+        lines += settle()
         return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
                 if l.strip()]
 

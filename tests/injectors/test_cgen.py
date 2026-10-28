@@ -368,6 +368,48 @@ int main( void )
                 if not built:
                     self.assertIn("no form whose state requirements hold (sm ==0", str(skipped[0][2]))
 
+    def packm_ztrans(self, sizes, cases, svls=(256, 512), ylayout=("m:c", "n:p"), extra=None):
+        # SME's ZA transpose: A's rows scaled and moved into a tile's horizontal
+        # slices, its vertical slices stored as P's columns - through BLIS's
+        # dispatch against the reference under qemu
+        from ukrgen.injectors.blis.families import build_packm
+        from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
+        cc = ["aarch64-linux-gnu-gcc", "-static", "-Wa,-march=armv9-a+sme+sme-f64f64"]
+        if not (shutil.which(cc[0]) and shutil.which(QEMU)):
+            self.skipTest("needs aarch64-linux-gnu-gcc and qemu-aarch64-static")
+        ztrans = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){m=1, i=n}"],
+                  "store-tileop": ["Y.TILE:slices_col"], "X-layout": ["n:c", "m:s"], "Y-layout": list(ylayout),
+                  "sme-F64F64": "on"}
+        ztrans.update(extra or {})
+        fam = family.from_yaml("packm", {"family": "pk", "dtypes": ["FP64"], "cases": [
+            {"kind": "trans", "name": "ztrans", "m": list(sizes), "params": ztrans}]})
+        built, skipped = build_packm("sme", "ukrgen_sme", fam)
+        self.assertEqual([], skipped)
+        for k in built:
+            self.assertNotIn("[x2, z", asm_source(k))       # no scatters
+        helper = vl_helpers(built, make_generator("sme")).replace('"smstart', '".arch_extension sme\\n\\tsmstart', 1)
+        src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + helper + \
+              "\n#define bli_ddpackm_ukrgen_sme_ref REF\n" + "typedef int conj_t;\ntypedef int pack_t;\n" + \
+              "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
+              "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
+              packm_dispatch("ukrgen_sme", "FP64", built) + \
+              "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( double ) ); }\n"
+        harness = open(os.path.join(HERE, "packm_harness.c")).read() \
+            .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
+        outs = self.run_c("sme", src + harness, built, [[QEMU, "-cpu", f"max,sme=on,sme{v}=on"] for v in svls],
+                          ["-DPACKM=bli_dpackm_ukrgen_sme", f"-DCASES={cases}"], cc=cc)
+        return outs
+
+    def test_packm_ztrans_chunks(self):
+        # a tile stored inside n's loop: each slice loop steps its address back
+        # by its walk - one chunk of columns (only the last iteration), two,
+        # three, four, five with a column over, two with three over
+        cases = ("{ vl, vl, vl, vl + 1, 1, 0 }, { vl, vl, 2 * vl, 3 * vl, 1, 0 }, "
+                 "{ vl, vl, 3 * vl, 3 * vl, 1, 0 }, { vl, vl, 4 * vl, 4 * vl + 1, 1, 0 }, "
+                 "{ vl, vl, 5 * vl + 1, 6 * vl, 1, 1 }, { vl, vl, 2 * vl + 3, 3 * vl, 1, 1 }")
+        for out in self.packm_ztrans([1], cases):
+            self.assertIn("6 runs, 4 by generated cases, 0 wrong", out)
+
     def test_packm_masked_tail_avx512(self):
         # AVX-512's masked vec cases, run here: the last vector's vmovupd
         # under a k mask (movq, bzhiq, kmovw from tail(m) - the 7th argument,
