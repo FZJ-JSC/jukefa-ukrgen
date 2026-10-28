@@ -95,6 +95,10 @@ def dependencies(ops: list, loop: bool, groups: dict | None = None) -> list[edge
     for step, (i, op) in enumerate(seq):
         reads = {_key(op, p, groups): _tag(op, p) for p in op.reads}
         writes = {_key(op, p, groups): _tag(op, p) for p in op.writes}
+        # processor state as registers (asmgen's signatures': RVV's vlen, SME's
+        # sm): no register class
+        reads.update({(lsc_reg_type.state, name, None, None): None for name in op.reads_state})
+        writes.update({(lsc_reg_type.state, name, None, None): None for name in op.writes_state})
         for key, tag in reads.items():
             if key in last_write:
                 add(*last_write[key], i, step, dept.RAW, key, tag)

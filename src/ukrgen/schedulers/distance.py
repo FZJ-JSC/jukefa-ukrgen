@@ -214,7 +214,8 @@ class distance_specification:
                 if self.reg_type is not None and self.reg_type != rc.ttype:
                     continue
                 
-                asm_reg_tag = determine_dreg_tag(dima=rc.t.dima, dimb=rc.t.dimb)
+                # a state has no register class
+                asm_reg_tag = determine_dreg_tag(dima=rc.t.dima, dimb=rc.t.dimb) if rc.t is not None else None
                 if self.asm_reg_tag is not None and self.asm_reg_tag != asm_reg_tag:
                     continue
                     

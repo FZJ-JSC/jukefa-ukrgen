@@ -347,7 +347,20 @@ so the tests can't tell.
 6. **Z6** kappa 1: rows straight into horizontal slices (`ld1d
    {za0h.d[w12, i]}`), no vector, no `mova` - with the kappa copy cases.
 
-## Processor state as dependencies (suggested)
+## Processor state as dependencies
+
+Done so far: asmgen's signatures declare state (asmgen 0095:
+state_requires - name -> condition, "vlen": "!=None", "sm": "==1" -
+and state_writes - name -> value, "vlen": "avl" or "max", "sm": "1";
+RVV's vector forms and vsetvli, SME's tiles, its gathers and scatters
+without FA64; the setups' state). ukrgen's operations read and write the
+state their signatures do (reads_state, writes_state: ukrgen 0214), and
+both dependency analyses order them by it like registers; distance specs
+`RAW:state::::N`. Next: lsc_state (an operation setting state), the
+requirements checked against the state the setup and lsc_states leave,
+and the vector length route on them.
+
+The suggestion as it stood:
 
 The vector length route (tailmask route vl, 0211) brackets each access
 with its own `vsetvli` pair because the schedulers can't see vl: nothing

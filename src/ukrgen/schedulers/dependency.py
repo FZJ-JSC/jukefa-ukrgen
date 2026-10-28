@@ -6,6 +6,8 @@
 
 from ..models.load_store_operations import lsc_operation
 from .reg_compare import reg_compare
+from ..models.lsc.reg import lsc_reg_type
+from ..models.lsc.index import lsc_reg_index
 
 from enum import Enum,auto
 
@@ -38,6 +40,14 @@ def get_dependencies(op1 : lsc_operation, op2: lsc_operation) ->\
                     index=op1.indices[i],
                     t=op1.tiles[i]) for i in op1.writes}
 
+
+    # processor state as registers: a state an index of its own name
+    state = lambda names: {reg_compare(ttype=lsc_reg_type.state, index=lsc_reg_index(name, [0]))
+                           for name in names}
+    op1_reads |= state(op1.reads_state)
+    op1_writes |= state(op1.writes_state)
+    op2_reads |= state(op2.reads_state)
+    op2_writes |= state(op2.writes_state)
 
     return {
        dependency_type.RAR : set(op2_reads) & set(op1_reads),

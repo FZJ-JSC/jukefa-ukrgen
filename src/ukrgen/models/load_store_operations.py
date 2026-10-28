@@ -48,9 +48,28 @@ class lsc_operation:
         self.indices = indices
         self.reads = reads
         self.writes = writes
+        #: processor state read and written beyond the signatures' (an
+        #: operation setting it, lsc_state, its own)
+        self.extra_reads_state: set[str] = set()
+        self.extra_writes_state: set[str] = set()
+        self._state_memo = None
         self.reg_types = reg_types
 
         self.properties : dict[str,int|str] = dict()
+
+    def state_sigs(self) -> list:
+        """the signatures whose processor state the operation has - none here"""
+        return []
+
+    @property
+    def reads_state(self) -> frozenset:
+        """the processor state the operation reads (asmgen's signatures say)"""
+        return _state_of(self)[0]
+
+    @property
+    def writes_state(self) -> frozenset:
+        """the processor state the operation writes"""
+        return _state_of(self)[1]
 
     def add_property(self, name : str, value : int|str):
         self.properties[name] = value
@@ -87,6 +106,34 @@ class ldst_modifier(Enum):
     bcast1 = auto()
     lane = auto()
     postinc = auto()
+
+def _flat(groups) -> list:
+    """the signatures in a signature group, a list of them, or one"""
+    from ..support.sig_group import sig_group
+    if groups is None:
+        return []
+    if isinstance(groups, (list, tuple)):
+        return [s for g in groups for s in _flat(g)]
+    if isinstance(groups, sig_group):
+        return list(groups.sigs)
+    return [groups]
+
+
+def _state_of(op) -> tuple[frozenset, frozenset]:
+    """
+    The processor state an operation reads and writes: its signatures'
+    (asmgen's state_requires, state_writes - any it may take) and its own -
+    memoized on the signatures it holds, again where they change
+    """
+    sigs = op.state_sigs()
+    key = tuple(id(s) for s in sigs)
+    if op._state_memo is None or op._state_memo[0] != key:
+        reads = frozenset(n for s in sigs for n in s.state_requires)
+        writes = frozenset(n for s in sigs for n in s.state_writes)
+        op._state_memo = (key, reads, writes)
+    return (op._state_memo[1] | frozenset(op.extra_reads_state),
+            op._state_memo[2] | frozenset(op.extra_writes_state))
+
 
 class lsc_load(lsc_operation):
     """
@@ -136,6 +183,9 @@ class lsc_load(lsc_operation):
         super().__init__(tiles=tiles, indices=indices,
                          reads=reads, writes=writes,
                          reg_types=reg_types)
+
+    def state_sigs(self) -> list:
+        return _flat(self.sigs)
 
     @property
     def res_idx(self):
@@ -209,6 +259,9 @@ class lsc_store(lsc_operation):
         super().__init__(tiles=tiles, indices=indices,
                          reads=reads, writes=writes,
                          reg_types=reg_types)
+    def state_sigs(self) -> list:
+        return _flat(self.sigs)
+
     @property
     def res_idx(self):
         return self.indices[1]
@@ -361,6 +414,9 @@ class lsc_move(lsc_operation):
         super().__init__(tiles=tiles, indices=[src, dest], reads=[0], writes=[1],
                          reg_types=[lsc_reg_type.data, lsc_reg_type.data])
 
+    def state_sigs(self) -> list:
+        return _flat(self.sigs)
+
     def __str__(self):
         return f"{self.indices[1]} <- MOVE {self.indices[0]}"
 
@@ -427,6 +483,9 @@ class lsc_transformation(lsc_operation):
                                                  reads=reads, writes=writes,
                                                  reg_types=reg_types)
 
+
+    def state_sigs(self) -> list:
+        return _flat(self.resolution.compute_sg) if self.resolution is not None else []
 
     @property
     def modifiers(self):

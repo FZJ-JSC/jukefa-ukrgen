@@ -13,6 +13,10 @@ class lsc_reg_type(Enum):
     data = auto()
     offset = auto()
     value = auto()
+    #: processor state an operation reads or writes (asmgen's signatures'
+    #: state_requires and state_writes: RVV's "vlen", SME's "sm") - a
+    #: dependency like a register's, named by its index's component
+    state = auto()
 
 class lsc_reg(lsc_reg_index):
 
