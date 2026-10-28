@@ -61,11 +61,16 @@ def vl_helpers(kernels: list, gen) -> str:
     return "\n".join(vl_function(text, name) for text, name in names.items())
 
 
-def c_expr(expr: str, ctype: str, vl_fn: str = "ukrgen_vl") -> str:
+def c_expr(expr: str, ctype: str, vl_fn: str | None = None) -> str:
     """
-    A blocksize - 8, 2*VL, VL - in C: VL read at run time
+    A blocksize - 8, 2*VL, VL - in C: VL read at run time, by the kernel's
+    own function (vl_helpers names it: an LMUL's group, not a register)
     """
-    return str(expr).replace(" ", "").replace("VL", f"{vl_fn}( sizeof( {ctype} ) )")
+    text = str(expr).replace(" ", "")
+    if "VL" in text and vl_fn is None:
+        raise ValueError(f"{expr}: the kernel's vector length function isn't named - vl_helpers first "
+                         f"(an RVV LMUL's VL is its group's, not ukrgen_vl's)")
+    return text.replace("VL", f"{vl_fn}( sizeof( {ctype} ) )")
 
 
 def asm_symbol(k: kernel) -> str:
@@ -548,7 +553,7 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: l
         calls = []
         for k in sorted(ks, key=lambda k: -split_size(k.mr)[1] - split_size(k.mr)[0] * 1000):
             rows = c_expr(k.mr, ctype, k.vl_fn)
-            vl = f"{k.vl_fn}( sizeof( {ctype} ) )" if "VL" == k.loop_unit else "1"
+            vl = c_expr("VL", ctype, k.vl_fn) if "VL" == k.loop_unit else "1"
             args = ", ".join({"n": "chunks", "base(X)": f"( const {ctype}* )a + done * inca",
                               "base(Y)": f"( {ctype}* )p + done"}.get(p) or
                              PACKM_ARGS[p][1].format(ctype=ctype) for p in k.params)

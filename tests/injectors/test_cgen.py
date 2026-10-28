@@ -62,9 +62,9 @@ class test_cgen(unittest.TestCase):
             fam, built = build(isa, dt, [m], [n])
             self.assertEqual(1, len(built))
             k, ctype = built[0], CTYPE[dt]
-            src = "#include \"blis_stub.h\"\n" + vl_helper(make_generator(isa)) + gemm_wrapper(k) + \
-                  f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, ctype)}; }}\n" \
-                  f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, ctype)}; }}\n" + \
+            src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator(isa)) + gemm_wrapper(k) + \
+                  f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, ctype, k.vl_fn)}; }}\n" \
+                  f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, ctype, k.vl_fn)}; }}\n" + \
                   open(os.path.join(HERE, "wrapper_harness.c")).read()
             runners = [[QEMU, "-cpu", "max"]] if "neon" == isa else \
                 [[QEMU, "-cpu", f"max,sve{v}=on"] for v in (256, 512)]
@@ -78,7 +78,7 @@ class test_cgen(unittest.TestCase):
         src = "#include \"blis_stub.h\"\n#include <stdio.h>\n" \
               "typedef void (*gemm_ukr_ft)( dim_t, dim_t, dim_t, const void*, const void*, const void*, " \
               "const void*, void*, inc_t, inc_t, const auxinfo_t*, const cntx_t* );\n" + \
-              vl_helper(make_generator("sve")) + "".join(gemm_wrapper(k) for k in built) + \
+              vl_helpers(built, make_generator("sve")) + "".join(gemm_wrapper(k) for k in built) + \
               GEMM_TABLE_PRELUDE + gemm_table("FP64", built, fam.default["FP64"]) + """
 int main( void )
 {
@@ -160,9 +160,9 @@ int main( void )
             built, skipped = build_gemm("sve", "ukrgen_sve", fam)
             self.assertEqual(1, len(built), skipped)
             k = built[0]
-            src = "#include \"blis_stub.h\"\n" + vl_helper(make_generator("sve")) + gemm_wrapper(k) + \
-                  f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, 'double')}; }}\n" \
-                  f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, 'double')}; }}\n" + \
+            src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator("sve")) + gemm_wrapper(k) + \
+                  f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, 'double', k.vl_fn)}; }}\n" \
+                  f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, 'double', k.vl_fn)}; }}\n" + \
                   open(os.path.join(HERE, "wrapper_harness.c")).read()
             outs = self.run_c("sve", src, [k], [[QEMU, "-cpu", f"max,sve{v}=on"] for v in (256, 512)],
                               [f"-DUKR={k.symbol}", "-DWT=double"])
@@ -479,6 +479,17 @@ int main( void )
                           ["-DPACKM=bli_dpackm_ukrgen_avx512", f"-DCASES={cases}"], cc=["gcc", "-mavx512f"])
         for out in outs:
             self.assertIn("5 runs, 4 by generated cases, 0 wrong", out)
+
+    def test_vl_needs_its_function(self):
+        # a blocksize with VL in C needs the kernel's own vector length
+        # function, vl_helpers' - an RVV LMUL's VL its group's, not a
+        # register's: unnamed, refused (ukropt's dispatch read ukrgen_vl's)
+        from ukrgen.injectors.blis.cgen import c_expr
+        self.assertEqual("8", c_expr("8", "double"))
+        self.assertEqual("2*ukrgen_vl_1( sizeof( double ) )", c_expr("2*VL", "double", "ukrgen_vl_1"))
+        with self.assertRaises(ValueError) as caught:
+            c_expr("2*VL", "double")
+        self.assertIn("vl_helpers first", str(caught.exception))
 
     def test_packm_lmul_by_size(self):
         # RVV's vec cases at LMUL 2 where it divides their vectors, 1 where it

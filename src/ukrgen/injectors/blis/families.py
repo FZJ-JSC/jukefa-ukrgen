@@ -437,7 +437,10 @@ class kernel:
     #: whatever it groups registers by - writes it
     simd_size_c: str = ""
     #: the C function giving its vector length in elements (cgen assigns it)
-    vl_fn: str = "ukrgen_vl"
+    #: the C function giving its vector length - vl_helpers names each
+    #: generator's (an RVV LMUL's its own): unset before, and a dispatch
+    #: reading VL refuses it then
+    vl_fn: str | None = None
     #: packm: the case (vec, trans)
     case: str = ""
     #: a packm case's kind (vec, gather, trans) - its name (case) its own
