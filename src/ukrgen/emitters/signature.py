@@ -1140,6 +1140,39 @@ class signature_emitter:
                 f"offset {immediate}: specialize the IR first")
         return [line]
 
+    def scratch(self, sig, call: dict) -> list | None:
+        """
+        The registers a signature's scratch operands take (asmgen's SCRATCH
+        role: overwritten by the operation for its own use) - any free one
+        of each's type, reserved for this instruction alone; None where one
+        isn't free (the signature doesn't fit). Free them after the
+        instruction (unscratch)
+        """
+        # the tracker's tag and the generator's register, by type - looked up
+        # where a scratch operand needs it (RVV has no mask registers)
+        kinds = {rgt.VEC: "vreg", rgt.GP: "greg", rgt.MASK: "mreg"}
+        taken = []
+        for name, shape in sig.operands.items():
+            if orl.SCRATCH != shape.orole or name in call:
+                continue
+            tag = kinds.get(shape.rtype)
+            make = getattr(self.gen, tag, None) if tag is not None else None
+            if make is None:
+                self.unscratch(taken)
+                return None
+            try:
+                number = self.rt.reserve_any_reg(tag)
+            except IndexError:              # all in use
+                self.unscratch(taken)
+                return None
+            taken.append((tag, number))
+            call[name] = make(number)
+        return taken
+
+    def unscratch(self, taken: list | None):
+        for tag, number in taken or []:
+            self.rt.unuse_reg(tag, number)
+
     def _predicate(self, sig, kwargs: dict, prefix: list | None = None, dt=None, op=None) -> bool:
         """
         Bind a signature's mask operands: an access to a last vector masked
@@ -1356,8 +1389,14 @@ class signature_emitter:
                         operand_modifiers={n: set(s.modifiers) for n, s in sig.operands.items()
                                            if s.modifiers},
                         **kwargs)
+            taken = self.scratch(sig, call)
+            if taken is None:
+                continue
             if operation.fits(**call):
-                return "".join(prefix) + operation(**call)
+                text = "".join(prefix) + operation(**call)
+                self.unscratch(taken)
+                return text
+            self.unscratch(taken)
         return None
 
     def vtype_for(self, op, sig) -> str:
@@ -1406,12 +1445,19 @@ class signature_emitter:
                         modifiers=set(sig.modifiers),
                         operand_modifiers={n: set(s.modifiers) for n, s in sig.operands.items()
                                            if s.modifiers})
+            taken = self.scratch(sig, call)
+            if taken is None:
+                failures.append(f"no free register for {sig}'s scratch operands")
+                continue
             why = operation.refusal(**call)
             if why:
+                self.unscratch(taken)
                 failures.append(why)
                 continue
             # the element type set only for the signature taken
-            return self.vtype_for(op, sig) + operation(**call)
+            text = self.vtype_for(op, sig) + operation(**call)
+            self.unscratch(taken)
+            return text
         if all(any(orl.MASK == o.orole for o in sig.operands.values())
                for sig in _sigs(op.resolution.compute_sg)):
             raise specialization_error(
@@ -1622,17 +1668,14 @@ class signature_emitter:
                 mreg = self.gen.mreg(self.rt.reserve_any_reg("mreg"))
             call = dict(dreg=mreg, dt=tdt, modifiers={opset_modifier.MASKAVL},
                         avlreg=self.params[f"tail({index})"])
-            scratch = None
-            if form is not None and "tmpreg" in form.operands:
-                tag = "vreg" if rgt.VEC == form.operands["tmpreg"].rtype else "greg"
-                scratch = (tag, self.rt.reserve_any_reg(tag))
-                call["tmpreg"] = (self.gen.vreg if "vreg" == tag else self.gen.greg)(scratch[1])
+            taken = self.scratch(form, call) if form is not None else []
+            if taken is None:
+                raise specialization_error(f"the mask of tail({index}): no free register for its scratch")
             why = self.gen.set.refusal(**call)
             if why:
                 raise specialization_error(f"the mask of tail({index}): {why}")
             setup += lines(self.gen.set(**call))
-            if scratch is not None:
-                self.rt.unuse_reg(*scratch)
+            self.unscratch(taken)
             self.tails[index] = mreg
         # the element type the ISA's setup leaves in place, where it is state
         # the instructions run under: the narrowest, its registers ungrouped
