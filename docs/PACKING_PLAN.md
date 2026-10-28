@@ -343,8 +343,12 @@ so the tests can't tell.
    specializer planned from there, the n loop's back edge didn't - one
    chunk wrote before P. Each slice loop now steps its registers back by
    their walk, the specializer planning from home: one to five chunks
-   right. Z3 next: two and four tiles fail in irmod/lsc/slices.py's hoist
-   (IndexError) - written around gemm's epilogue.
+   right. Two and four tiles (ukrgen 0219): a loop's copies in its last
+   iteration shared their operations with the body's - fusing renumbered
+   their walks twice; copies own them now, the slice passes take a loop
+   once wherever sections share it, the step back is the specializer's
+   (an address computation after the loop). The tiles' loops fuse (one
+   over every tile's rows, one over their columns).
 3. **Z3** a `ztrans` case sized in tiles (m: 1..4 - za0.d-za3.d of eight
    for doubles, four for singles) for the SME configs: full panels of k·VL
    rows - SME gemm's MR and NR (NR = 4 tiles, 4·VL rows, today past the

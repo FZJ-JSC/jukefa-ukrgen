@@ -1385,6 +1385,15 @@ def _clone(op: lsc_operation) -> lsc_operation:
     new.reg_types = list(op.reg_types)
     new.properties = dict(op.properties)
     new.mods = copy.copy(op.mods)
+    if isinstance(op, lsc_loop):
+        # a loop over slices owns what's in it: a copy of a loop (a loop's
+        # last iteration's) shared its block's operations and its walks'
+        # anchors with the loop - passes changing them in place (fusing loops,
+        # hoisting loads, renumbering walks) changed both
+        new.block = [_clone(o) for o in op.block]
+        new.walks = [loop_walk(anchor=_clone(w.anchor), step=w.step) for w in op.walks]
+        new.info = dict(op.info)
+        new.refresh()
     return new
 
 

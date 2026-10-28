@@ -410,6 +410,34 @@ int main( void )
         for out in self.packm_ztrans([1], cases):
             self.assertIn("6 runs, 4 by generated cases, 0 wrong", out)
 
+    def test_packm_ztrans_tiles(self):
+        # sized in tiles - VL, 2*VL, 4*VL rows, za0.d to za3.d - the tiles'
+        # loops over slices fused (one over every tile's rows, one over their
+        # columns) inside n's loop: the loops' copies in its last iteration
+        # their own operations, not the body's
+        cases = ("{ vl, vl, 2 * vl, 3 * vl, 1, 0 }, { 2 * vl, 2 * vl, 2 * vl + 1, 3 * vl, 1, 1 }, "
+                 "{ 4 * vl, 4 * vl, 3 * vl, 3 * vl, 1, 0 }, { 2 * vl, 2 * vl, vl, vl, 1, 0 }, "
+                 "{ 4 * vl, 4 * vl, vl + 2, 2 * vl, 1, 1 }")
+        for out in self.packm_ztrans([1, 2, 4], cases):
+            self.assertIn("5 runs, 3 by generated cases, 0 wrong", out)
+
+    def test_packm_ztrans_fused(self):
+        from ukrgen.injectors.blis.families import build_packm
+        ztrans = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){m=1, i=n}"],
+                  "store-tileop": ["Y.TILE:slices_col"], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"],
+                  "sme-F64F64": "on"}
+        loops = {}
+        # the defaults (no list: an empty one would be no passes at all), then
+        # without fuse_slices
+        for irmods in (None, ["-fuse_slices"]):
+            params = dict(ztrans, **({"pre-specialize-irmods": irmods} if irmods else {}))
+            fam = family.from_yaml("packm", {"family": "pk", "dtypes": ["FP64"], "cases": [
+                {"kind": "trans", "name": "ztrans", "m": [2], "params": params}]})
+            built, skipped = build_packm("sme", "ukrgen_sme", fam)
+            self.assertEqual([], skipped)
+            loops[bool(irmods)] = sum(1 for l in asm_source(built[0]).split("\n") if l.strip().endswith("_slices:"))
+        self.assertEqual(loops[True], 2 * loops[False])
+
     def test_packm_masked_tail_avx512(self):
         # AVX-512's masked vec cases, run here: the last vector's vmovupd
         # under a k mask (movq, bzhiq, kmovw from tail(m) - the 7th argument,

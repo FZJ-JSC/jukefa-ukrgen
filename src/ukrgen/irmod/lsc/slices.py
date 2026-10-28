@@ -78,13 +78,19 @@ class fuse_slices(lsc_irmod):
                                       "slices of every tile of a path, a slice index shared")]
 
     def apply(self, program) -> int:
-        fused = 0
+        # sections share operations - a loop's body and its last iteration
+        # (packm's n loop holding loops over slices) the same loops: each
+        # fused once, the loops it took dropped wherever else they are
+        fused, absorbed, done = 0, set(), set()
         for block, section in blocks_and_sections(program):
-            ops = list(getattr(block, section) or [])
+            ops = [op for op in (getattr(block, section) or []) if id(op) not in absorbed]
             i = 0
             while i < len(ops):
                 first = ops[i]
                 j = i + 1
+                if id(first) in done:
+                    i += 1
+                    continue
                 while slice_loop(first) and j < len(ops):
                     second = ops[j]
                     # a later loop over the same tiles moves up to the first,
@@ -92,6 +98,8 @@ class fuse_slices(lsc_irmod):
                     if slice_loop(second) and self.compatible(first, second, self.values["across_tiles"]) and \
                             all(self.independent(program, second, between) for between in ops[i + 1:j]):
                         ops[i] = first = self.fuse(first, second)
+                        absorbed.add(id(second))
+                        done.add(id(first))
                         del ops[j]
                         fused += 1
                         continue
@@ -161,10 +169,12 @@ class forward_slices(lsc_irmod):
     constraints = "the slice and the vector unchanged between the two moves"
 
     def apply(self, program) -> int:
-        forwarded = 0
+        forwarded, seen = 0, set()
         for block, section in blocks_and_sections(program):
             for op in getattr(block, section) or []:
-                if slice_loop(op):
+                # each loop once, whichever sections share it
+                if slice_loop(op) and id(op) not in seen:
+                    seen.add(id(op))
                     forwarded += self.forward(op) + self.store_vectors(op)
         # a tile written only to be stored, its stores now from the vectors:
         # the writes go - dead where nothing on the same path reads the tile
@@ -274,14 +284,17 @@ class hoist_slices(lsc_irmod):
     constraints = "the load's walk steps by nothing; its register not written in the loop"
 
     def apply(self, program) -> int:
-        hoisted = 0
+        # a loop hoisted from once - sections share it (a loop's body and its
+        # last iteration) - its loads before it in every section holding it
+        hoisted, before = 0, {}
         for block, section in blocks_and_sections(program):
             out = []
             for op in getattr(block, section) or []:
                 if slice_loop(op):
-                    before = self.hoist(op)
-                    hoisted += len(before)
-                    out += before
+                    if id(op) not in before:
+                        before[id(op)] = self.hoist(op)
+                        hoisted += len(before[id(op)])
+                    out += before[id(op)]
                 out.append(op)
             setattr(block, section, out)
         return hoisted

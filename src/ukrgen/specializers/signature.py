@@ -398,10 +398,10 @@ class signature_specializer:
         plan gave its accesses - C's loads one, its stores another - not
         pointers of its own: each register starts at the first slice of the
         first walk on it in the block (its home), every walk on it an offset
-        from there - another tile's first slice - and the loop leaves it where
-        it found it, home: the emitter steps it back by its walk, so code
-        around the loop - an enclosing loop's advance, its last iteration's -
-        finds it there whatever iteration it is. The plan is the emitter's too
+        from there - another tile's first slice - and after the loop an
+        address computation steps it back by its walk, home: code around the
+        loop - an enclosing loop's advance, its last iteration's - finds it
+        there whatever iteration it is. The plan is the emitter's too
         """
         db = self.program.offsets
         order = []
@@ -424,18 +424,22 @@ class signature_specializer:
                     f"a loop over slices walks {comp}'s address register by {plan[key]['step']} "
                     f"and by {walk.step}")
             plan[key]["walks"][w] = start - plan[key]["home"]
-        inserted = []
+        inserted, back = [], []
         for (comp, reg), p in plan.items():
             to_home = p["home"] - self.positions[(comp, reg)]
             if dict(to_home.terms):
                 inserted.append(lsc_addr_compute(comp, reg, reg, to_home, scalar_tile))
-            # every slice walked, then its walk stepped back: home
+            # every slice walked - a vector length of steps on - then its walk
+            # stepped back: home
+            walk = sym._make({tuple(sorted(("VL",) + f)): c for f, c in dict(p["step"].terms).items()})
+            if dict(walk.terms):
+                back.append(lsc_addr_compute(comp, reg, reg, sym.const(0) - walk, scalar_tile))
             self.positions[(comp, reg)] = p["home"]
         op.walk_plan = plan
         # it moves them: the scheduler keeps what addresses through them after
         # it, after it
         op.refresh()
-        return inserted + [op]
+        return inserted + [op] + back
 
     def adapt(self, op) -> list:
         if isinstance(op, lsc_loop) and "slices" == op.info.get("kind"):

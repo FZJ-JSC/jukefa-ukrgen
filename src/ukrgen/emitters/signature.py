@@ -789,18 +789,12 @@ class signature_emitter:
                 if ptr is not self.aregs[key]:
                     self.rt.unuse_reg("greg", ptr.idx)
         def settle() -> list[str]:
-            # back where the loop found them: each register stepped back by its
-            # walk (its step, as many slices as the tile has) - code around the
-            # loop finds it home wherever the loop is: an enclosing loop's
-            # advance, its last iteration's moves (a tile stored a chunk of
-            # columns at a time inside n's loop)
-            out = []
+            # where the loop leaves them - a vector length of steps on; the
+            # specializer's address computations after it step them back home
             for key, p in (plan or {}).items():
-                walk = sym._make({tuple(sorted(("VL",) + f)): c for f, c in dict(p["step"].terms).items()})
-                if dict(walk.terms):
-                    out += self.add_bytes(self.aregs[key], self.bytes_of(key[0], sym.const(0) - walk), key[0])
-                self.positions[key] = p["home"]
-            return out
+                self.positions[key] = p["home"] + sym._make(
+                    {tuple(sorted(("VL",) + f)): c for f, c in dict(p["step"].terms).items()})
+            return []
         walkers, deltas, steps, shared = [], [], {}, {}
         for walk in ([] if plan else op.walks):
             anchor = walk.anchor
