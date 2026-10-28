@@ -463,10 +463,12 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: l
             # any cdim between, in one pass; the reference zeroes the rows
             # past cdim, where cdim_max has more
             vl = c_expr("VL", ctype, k.vl_fn)
-            vectors, _ = split_size(k.mr)
+            # its rows less one vector length: whole vectors before the masked
+            # one - k*VL or a number of elements (AVX-512's 16), alike
+            rows = c_expr(k.mr, ctype, k.vl_fn)
             return f"""\
 \t\t{{
-\t\t\tconst dim_t full = {vectors - 1} * {vl};
+\t\t\tconst dim_t full = {rows} - {vl};
 \t\t\tif ( full < cdim && cdim - full < {vl} )
 \t\t\t{{
 \t\t\t\tconst dim_t tail = cdim - full;

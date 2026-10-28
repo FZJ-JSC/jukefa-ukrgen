@@ -277,6 +277,48 @@ int main( void )
         for out in outs:
             self.assertIn("5 runs, 4 by generated cases, 0 wrong", out)
 
+    def test_packm_masked_tail_avx512(self):
+        # AVX-512's masked vec cases, run here: the last vector's vmovupd
+        # under a k mask (movq, bzhiq, kmovw from tail(m) - the 7th argument,
+        # on the stack, loaded at entry) - cdim below a vector, N*VL + M,
+        # padded; exact the vec case's, past the masked ones vec2v and an
+        # overlapping vec1v
+        from ukrgen.injectors.blis.families import build_packm
+        from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
+        from tests.specializers.test_native import cpu_has
+        if not (cpu_has("avx512f") and cpu_has("bmi2")):
+            self.skipTest("needs AVX512F and BMI2")
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+               "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
+        fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "cases": [
+            {"kind": "vec", "m": [1, 2], "params": vec},
+            {"kind": "vec", "name": "vtail", "mask": True, "m": [0, 1], "params": vec}]})
+        built, skipped = build_packm("avx512", "ukrgen_avx512", fam)
+        self.assertEqual([], skipped)
+        masked = [asm_source(k) for k in built if k.tail]
+        self.assertEqual(2, len(masked))
+        for asm in masked:
+            self.assertIn("bzhiq", asm)
+            self.assertIn("{z}", asm)
+        src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
+              vl_helpers(built, make_generator("avx512")) + \
+              "\n#define bli_ddpackm_ukrgen_avx512_ref REF\n" + \
+              "typedef int conj_t;\ntypedef int pack_t;\n" + \
+              "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
+              "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
+              packm_dispatch("ukrgen_avx512", "FP64", built) + \
+              "\ndim_t VL_OF( void ) { return 8; }\n"
+        harness = open(os.path.join(HERE, "packm_harness.c")).read() \
+            .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
+        # cdim, cdim_max, n, inca, lda, the reference calls expected
+        cases = ("{ 1, 1, 7, 1, 3, 0 }, { vl + 1, vl + 1, 9, 1, vl + 3, 0 }, "
+                 "{ 2 * vl - 1, 2 * vl, 6, 1, 2 * vl + 2, 1 }, { vl, vl, 5, 1, vl + 3, 0 }, "
+                 "{ 2 * vl + 1, 2 * vl + 1, 4, 1, 2 * vl + 1, 0 }")
+        outs = self.run_c("avx512", src + harness, built, [[]],
+                          ["-DPACKM=bli_dpackm_ukrgen_avx512", f"-DCASES={cases}"], cc=["gcc", "-mavx512f"])
+        for out in outs:
+            self.assertIn("5 runs, 4 by generated cases, 0 wrong", out)
+
     def test_packm_lmul_by_size(self):
         # RVV's vec cases at LMUL 2 where it divides their vectors, 1 where it
         # doesn't: 2v and 4v one and two m2 groups, 1v and 3v m1 - each its

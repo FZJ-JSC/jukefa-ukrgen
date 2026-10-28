@@ -226,11 +226,12 @@ run-time parameter (`tail(m)`), the mask set once after the ISA's setup
 The dispatch tries masked cases first; the reference only zeroes rows past
 cdim. RVV's v0 route done (ukrgen 0209 on asmgen 0091): the mask set
 once in v0 (vid.v into a scratch vector, vmsltu.vx from tail(m)), the
-last vector's load and store their masked twins (v0.t). Still to come:
-AVX-512 (asmgen 0092 sets its k mask from a register; it needs masked
-plain loads and stores, and tail(m) - the 7th argument - loaded from the
-stack before the setup); RVV's other route, the vector length switched
-for the last vector (vl a dependency every vector operation reads).
+last vector's load and store their masked twins (v0.t). AVX-512's done
+(ukrgen 0210 on asmgen 0092, 0093): the k mask set once (movq, bzhiq,
+kmovw from tail(m) - the 7th argument, on the stack, loaded at entry),
+the last vector's vmovupd its masked twin. Still to come: RVV's other
+route, the vector length switched for the last vector (vl a dependency
+every vector operation reads).
 
 With masks of the first M lanes (A3) the `vec` route - vectors along
 cdim, X contiguous along it - packs what isn't whole vectors too, where

@@ -32,11 +32,19 @@ def _masked(gen, op) -> list:
 
 
 def _vectors(offset) -> int | None:
-    """an offset's vector lengths, where it's a whole number of them"""
+    """
+    An offset along a vector's index, ordered as vectors are: whole vector
+    lengths where they're symbolic (SVE, RVV: k*VL), elements where the
+    length is a number (AVX-512's 0, 8, 16); None where it's neither
+    """
     terms = dict(offset.terms) if isinstance(offset, sym) else {}
-    if set(terms) - {("VL",)}:
-        return None
-    return terms.get(("VL",), 0)
+    if not terms:
+        return 0
+    if set(terms) <= {("VL",)}:
+        return terms[("VL",)]
+    if set(terms) <= {()}:
+        return terms[()]
+    return None
 
 
 class tailmask(lsc_irmod):
