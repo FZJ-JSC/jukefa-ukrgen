@@ -222,7 +222,11 @@ class signature_specializer:
         assigned = reg
         db, strides = self.program.offsets, self.program.strides.get(comp, {})
         sigs = _sigs(op.sigs)
-        usable = [s for s in sigs if _usable(self.ctx, s)]
+        # a last vector's access (tailmask) under the mask the emitter sets
+        # up from tail(<index>): its masked forms usable without an all-true
+        # predicate (RVV's v0.t)
+        tail = op.properties.get("tail") is not None
+        usable = [s for s in sigs if tail or _usable(self.ctx, s)]
         if sigs and not usable:
             raise specialization_error(
                 f"every {op.step.op} signature for {db[op.offset]} needs a governing "

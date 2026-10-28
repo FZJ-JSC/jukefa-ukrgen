@@ -1585,13 +1585,28 @@ class signature_emitter:
         for index in sorted(self.program.tails):
             tdt = next((self.ctx.component_dts[c] for c, i in self.program.vector_indices.items()
                         if i == index), dt)
-            mreg = self.gen.mreg(self.rt.reserve_any_reg("mreg"))
+            # the mask where the ISA's form puts it - a mask register, or a
+            # vector: RVV's masked accesses take v0 - and a scratch register
+            # where it takes one (RVV's indices, AVX-512's bits), the setup's
+            form = next(iter(self.gen.set.forms(modifiers={opset_modifier.MASKAVL}, dts={"dreg": tdt})), None)
+            if form is not None and rgt.VEC == form.operands["dreg"].rtype:
+                self.rt.reserve_specific_reg("vreg", 0)
+                mreg = self.gen.vreg(0)
+            else:
+                mreg = self.gen.mreg(self.rt.reserve_any_reg("mreg"))
             call = dict(dreg=mreg, dt=tdt, modifiers={opset_modifier.MASKAVL},
                         avlreg=self.params[f"tail({index})"])
+            scratch = None
+            if form is not None and "tmpreg" in form.operands:
+                tag = "vreg" if rgt.VEC == form.operands["tmpreg"].rtype else "greg"
+                scratch = (tag, self.rt.reserve_any_reg(tag))
+                call["tmpreg"] = (self.gen.vreg if "vreg" == tag else self.gen.greg)(scratch[1])
             why = self.gen.set.refusal(**call)
             if why:
                 raise specialization_error(f"the mask of tail({index}): {why}")
             setup += lines(self.gen.set(**call))
+            if scratch is not None:
+                self.rt.unuse_reg(*scratch)
             self.tails[index] = mreg
         # the element type the ISA's setup leaves in place, where it is state
         # the instructions run under: the narrowest, its registers ungrouped

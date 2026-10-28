@@ -224,9 +224,13 @@ vectors and a last one under a mask of its first M rows, M = cdim - N*VL a
 run-time parameter (`tail(m)`), the mask set once after the ISA's setup
 (whilelo) - cdim from N*VL to (N+1)*VL in one pass, below VL with N = 0.
 The dispatch tries masked cases first; the reference only zeroes rows past
-cdim. Still to come: AVX-512 (a mask from a register: a scratch register),
-RVV's routes (the vector length switched for the last vector; v0 - masked
-accesses, A8).
+cdim. RVV's v0 route done (ukrgen 0209 on asmgen 0091): the mask set
+once in v0 (vid.v into a scratch vector, vmsltu.vx from tail(m)), the
+last vector's load and store their masked twins (v0.t). Still to come:
+AVX-512 (asmgen 0092 sets its k mask from a register; it needs masked
+plain loads and stores, and tail(m) - the 7th argument - loaded from the
+stack before the setup); RVV's other route, the vector length switched
+for the last vector (vl a dependency every vector operation reads).
 
 With masks of the first M lanes (A3) the `vec` route - vectors along
 cdim, X contiguous along it - packs what isn't whole vectors too, where

@@ -8,7 +8,27 @@ from asmgen.asmblocks.op.opset import opset_modifier
 
 from ...lsc_model.addressing import sym
 from ...models.load_store_operations import lsc_load, lsc_store
+from ...specializers.signature import _sigs
 from .base import lsc_irmod, irmod_placement, blocks_and_sections
+
+
+def _masked(gen, op) -> list:
+    """
+    An access's forms under a mask: its own where they take one (SVE's
+    every vector access), else each one's twin with MASK (RVV's v0.t)
+    """
+    action = "load" if isinstance(op, lsc_load) else "store"
+    every = getattr(gen, action).get_signatures()
+    out = []
+    for s in _sigs(op.sigs):
+        mods = {m.name for m in s.modifiers}
+        if "MASK" in mods:
+            out.append(s)
+            continue
+        out += [t for t in every if {m.name for m in t.modifiers} == mods | {"MASK"}
+                and t.structural_params == s.structural_params
+                and t.operands["adreg"].dt == s.operands["adreg"].dt]
+    return out
 
 
 def _vectors(offset) -> int | None:
@@ -63,6 +83,11 @@ class tailmask(lsc_irmod):
             if index is None or last.get(comp) is None:
                 continue
             if last[comp] == _vectors(program.offsets.records[op.offset].along(index)):
+                masked = _masked(self.ctx.gen, op)
+                if not masked:
+                    raise ValueError(f"tailmask: {comp}'s last vector has no masked form of its "
+                                     f"{'load' if isinstance(op, lsc_load) else 'store'}")
+                op.sigs = masked
                 op.add_property("tail", index)
                 program.tails.add(index)
                 marked += 1
