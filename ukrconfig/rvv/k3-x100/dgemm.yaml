@@ -8,7 +8,7 @@
 # and shape-dependent address register counts - vm {A: max(1, 2m-2), B: n/4} rotated, vn
 # {A: m/4, B: max(1, 2n-2)} with A blocked. nr 8 = 2*VL keeps the packm vec case dispatchable.
 isa: rvv
-blocksizes: {mr-in-mc: 16, nr-in-nc: 64, kc: 256}
+blocksizes: {mr-in-mc: 36, nr-in-nc: 424, kc: 308}
 families:
 - family: vn
   preset: gemm_fma_vf
@@ -26,7 +26,7 @@ families:
   max-addr-regs: {A: "m/4", B: "max(1, 2n-2)"}
   addr-pattern: {A: "blocked:mnk/R", B: rotate}
   c-storage: [row, any]
-  default: 14x2
+  default: 8x3
 - family: vm
   preset: gemm_fma_vf
   vectorize: m
