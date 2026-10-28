@@ -381,7 +381,12 @@ last-vector chain - load, multiply, store - one short region where its
 registers are its own and its load not preloaded (tailmask); after
 scheduling, adjacent regions one where nothing between reads the length
 (merge_switches: a pipelined loop's last-vector store and the next
-column's load). Next: smstart and smstop as lsc_states.
+column's load). The state check runs at the end of ISA specialization
+(ukrgen 0221), with the forms it decides; merge_switches at emission,
+after scheduling. Next: smstart and smstop as lsc_states; RVV's element
+type switches (the emitter's vtype_for) as lsc_states from the
+specializer - sections ending in the setup's type; the masked tails'
+setup as an IR operation.
 
 The suggestion as it stood:
 

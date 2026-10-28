@@ -39,7 +39,7 @@ from asmgen.asmblocks.op.opset import opset_modifier
 from asmgen.registers import adt_size, asm_data_type as adt
 from asmgen.asmblocks.op.constraint import ConstraintDoesNotApplyError
 
-from ..lsc_model.state import check_state, merge_switches
+from ..lsc_model.state import merge_switches
 from ..lsc_model.addressing import sym
 from ..lsc_model.ir import ir_program, ir_block
 from ..components.tile import scalar_tile
@@ -1673,12 +1673,9 @@ class signature_emitter:
         self.tails = {}
         #: the vl route's indices: their counts read at every last vector
         self.tail_vl = {index: None for index in self.program.tail_vl}
-        # the state the setup leaves, each access's requirements held where
-        # it is (lsc_states setting more) - their signatures pruned to those
+        # adjacent short-length regions one, the schedule final (the state's
+        # requirements were checked when specializing)
         merge_switches(self.program)
-        problems = check_state(self.program, isa.state(dt))
-        if problems:
-            raise specialization_error("processor state: " + "; ".join(problems))
         for index in sorted(self.program.tails - self.program.tail_vl):
             tdt = next((self.ctx.component_dts[c] for c, i in self.program.vector_indices.items()
                         if i == index), dt)

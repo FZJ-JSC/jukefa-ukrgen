@@ -576,4 +576,14 @@ class signature_specializer:
             self.positions = dict(start)
             for block in case.blocks:
                 self.adapt_block(block)
+        # the state the ISA's setup leaves (for the narrowest element type, as
+        # the emitter sets it up), lsc_states setting more: each access's
+        # signatures those whose requirements hold where it is - decided here,
+        # with the forms, before scheduling
+        # (imported here: the state module reaches the irmods, tailmask this module)
+        from ..lsc_model.state import check_state
+        dt = min(self.ctx.component_dts.values(), key=adt_size)
+        problems = check_state(self.program, self.ctx.gen.isa_setup().state(dt))
+        if problems:
+            raise specialization_error("processor state: " + "; ".join(problems))
         return self.program
