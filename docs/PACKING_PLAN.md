@@ -229,9 +229,12 @@ once in v0 (vid.v into a scratch vector, vmsltu.vx from tail(m)), the
 last vector's load and store their masked twins (v0.t). AVX-512's done
 (ukrgen 0210 on asmgen 0092, 0093): the k mask set once (movq, bzhiq,
 kmovw from tail(m) - the 7th argument, on the stack, loaded at entry),
-the last vector's vmovupd its masked twin. Still to come: RVV's other
-route, the vector length switched for the last vector (vl a dependency
-every vector operation reads).
+the last vector's vmovupd its masked twin. RVV's other route
+done (ukrgen 0211): `tailmask-route: vl` - each last-vector load and
+store between vsetvli zero, tail and vsetvli zero, full (the full length
+set once in a register): nothing else runs short, so no schedule can
+break it; v0 stays free, two vsetvli an access. Sweepable against the
+default `mask` per case.
 
 With masks of the first M lanes (A3) the `vec` route - vectors along
 cdim, X contiguous along it - packs what isn't whole vectors too, where

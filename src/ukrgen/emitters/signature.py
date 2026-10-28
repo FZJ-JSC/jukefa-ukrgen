@@ -400,6 +400,10 @@ class signature_emitter:
         #: stack parameters needed before the dispatch (setup's values):
         #: loaded at entry, not deferred
         self.keep_params = set(keep_params)
+        #: the last vectors' masks and, for the vl route, the full vector
+        #: length's registers (tailmask): set up by the setup
+        self.tails: dict = {}
+        self.tail_vl: dict = {}
         self.recipes: list[tuple[str, tuple, bool]] = []
         self.regions_started = False
         self.region_loads: list[str] = []
@@ -1081,8 +1085,22 @@ class signature_emitter:
     def memory(self, op) -> list[str]:
         """
         A load or store through the signature taking its offset from its address
-        register, which specializing has made a constant some signature takes
+        register, which specializing has made a constant some signature takes -
+        a last vector's (tailmask route vl) at the tail's vector length, the
+        full one set back right after: nothing else runs short
         """
+        tail = op.properties.get("tail")
+        if tail is not None and tail in self.tail_vl:
+            from asmgen.asmblocks.op.opset import opset_modifier as setmod
+            zero = next((self.gen.greg(i) for i in range(64) if "zero" == str(self.gen.greg(i))), None)
+            tdt = self.ctx.component_dts[op.indices[0].component]
+            short = self.gen.set(dreg=zero, dt=tdt, modifiers={setmod.VLEN}, avlreg=self.params[f"tail({tail})"])
+            full = self.gen.set(dreg=zero, dt=tdt, modifiers={setmod.VLEN}, avlreg=self.tail_vl[tail])
+            split = lambda text: [l.strip() for l in text.splitlines() if l.strip()]
+            return split(short) + self._memory(op) + split(full)
+        return self._memory(op)
+
+    def _memory(self, op) -> list[str]:
         comp, reg = op.indices[0].component, op.indices[0].indices[0]
         areg = self.aregs[(comp, reg)]
         elements = self.program.offsets.elements_offset(op.offset, self.program.strides.get(comp, {}))
@@ -1132,7 +1150,7 @@ class signature_emitter:
         """
         masks = [n for n, o in sig.operands.items() if orl.MASK == o.orole]
         tail = op.properties.get("tail") if op is not None else None
-        if tail is not None:
+        if tail is not None and tail not in self.tail_vl:
             if not masks or tail not in self.tails:
                 return False                # a last vector only under its mask
             for name in masks:
@@ -1582,7 +1600,15 @@ class signature_emitter:
         # elements, set once - here, while the parameters are where the call
         # put them - each in a mask register of its own for the whole kernel
         self.tails = {}
-        for index in sorted(self.program.tails):
+        #: the vl route's: the full vector length's register, set once
+        self.tail_vl = {}
+        for index in sorted(self.program.tail_vl):
+            full = self.gen.greg(self.rt.reserve_any_reg("greg"))
+            tdt = next((self.ctx.component_dts[c] for c, i in self.program.vector_indices.items()
+                        if i == index), dt)
+            setup += lines(self.gen.set(dreg=full, dt=tdt, modifiers={opset_modifier.VLEN}))
+            self.tail_vl[index] = full
+        for index in sorted(self.program.tails - self.program.tail_vl):
             tdt = next((self.ctx.component_dts[c] for c, i in self.program.vector_indices.items()
                         if i == index), dt)
             # the mask where the ISA's form puts it - a mask register, or a
@@ -1797,6 +1823,8 @@ class signature_emitter:
         """
         aliases = self.aliases
         for name in sorted(self.live_params):
+            if name.startswith("tail(") and name[5:-1] in self.tail_vl:
+                continue            # the vl route's count: every last vector's
             comp = self.param_comp(name)
             # C's parameters are its storages' aliases' too
             needed = (comp in later or ("C" == comp and any(a in later for a in aliases))) \

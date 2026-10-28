@@ -160,6 +160,9 @@ class ir_program:
     #: indices whose last vector is masked (irmod tailmask): its elements a
     #: run-time parameter, tail(<index>), the mask set from it once
     tails : set[str] = field(default_factory=set)
+    #: those of them whose last vector's accesses run at a shorter vector
+    #: length (tailmask route vl: RVV's vsetvli around each) - not masked
+    tail_vl : set[str] = field(default_factory=set)
 
     def render(self) -> str:
         db = self.offsets

@@ -9,7 +9,7 @@ from asmgen.asmblocks.op.opset import opset_modifier
 from ...lsc_model.addressing import sym
 from ...models.load_store_operations import lsc_load, lsc_store
 from ...specializers.signature import _sigs
-from .base import lsc_irmod, irmod_placement, blocks_and_sections
+from .base import lsc_irmod, irmod_param, irmod_placement, blocks_and_sections
 
 
 def _masked(gen, op) -> list:
@@ -61,6 +61,10 @@ class tailmask(lsc_irmod):
     placement = irmod_placement.PRE_SPECIALIZE
     default_enabled = False
     constraints = "masks of a register's count (MASKAVL: SVE's whilelo); vectors along the index a VL apart"
+    params = [irmod_param(name="route", default="mask", choices=("mask", "vl"),
+                          description="mask: the last vector's accesses masked (SVE's predicate, RVV's v0, "
+                                      "AVX-512's k); vl: RVV's vector length set to the count around each "
+                                      "of them (vsetvli), the full length back after")]
 
     @classmethod
     def unmet_requirements(cls, ctx) -> list[str]:
@@ -69,6 +73,11 @@ class tailmask(lsc_irmod):
         return []
 
     def apply(self, program) -> int:
+        route = self.values["route"]
+        if "vl" == route and not [f for f in self.ctx.gen.set.forms(modifiers={opset_modifier.VLEN})
+                                  if "avlreg" in f.operands]:
+            raise ValueError(f"tailmask route vl: {type(self.ctx.gen).__name__} sets no vector length "
+                             f"from a register (RVV's vsetvli rd, avl)")
         accesses = [(block, section, k, op) for block, section in blocks_and_sections(program)
                     for k, op in enumerate(getattr(block, section) or [])
                     if isinstance(op, (lsc_load, lsc_store)) and op.offset is not None
@@ -91,11 +100,14 @@ class tailmask(lsc_irmod):
             if index is None or last.get(comp) is None:
                 continue
             if last[comp] == _vectors(program.offsets.records[op.offset].along(index)):
-                masked = _masked(self.ctx.gen, op)
-                if not masked:
-                    raise ValueError(f"tailmask: {comp}'s last vector has no masked form of its "
-                                     f"{'load' if isinstance(op, lsc_load) else 'store'}")
-                op.sigs = masked
+                if "mask" == route:
+                    masked = _masked(self.ctx.gen, op)
+                    if not masked:
+                        raise ValueError(f"tailmask: {comp}'s last vector has no masked form of its "
+                                         f"{'load' if isinstance(op, lsc_load) else 'store'}")
+                    op.sigs = masked
+                else:
+                    program.tail_vl.add(index)
                 op.add_property("tail", index)
                 program.tails.add(index)
                 marked += 1

@@ -277,6 +277,47 @@ int main( void )
         for out in outs:
             self.assertIn("5 runs, 4 by generated cases, 0 wrong", out)
 
+    def test_packm_masked_tail_rvv_vl(self):
+        # RVV's other route (tailmask route vl): the last vector's load and
+        # store at the tail's vector length - vsetvli zero, tail around each,
+        # the full length (set once) back right after - not masked, v0 free
+        from ukrgen.injectors.blis.families import build_packm
+        from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
+        cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
+        if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
+            self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+               "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
+        fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "cases": [
+            {"kind": "vec", "m": [1, 2], "params": vec},
+            {"kind": "vec", "name": "vtail", "mask": True, "m": [0, 1],
+             "params": dict(vec, **{"tailmask-route": "vl"})}]})
+        built, skipped = build_packm("rvv", "ukrgen_rvv", fam)
+        self.assertEqual([], skipped)
+        for asm in [asm_source(k) for k in built if k.tail]:
+            self.assertNotIn("v0.t", asm)
+            # a pair around each last-vector load and store: the tail's, the full
+            switches = [l for l in asm.split("\n") if l.strip().startswith("vsetvli zero,")]
+            self.assertTrue(len(switches) >= 4 and 0 == len(switches) % 2, switches)
+        src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
+              vl_helpers(built, make_generator("rvv")) + \
+              "\n#define bli_ddpackm_ukrgen_rvv_ref REF\n" + \
+              "typedef int conj_t;\ntypedef int pack_t;\n" + \
+              "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
+              "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
+              packm_dispatch("ukrgen_rvv", "FP64", built) + \
+              "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( double ) ); }\n"
+        harness = open(os.path.join(HERE, "packm_harness.c")).read() \
+            .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
+        cases = ("{ 1, 1, 7, 1, 3, 0 }, { vl + 1, vl + 1, 9, 1, vl + 3, 0 }, "
+                 "{ 2 * vl - 1, 2 * vl, 6, 1, 2 * vl + 2, 1 }, { vl, vl, 5, 1, vl + 3, 0 }, "
+                 "{ 2 * vl + 1, 2 * vl + 1, 4, 1, 2 * vl + 1, 0 }")
+        outs = self.run_c("rvv", src + harness, built,
+                          [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"] for v in (128, 256)],
+                          ["-DPACKM=bli_dpackm_ukrgen_rvv", f"-DCASES={cases}"], cc=cc)
+        for out in outs:
+            self.assertIn("5 runs, 4 by generated cases, 0 wrong", out)
+
     def test_packm_masked_tail_avx512(self):
         # AVX-512's masked vec cases, run here: the last vector's vmovupd
         # under a k mask (movq, bzhiq, kmovw from tail(m) - the 7th argument,
