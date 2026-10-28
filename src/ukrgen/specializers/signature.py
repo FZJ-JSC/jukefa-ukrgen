@@ -568,6 +568,51 @@ class signature_specializer:
             self.walking = {}
             self.placed = set()
 
+    def element_types(self, dt):
+        """
+        Where the element type is processor state (RVV's vtype): an lsc_state
+        before each transformation needing another than the one before - a
+        widening one the narrow type, arithmetic on a group the group's type
+        and grouping - each section beginning and ending with the setup's
+        (dt's, ungrouped), whatever order the sections run in. A
+        transformation whose signatures need different ones left to the
+        emitter (vtype_dynamic), as it was
+        """
+        from ..models.load_store_operations import lsc_state
+        from ..irmod.lsc.base import blocks_and_sections
+        setup = (adt_size(dt), 1)
+        def need(op, sig):
+            sizes = [adt_size(o.dt) for o in sig.operands.values() if rgt.VEC == o.rtype and o.dt is not None]
+            if not sizes:
+                return None
+            ways = op.properties.get("group", 1)
+            return (min(sizes), 1) if widening_ways(sig) > 1 else (max(sizes), ways)
+        def switch(want, sig, dtype=None):
+            wdt = dtype or next(o.dt for o in sig.operands.values()
+                                if rgt.VEC == o.rtype and o.dt is not None and adt_size(o.dt) == want[0])
+            # named as the setup's state names it (asmgen: e32), a group's
+            # grouping after it (e64,m2)
+            name = f"e{8 * want[0]}" + (f",m{want[1]}" if want[1] > 1 else "")
+            return lsc_state({"vtype": name}, wdt)
+        for block, section in blocks_and_sections(self.program):
+            ops, out, current = list(getattr(block, section) or []), [], setup
+            for op in ops:
+                if isinstance(op, lsc_transformation):
+                    sigs = _sigs(op.resolution.compute_sg) if op.resolution is not None else []
+                    wants = {w for w in (need(op, s) for s in sigs) if w is not None}
+                    if len(wants) > 1:
+                        op.add_property("vtype_dynamic", True)
+                        current = None              # the emitter's from here
+                    elif wants:
+                        want = next(iter(wants))
+                        if want != current:
+                            out.append(switch(want, next(s for s in sigs if need(op, s) == want)))
+                            current = want
+                out.append(op)
+            if current is not None and current != setup:
+                out.append(switch(setup, None, dt))
+            setattr(block, section, out)
+
     def specialize(self) -> ir_program:
         for block in self.program.blocks:
             self.adapt_block(block)
@@ -583,6 +628,8 @@ class signature_specializer:
         # (imported here: the state module reaches the irmods, tailmask this module)
         from ..lsc_model.state import check_state
         dt = min(self.ctx.component_dts.values(), key=adt_size)
+        if self.ctx.gen.isa_setup().element_type_is_state():
+            self.element_types(dt)
         problems = check_state(self.program, self.ctx.gen.isa_setup().state(dt))
         if problems:
             raise specialization_error("processor state: " + "; ".join(problems))

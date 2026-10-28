@@ -383,10 +383,12 @@ scheduling, adjacent regions one where nothing between reads the length
 (merge_switches: a pipelined loop's last-vector store and the next
 column's load). The state check runs at the end of ISA specialization
 (ukrgen 0221), with the forms it decides; merge_switches at emission,
-after scheduling. Next: smstart and smstop as lsc_states; RVV's element
-type switches (the emitter's vtype_for) as lsc_states from the
-specializer - sections ending in the setup's type; the masked tails'
-setup as an IR operation.
+after scheduling. RVV's element type switches lsc_states from the
+specializer (ukrgen 0222): each section beginning and ending in the
+setup's type, a transformation whose signatures disagree left to the
+emitter. Next: the masked tails' setup as an IR operation (the mask an IR
+register, the count a parameter's register); smstart and smstop as
+lsc_states.
 
 The suggestion as it stood:
 

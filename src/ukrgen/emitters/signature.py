@@ -1102,6 +1102,15 @@ class signature_emitter:
         from asmgen.asmblocks.op.opset import opset_modifier as setmod
         lines = []
         for name, value in op.values.items():
+            if "vtype" == name:
+                # the element type and grouping, the vector length kept (RVV's
+                # vsetvli zero, zero): the setup's switch
+                bits, _, group = value.partition(",m")
+                group = group or "1"
+                lines += [l.strip() for l in self.gen.isa_setup().setup_dt(dt=op.dt, group=int(group)).splitlines()
+                          if l.strip()]
+                self.vtype = (int(bits[1:]) // 8, int(group))
+                continue
             kind = "max" if "max" == value else "avl"
             form = next((f for f in self.gen.set.forms() if kind == f.state_writes.get(name)), None)
             if form is None:
@@ -1478,7 +1487,9 @@ class signature_emitter:
                 failures.append(why)
                 continue
             # the element type set only for the signature taken
-            text = self.vtype_for(op, sig) + operation(**call)
+            # the element type the specializer's lsc_states set; an operation
+            # whose signatures need different ones switches here
+            text = (self.vtype_for(op, sig) if op.properties.get("vtype_dynamic") else "") + operation(**call)
             self.unscratch(taken)
             return text
         if all(any(orl.MASK == o.orole for o in sig.operands.values())
