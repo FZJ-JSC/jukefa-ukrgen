@@ -279,6 +279,92 @@ MR contiguous elements per k. Its packm today scatters 1..16 rows.
 - **k** in steps of v per pass, the remainder under `ld1d`'s predicate:
   the slice loops' iterations.
 
+## SME: the ZA transpose - what exists, what's missing
+
+Investigated (no code changed). The transpose needs no new asmgen forms
+and is a tileop pair ukrgen's solver already generates:
+
+```yaml
+pack-tileop:  ['mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){m=1, i=n}']
+store-tileop: ['Y.TILE:slices_col']
+```
+
+each row of A scaled and moved into a horizontal slice (`mova za0h.d[w12,
+0]`), each vertical slice - one of P's columns - stored contiguously
+(`st1d {za0v.d[w12, 0]}`): per chunk of VL columns, rows in and columns
+out, no scatters.
+
+- **asmgen**: ZA slice loads and stores (A5) are there - `ld1d
+  {za0h.d[w12, imm]}`, `st1d {za0v.d[w12, imm]}`, index registers
+  w12-w15, imm 0 to 16/element size - 1, base or base + register
+  addressing - and `mova` between vectors and slices.
+- **ukrgen**: tile resolutions are there - `slices_row`/`slices_col` (a
+  tile to or from memory slice by slice, as many as it has at run time)
+  and `slice_vec_row`/`slice_vec_col` (a slice through a vector) - SME
+  gemm's epilogue's. With the chain check bypassed the kernel builds:
+  `ld1d`, `fmul`, `mova za0h` per row, `st1d za0v` per column.
+
+Two gaps the prototype found:
+
+- **Z1 the solver's chain check** refuses the pair: "store stores Y
+  contiguous, but as pack leaves it the store has to be strided" - it
+  takes the access from the pack STO's vector axis (n), not seeing that a
+  tile is stored by slices of its own direction: `slices_col` runs along
+  m, P's contiguous index. io_of gives a tile store its slices' direction.
+- **Z2 a tile stored inside a loop**: the slice loop advances P's address
+  (`incb` a slice), then the n loop adds the chunk again and the last
+  iteration takes it back - under qemu (SVL 256) two chunks came out right
+  by accident, one wrote before P. gemm stores its tile once, after its
+  loop. The slice loop leaves the address where the loop expects it.
+
+### FA64: scatters in streaming mode
+
+The SME configs' trans cases scatter (`st1d {z.d}, p0, [x2, z0.d]`)
+between `smstart` and `smstop`. Streaming mode runs gathers and scatters
+only with FEAT_SME_FA64: Apple's parts don't have it, LX2 does - LX2 also
+being the SME + SVE (fmopa + fmla) kernels' target. qemu's `max` has it,
+so the tests can't tell.
+
+- **Z5** FA64 a capability a config declares, as AVX-512's DQ and BW: the
+  SME generator's streaming gathers and scatters require it; ukrgen offers
+  them only where the config says so (LX2's), the ZA transpose everywhere.
+  SME tests of configs without it run qemu with `sme_fa64=off`. SME gemm's
+  C "across vectors by gathers" (fopa_bc_vindex) is checked the same way.
+
+### Steps
+
+1. **Z1** the chain check (a test: gemm's SME epilogues unchanged).
+2. **Z2** tile stores inside loops (1, 2, 3 chunks under qemu, SVL 256
+   and 512).
+3. **Z3** a `ztrans` case sized in tiles (m: 1..4 - za0.d-za3.d of eight
+   for doubles, four for singles) for the SME configs: full panels of k·VL
+   rows - SME gemm's MR and NR (NR = 4 tiles, 4·VL rows, today past the
+   scatter cases' 16 rows: the reference) - and block kernels (0207) for
+   larger cdims.
+4. **Z5** FA64 declared; SME configs without it on the ZA transpose.
+5. **Z4** partial tiles (cdim not a multiple of VL): the vertical slices
+   stored under a first-R predicate (A3) - any cdim.
+6. **Z6** kappa 1: rows straight into horizontal slices (`ld1d
+   {za0h.d[w12, i]}`), no vector, no `mova` - with the kappa copy cases.
+
+## Processor state as dependencies (suggested)
+
+The vector length route (tailmask route vl, 0211) brackets each access
+with its own `vsetvli` pair because the schedulers can't see vl: nothing
+else may run between. Modelled, the state would schedule like a register:
+
+- **lsc_state**: an operation that reads and writes state named by a
+  string ("vlen", ...) - a `vsetvli` a write of "vlen".
+- **lsc_operation.reads_state, writes_state**: the states an operation
+  reads and writes, filled in by ukrgen from what isaquirks says each ISA's
+  state is and which operations use it implicitly (RVV: every vector
+  operation reads "vlen"; SME: streaming mode, ZA).
+- **The schedulers** treat states as registers - RAW, WAR, WAW between
+  readers and writers - so a short-vl section can be scheduled, merged or
+  hoisted rather than bracketed per access.
+- **Distance specs** for state: `RAW:state::::N` (the register class field
+  meaningless there - or an instruction type, "sta").
+
 ## Related: the vector length the caller chooses (RVV)
 
 On some hardware a vector length other than the most there is performs
@@ -300,5 +386,6 @@ in the flow, the BLIS injector passing the context's length, and
    predicate (cdim = n·VL + M) beside it.
 3. asmgen A4 (permutes); ukrgen `shufflenet` (AVX-512 8x8 and 24, AVX2
    4x4, NEON) and AVX2's trans case.
-4. ukrgen `za_transpose`, then the split kernels' cdim (U6).
+4. ukrgen `za_transpose` - its steps above (Z1-Z6), FA64 declared - then the
+   split kernels' cdim (U6).
 5. ukropt's measurements; strategies named by tileops (U4).
