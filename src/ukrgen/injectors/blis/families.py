@@ -110,7 +110,7 @@ PER_COMPONENT = {"max-data-regs": "{c}-max-data-regs", "max-preload": "{c}-max-p
 UNROLL = {"gemm": "k", "packm": "n"}
 #: the keys a family's YAML knows, by where they go - a flow parameter of
 #: anything else goes under params:
-_COMMON = set(KEYS) | set(PER_COMPONENT) | {"unroll"}
+_COMMON = set(KEYS) | set(PER_COMPONENT) | {"unroll", "store", "alternatives"}
 FAMILY_KEYS = _COMMON | {"family", "dtypes", "params", "m", "n", "default", "cases", "split", "parts",
                          "split-ratios", "min-inflight", "align", "c-storage", "dispatch", "vec-rest", "lmul",
                          "vec-tail",
@@ -118,6 +118,16 @@ FAMILY_KEYS = _COMMON | {"family", "dtypes", "params", "m", "n", "default", "cas
                          "isa", "blocksizes"}
 CASE_KEYS = _COMMON | {"kind", "m", "name", "params", "lmul", "mask"}
 PART_KEYS = _COMMON | {"params", "tileop-preset", "tileop-vectorize", "m", "n"}
+
+
+def _tile_store(case: dict) -> bool:
+    """whether a case stores a tile (a ZA case): its store-tileop, or its preset's"""
+    stores = list((case.get("params") or {}).get("store-tileop") or [])
+    if not stores and case.get("preset"):
+        from ...flow import presets
+        tileop = presets.load(str(case["preset"]))["tileops"].get("store", "")
+        stores = tileop if isinstance(tileop, list) else [tileop]
+    return any("TILE" in t for t in stores)
 
 
 def check_keys(where: str, entry: dict, known: set):
@@ -147,11 +157,21 @@ def key_params(kind: str, entry: dict) -> dict:
     packs N vectors and a last one masked to the rows left - cdim from N*VL
     to (N+1)*VL in one pass; vec-tail (overlap, reference): the rows a vec
     case leaves - a kernel of the case ending at cdim, or the reference.
+    store (a case's, with a packm preset): its store method, the preset's YS
+    alternative fixed - shuffle, scatter, strided, direct - griddable as
+    tileop-alternatives; alternatives: {NAME: OPTION} any of them.
     pre- and post-specialize-irmods
     take names (the list run) or changes to the defaults only:
     [+structfuse, -cluster]
     """
     params = {}
+    # a preset's alternatives fixed - alternatives: {YS: shuffle}, or store:
+    # shuffle for a trans case's store method (YS): --tileop-alternatives
+    fixed = dict(entry.get("alternatives") or {})
+    if "store" in entry:
+        fixed["YS"] = entry["store"]
+    if fixed:
+        params["tileop-alternatives"] = [f"{k}={v}" for k, v in fixed.items()]
     if "unroll" in entry:
         params[UNROLL[kind]] = str(entry["unroll"])
     for key, name in KEYS.items():
@@ -334,9 +354,9 @@ class family:
         case_mask = set()
         for case in entry.get("cases") or []:
             if case.get("mask"):
-                if "vec" != case["kind"] and not any("TILE" in t for t in (case.get("params") or {}).get("store-tileop", [])):
-                    raise ValueError(f"{kind} family {entry['family']}: mask on a {case['kind']} case - vec cases' last vector, ZA ones' last tile "
-                                     f"cases' last vector only")
+                if "vec" != case["kind"] and not _tile_store(case):
+                    raise ValueError(f"{kind} family {entry['family']}: mask on a {case['kind']} case - a vec "
+                                     f"case's last vector, a ZA case's last tile only")
                 case_mask.add(case.get("name") or case["kind"])
         vec_rest = entry.get("vec-rest")
         vec_tail = entry.get("vec-tail", "overlap")

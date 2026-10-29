@@ -52,9 +52,9 @@ cases:
 - kind: vec
   lmul: {2: 2, 4: 4}
   m: 1..8
+  preset: packm_vf
+  vectorize: m
   params:
-    pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){i=m, n=1}']
-    store-tileop: ['Y.VEC:direct']
     X-layout: ['m:c', 'n:s']
     Y-layout: ['m:c', 'n:s']
     sched-cycle-slots: "2:vl*2|vs|vf,sl/2,addr|i"
@@ -64,9 +64,9 @@ cases:
   name: vtail
   mask: true
   m: 0..7
+  preset: packm_vf
+  vectorize: m
   params:
-    pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){i=m, n=1}']
-    store-tileop: ['Y.VEC:direct']
     X-layout: ['m:c', 'n:s']
     Y-layout: ['m:c', 'n:s']
     sched-cycle-slots: "2:vl*2|vs|vf,sl/2,addr|i"
@@ -74,12 +74,12 @@ cases:
   buckets: "vf:8"
 - kind: trans
   m: 1..16
+  preset: packm_vf
+  vectorize: n
   params:
     pre-specialize-irmods: ['+structfuse']
     structfuse-fields: 4
     X-data-regs: 8
-    pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){m=1, i=n}']
-    store-tileop: ['Y.VEC:strided']
     X-layout: ['n:c', 'm:s']
     Y-layout: ['m:c', 'n:p']
     sched-cycle-slots: "2:vl|vs|vf,sl,i;vf-sl"
@@ -89,9 +89,9 @@ cases:
 - kind: trans
   name: tblock
   m: [16, 8, 4, 2, 1]
+  preset: packm_vf
+  vectorize: n
   params:
-    pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){m=1, i=n}']
-    store-tileop: ['Y.VEC:strided']
     X-layout: ['n:c', 'm:s']
     Y-layout: ['m:c', 'n:s']
     X-data-regs: '4'

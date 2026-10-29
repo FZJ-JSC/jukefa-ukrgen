@@ -34,7 +34,7 @@ class test_presets(unittest.TestCase):
     def test_shipped(self):
         self.assertEqual(["gemm_fma_bc", "gemm_fma_bc_blocks", "gemm_fma_bc_lanes", "gemm_fma_bc_vindex",
                           "gemm_fma_blocklane_vindex", "gemm_fma_lane", "gemm_fma_vf",
-                          "gemm_fopa_bc_vindex"],
+                          "gemm_fopa_bc_vindex", "packm_bc", "packm_vf", "packm_za"],
                          presets.names())
 
     def test_layout_decides_the_variant(self):
@@ -146,6 +146,47 @@ class test_presets(unittest.TestCase):
                 out = subprocess.run([os.path.join(d, "run")], capture_output=True, text=True,
                                      timeout=60).stdout
                 self.assertIn(f"{tile}: 81 runs, 0 wrong", out)
+
+
+
+
+class test_packm_presets(unittest.TestCase):
+    """
+    packm's presets: variants by vectorization, alternatives the layouts
+    decide (direct only where a component's memory is contiguous along the
+    vectors), a trans case's store method fixed (forced) - griddable
+    """
+    def candidates(self):
+        pack = {f"mul(X.VEC:{x}, kappa.VEC:bc_load, Y.VEC){{{k}}}" for x in ("direct", "gather")
+                for k in ("i=m, n=1", "m=1, i=n")}
+        store = {f"Y.VEC:{y}" for y in ("direct", "strided", "shuffle", "scatter")}
+        return {"pack": pack, "store": store}
+
+    def test_layouts_decide(self):
+        from ukrgen.flow import presets
+        p = presets.load("packm_bc")
+        # a trans case: X contiguous along n (its vectors' index), Y along m
+        chosen = presets.select(p, self.candidates(), set(), vectorize="n", layouts={"X": "n", "Y": "m"})
+        self.assertEqual("mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}", chosen["pack"])
+        self.assertEqual("Y.VEC:strided", chosen["store"])
+        # a vec case: both contiguous along m
+        chosen = presets.select(p, self.candidates(), set(), vectorize="m", layouts={"X": "m", "Y": "m"})
+        self.assertEqual("Y.VEC:direct", chosen["store"])
+
+    def test_forced(self):
+        from ukrgen.flow import presets
+        p = presets.load("packm_bc")
+        chosen = presets.select(p, self.candidates(), set(), vectorize="n", layouts={"X": "n", "Y": "m"},
+                                forced={"YS": "shuffle"})
+        self.assertEqual("Y.VEC:shuffle", chosen["store"])
+        with self.assertRaises(ValueError) as caught:
+            presets.select(p, self.candidates(), set(), vectorize="n", forced={"ZZ": "x"})
+        self.assertIn("no alternative ZZ", str(caught.exception))
+
+    def test_family_keys(self):
+        from ukrgen.injectors.blis.families import key_params
+        self.assertEqual(["YS=scatter"], key_params("packm", {"store": "scatter"})["tileop-alternatives"])
+        self.assertEqual(["XL=gather"], key_params("packm", {"alternatives": {"XL": "gather"}})["tileop-alternatives"])
 
 
 if __name__ == "__main__":

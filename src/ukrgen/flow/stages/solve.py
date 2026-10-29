@@ -339,6 +339,10 @@ class solve_stage(stage):
                             "gemm_fma_blocklane_vindex, gemm_fopa_bc_vindex) or a YAML file of "
                             "the same form: for each STO the first of the preset's alternatives "
                             "the ISA offers. --COMP-tileop given wins")
+        self.params["tileop-alternatives"] = stage_param(
+                value=None, default=None, required=False, multi=True,
+                description="Fix a preset's alternatives, NAME=OPTION each (YS=shuffle: a trans "
+                            "case's store method) - a choice to tune, not the first the ISA offers")
         self.params["tileop-vectorize"] = stage_param(
                 value=None, required=False,
                 description="The index the preset's vectors run along (m, n): its variant. "
@@ -409,7 +413,8 @@ class solve_stage(stage):
                         if rsln.unique_tag in seen or not self.steps_supported(rsln, dt):
                             continue
                         if rsln.explicit and not any(f"{comp}.{rtype.name}:{rsln.unique_tag}" in v
-                                                     for v in requested):
+                                                     for v in requested) \
+                                and rsln.unique_tag not in self.forced_options():
                             continue
                         seen.add(rsln.unique_tag)
                         stores.append(store_candidate(component=comp, rtype=rtype,
@@ -418,6 +423,15 @@ class solve_stage(stage):
 
         choices = [store_choice(stores=combo) for combo in itertools.product(*per_component)]
         return dict(sorted((c.encode(), c) for c in choices))
+
+    def forced_options(self) -> set[str]:
+        """
+        The options of a preset's alternatives fixed (--tileop-alternatives
+        YS=shuffle): named, so a resolution offered only where named is
+        """
+        raw = self.params["tileop-alternatives"].value or [] if "tileop-alternatives" in self.params else []
+        raw = [raw] if isinstance(raw, str) else list(raw)
+        return {x.partition("=")[2] for v in raw for x in str(v).replace(",", " ").split() if "=" in x}
 
     def steps_supported(self, rsln: transformation_resolution, dt: adt) -> bool:
         """
@@ -597,6 +611,15 @@ class solve_stage(stage):
             raise stage_error(f"--tileop-vectorize has {len(vectorize)} values for "
                               f"{len(names)} presets")
         per_part = []
+        # alternatives fixed (--tileop-alternatives NAME=OPTION ...)
+        raw = self.params["tileop-alternatives"].value or []
+        raw = [raw] if isinstance(raw, str) else list(raw)
+        forced = {}
+        for item in (x for v in raw for x in str(v).replace(",", " ").split()):
+            name, eq, option = item.partition("=")
+            if not eq or not name or not option:
+                raise stage_error(f"--tileop-alternatives {item}: NAME=OPTION")
+            forced[name] = option
         aliases = self.context.composition.storage_aliases
         by_suffix = {storage[0]: alias for alias, storage in aliases.items()}
         def with_copies(preset):
@@ -618,7 +641,8 @@ class solve_stage(stage):
             try:
                 per_part.append(presets.select(
                     with_copies(presets.load(str(name))), {n: candidates[n] for n in order if n in candidates},
-                    given, vectorize=vec or None,
+                    given, vectorize=vec or None, forced=forced,
+                    layouts=self.context.component_layouts or {},
                     # with C's storages as branches each STO's C - C or an
                     # alias of it - has its own contiguous index
                     contiguous=dict({c: (self.context.component_layouts or {}).get(c)

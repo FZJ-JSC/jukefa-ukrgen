@@ -1,0 +1,28 @@
+# packm_bc: Y = kappa*X, kappa broadcast from memory (bc_load)
+description: packing - Y = kappa*X, kappa broadcast from memory; X loaded directly or gathered, Y stored directly, strided, through a shuffle network or scattered
+ukr: pack
+variants:
+  # vectors along cdim (vec, gather cases), or along the panel (trans cases)
+  m:
+    K: i=m, n=1
+  n:
+    K: m=1, i=n
+alternatives:
+  # X's load and Y's store: the first the ISA offers for the layouts - a
+  # trans case's store method (shuffle, scatter) fixed by its store: key
+  XL:
+  - direct
+  - gather
+  YS:
+  - direct
+  - strided
+  - shuffle
+  - scatter
+# whose access each alternative is: direct only where its memory is contiguous
+# along the variant's vectors
+components:
+  XL: X
+  YS: Y
+tileops:
+  pack: mul(X.VEC:$XL, kappa.VEC:bc_load, Y.VEC){$K}
+  store: Y.VEC:$YS

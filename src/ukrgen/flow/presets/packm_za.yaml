@@ -1,0 +1,9 @@
+# packm_za: across the grain through SME's ZA - A's rows scaled into a tile's horizontal slices, its vertical slices stored as P's columns
+description: packing through ZA - rows scaled and moved into a tile's horizontal slices, its vertical slices stored as P's columns
+ukr: pack
+variants:
+  n:
+    K: m=1, i=n
+tileops:
+  pack: mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){$K}
+  store: Y.TILE:slices_col

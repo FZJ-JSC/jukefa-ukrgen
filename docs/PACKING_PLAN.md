@@ -463,7 +463,13 @@ tileops from presets, as gemm's.
      kappa.FP:use_scalar), packm_za (Y.TILE:slices_row, slices_col).
    A case: `preset: packm_bc`, `vectorize: n`, `store: shuffle`; explicit
    tileops still override.
-4. **Migrate every ukrconfig packm file** to the presets (scripted: each
+   Done (ukrgen 0230), for today's tileops (pack, store): packm_bc, packm_vf,
+   packm_za; their alternatives mapped to components (components: {XL: X,
+   YS: Y}) - direct only where that memory is contiguous along the
+   vectors; a forced option names an explicit resolution (shuffle).
+4. **Migrate every ukrconfig packm file** - done (0230): 80 cases, every
+   case's kernel byte-identical before and after. When the load STO comes,
+   the presets change, not the files. To the presets (scripted: each
    case's pack-tileop, store-tileop to preset, vectorize, store), the
    config test proving each still loads and builds its kernels.
 5. **Tests**: every packm dispatch test with kappa 1 and 2 (the harness's

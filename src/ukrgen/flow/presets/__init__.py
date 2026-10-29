@@ -63,12 +63,25 @@ def expand(template: str, variant: dict, alternatives: dict) -> list[str]:
 
 
 def select(preset: dict, candidates: dict, given: set, vectorize: str | None = None,
-           contiguous: str | None = None) -> dict[str, str]:
+           contiguous: str | None = None, forced: dict | None = None,
+           layouts: dict | None = None) -> dict[str, str]:
     """
     Each STO's tile operation: the first variant whose every STO - of the
     ukr's, and not given explicitly - has an alternative the ISA offers
-    (candidates: STO -> its tile operations), the first such alternative
+    (candidates: STO -> its tile operations), the first such alternative.
+    forced: alternatives fixed to one of their options (--tileop-alternatives
+    YS=shuffle: a trans case's store method) - a choice to tune, not the
+    first the ISA offers
     """
+    preset = dict(preset)
+    if forced:
+        alternatives = dict(preset.get("alternatives") or {})
+        for name, value in forced.items():
+            if name not in alternatives:
+                raise ValueError(f"no alternative {name} to fix: the preset's are "
+                                 f"{', '.join(alternatives) or 'none'}")
+            alternatives[name] = [value]
+        preset["alternatives"] = alternatives
     variants = list(preset["variants"].items())
     if vectorize is not None:
         variants = [(n, v) for n, v in variants if n == vectorize]
@@ -87,6 +100,12 @@ def select(preset: dict, candidates: dict, given: set, vectorize: str | None = N
         alternatives = base_alternatives
         if contiguous is not None and not isinstance(contiguous, dict) and name != contiguous:
             alternatives = without_direct(base_alternatives)
+        # alternatives of a component's access (components: {XL: X, YS: Y}):
+        # direct only where its memory is contiguous along the variant's vectors
+        for alt, comp in (preset.get("components") or {}).items():
+            index = (layouts or {}).get(comp)
+            if alt in alternatives and index is not None and index != name:
+                alternatives = dict(alternatives, **without_direct({alt: alternatives[alt]}))
         chosen, lacking = {}, None
         for sto, templates in preset["tileops"].items():
             if isinstance(contiguous, dict):

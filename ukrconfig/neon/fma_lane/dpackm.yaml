@@ -6,8 +6,8 @@ min-inflight: 8
 cases:
 - kind: vec
   m: 1..8
+  preset: packm_bc
+  vectorize: m
   params:
-    pack-tileop: ['mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}']
-    store-tileop: ['Y.VEC:direct']
     X-layout: ['m:c', 'n:s']
     Y-layout: ['m:c', 'n:s']

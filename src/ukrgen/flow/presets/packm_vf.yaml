@@ -1,0 +1,22 @@
+# packm_vf: Y = kappa*X, kappa a scalar operand of a vector-scalar multiply (RVV's vfmul.vf)
+description: packing - Y = kappa*X, kappa a scalar operand (vector-scalar multiply, RVV); X loaded directly, Y stored directly or strided
+ukr: pack
+variants:
+  m:
+    K: i=m, n=1
+  n:
+    K: m=1, i=n
+alternatives:
+  XL:
+  - direct
+  YS:
+  - direct
+  - strided
+# whose access each alternative is: direct only where its memory is contiguous
+# along the variant's vectors
+components:
+  XL: X
+  YS: Y
+tileops:
+  pack: mul[bdreg:VF](X.VEC:$XL, kappa.FP:use_scalar, Y.VEC){$K}
+  store: Y.VEC:$YS
