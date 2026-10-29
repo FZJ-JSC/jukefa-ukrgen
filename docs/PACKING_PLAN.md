@@ -475,6 +475,22 @@ tileops from presets, as gemm's.
 5. **Tests**: every packm dispatch test with kappa 1 and 2 (the harness's
    KAPPA), both paths, every ISA; ZA's copy path.
 
+The load carries its own tiling (decided): `load: X.VEC:$XL{$K}` - a
+data movement STO with a tiling, as a compute STO's operand; the copy's
+store takes its shape from the load as any store from its producer.
+
+**An identity (copy) STO - in reserve.** A third way: a tileop that is
+only the tiling, load and store deriving from it. For a plain copy it
+restates the load's tiling (vec, gather; trans, whose transpose is its
+store resolution's - strided, shuffle, scatter; ZA, rows loaded into
+slices, columns stored). It pays where the copy changes how data sits in
+registers between load and store: an in-register transpose as a step of
+its own - vectors along n in, along m out - the solver weighing it
+against the store methods (today shufflenet rewrites a store into its
+network); a type conversion packing (mixed precision) is a computation,
+a compute STO. Worth adding if transposes move from the store
+resolutions into the STO graph.
+
 ## Order
 
 1. asmgen A1 (STRUCT is interleaving), A3 (first-M masks), A2 (SVE
