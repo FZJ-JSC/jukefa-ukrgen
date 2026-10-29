@@ -2,7 +2,7 @@ from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage
 
-from asmgen.registers import reg_tracker,asm_data_type as adt
+from asmgen.registers import reg_tracker
 
 class isaparam_stage(stage):
     def __init__(self, context : ukr_context):
@@ -40,11 +40,12 @@ class isaparam_stage(stage):
             self.context.gen.set_parameter(name, pval)
 
 
+        # (no tiles: their number is the element type's - eight of doubles, four
+        # of singles on SME - and max-tiles'; the emitter's tracker counts them)
         self.context.rt = reg_tracker([
             ('greg',self.context.gen.max_gregs()),
             ('freg',self.context.gen.max_fregs()),
-            ('vreg',self.context.gen.max_vregs()),
-            ('treg',self.context.gen.max_tregs(adt.FP64))])
+            ('vreg',self.context.gen.max_vregs())])
 
         self.context.params.update(self.params)
         return []

@@ -530,11 +530,17 @@ class signature_emitter:
                 self.phys[key] = self.gen.freg(number, dt)
             elif rgt.TILE == rtype:
                 # a tile (SME ZA): from its own file
+                # the element type's tiles, or fewer where max-tiles says so
+                tiles = self.gen.max_tregs(dt)
+                cap = self.ctx.params.get("max-tiles")
+                cap = int(cap.value or 0) if cap is not None else 0
+                tiles = min(tiles, cap) if cap > 0 else tiles
                 if "treg" not in self.rt.registered_types:
-                    self.rt.add_type("treg", self.gen.max_tregs(dt))
+                    self.rt.add_type("treg", tiles)
                 if not self.rt.available("treg"):
                     raise specialization_error(
-                        f"{key[0]}: no tile left - {dt.name} has {self.gen.max_tregs(dt)} tiles, "
+                        f"{key[0]}: no tile left - {dt.name} has {self.gen.max_tregs(dt)} tiles"
+                        f"{f', max-tiles {cap}' if cap > 0 else ''}, "
                         f"all taken; fusing the loops over slices (fuse_slices, forward_slices) "
                         f"keeps tiles out of use, or a smaller microtile needs fewer")
                 number = self.rt.reserve_any_reg("treg")

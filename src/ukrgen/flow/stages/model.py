@@ -82,6 +82,10 @@ class model_stage(stage):
                                 f"where the register file holds them, else a share of what "
                                 f"the accumulators leave")
 
+        self.params["max-tiles"] = stage_param(
+                value="0", default="0", required=False,
+                description="At most this many matrix tiles (SME's ZA) a kernel uses - 0: the ISA's "
+                            "most for its element type (eight of doubles, four of singles)")
         for comp in self.data_components:
             self.params[f"{comp}-max-data-regs"] = stage_param(
                     value=None, required=False,

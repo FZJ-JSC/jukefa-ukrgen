@@ -439,6 +439,28 @@ int main( void )
             loops[bool(irmods)] = sum(1 for l in asm_source(built[0]).split("\n") if l.strip().endswith("_slices:"))
         self.assertEqual(loops[True], 2 * loops[False])
 
+    def test_packm_ztrans_tile_limits(self):
+        # the tiles an element type has - eight of doubles, four of singles -
+        # and max-tiles under them: a case needing more refused, saying so;
+        # eight tiles of doubles packing right
+        from ukrgen.injectors.blis.families import build_packm
+        def fam(sizes, dt="FP64", extra=None):
+            z = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){m=1, i=n}"],
+                 "store-tileop": ["Y.TILE:slices_col"], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"]}
+            if "FP64" == dt:
+                z["sme-F64F64"] = "on"
+            case = dict({"kind": "trans", "name": "ztrans", "m": list(sizes), "params": z}, **(extra or {}))
+            return family.from_yaml("packm", {"family": "pk", "dtypes": [dt], "cases": [case]})
+        for f, built_sizes, refused in ((fam([8]), [8], []), (fam([4, 5], "FP32"), [4], [5]),
+                                         (fam([2, 4], extra={"max-tiles": 2}), [2], [4])):
+            built, skipped = build_packm("sme", "ukrgen_sme", f)
+            with self.subTest(sizes=[k.symbol for k in built]):
+                self.assertEqual([f"ztrans{n}v" for n in built_sizes], [k.symbol.rsplit("_", 1)[1] for k in built])
+                self.assertEqual(refused, [s[1][1] for s in skipped])
+                self.assertTrue(all("no tile left" in str(s[2]) for s in skipped))
+        for out in self.packm_ztrans([8], "{ 8 * vl, 8 * vl, 3 * vl, 3 * vl, 1, 0 }, { 8 * vl, 8 * vl, vl + 1, 2 * vl, 1, 1 }"):
+            self.assertIn("2 runs, 1 by generated cases, 0 wrong", out)
+
     def test_packm_sme_configs(self):
         # the SME configs pack across the grain through ZA (ztrans, sizes in
         # tiles): the Apple-safe one (sme-FA64 off: no scatters in streaming
