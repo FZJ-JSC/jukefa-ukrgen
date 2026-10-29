@@ -428,6 +428,47 @@ in the flow, the BLIS injector passing the context's length, and
 `vsetvli` with the aliased avl instead of zero outside the microkernel
 (not `csrr vlenb`) where the length is read.
 
+## kappa == 1 as a branch; load, kappamul, store; packm presets
+
+Every packm kernel multiplies by kappa, BLIS's packing mostly passes 1.
+The plan, agreed: the copy a branch of the pack composition, and the
+tileops from presets, as gemm's.
+
+1. **A LOAD STO kind**, mirroring STORE through the solver, model and
+   checks: a load names the components it fills and maps each from its
+   memory (as a store maps a component to its memory - gemm's C), its
+   forms the same data movement resolutions (X.VEC:direct, strided, a
+   gather, Y.TILE:slices_row). Done before it (0228): a branch's cases may
+   loop - the loop order each index once, each case's loop its counters.
+2. **The pack composition**, branched:
+   ```text
+   case kappa == 1:  load (Y <- X's memory) ; store Y
+   otherwise:        load (X <- X's memory) ; kappamul (Y = kappa*X) ; store Y
+   ```
+   The copy loads into Y's registers, so the store is the same in both;
+   a ZA case's copy loads A's rows straight into its horizontal slices
+   (ld1d {za0h.d[...]}) - no vectors, no mova (Z6).
+3. **packm presets** (flow/presets/packm_*.yaml), as gemm's:
+   - `variants` by the case's vectorization - `m` (vectors along cdim:
+     {i=m, n=1}) or `n` (along the panel: {m=1, i=n});
+   - `alternatives` the solver tries where the layouts decide - X's load
+     (`$XL`: direct, strided), Y's store (`$YS`: direct, strided);
+   - **the trans store method a variant key** - `store: strided`,
+     `shuffle`, `scatter`, `slices_col` (ZA) - griddable: a family's or a
+     case's key, a sweep grid's key (`store: [shuffle, scatter]`);
+   - tileops `load` (X.VEC:$XL), `copyload` (Y.VEC:$XL - the kappa == 1
+     case), `kappamul` (fmul(X.VEC, kappa.VEC:bc_load, Y.VEC){$K}),
+     `store` (Y.VEC:$YS or the method); siblings by the ISA's kappa form:
+     packm_bc (broadcast), packm_vf (RVV's vector-scalar:
+     kappa.FP:use_scalar), packm_za (Y.TILE:slices_row, slices_col).
+   A case: `preset: packm_bc`, `vectorize: n`, `store: shuffle`; explicit
+   tileops still override.
+4. **Migrate every ukrconfig packm file** to the presets (scripted: each
+   case's pack-tileop, store-tileop to preset, vectorize, store), the
+   config test proving each still loads and builds its kernels.
+5. **Tests**: every packm dispatch test with kappa 1 and 2 (the harness's
+   KAPPA), both paths, every ISA; ZA's copy path.
+
 ## Order
 
 1. asmgen A1 (STRUCT is interleaving), A3 (first-M masks), A2 (SVE
@@ -438,6 +479,7 @@ in the flow, the BLIS injector passing the context's length, and
    predicate (cdim = n·VL + M) beside it.
 3. asmgen A4 (permutes); ukrgen `shufflenet` (AVX-512 8x8 and 24, AVX2
    4x4, NEON) and AVX2's trans case.
-4. ukrgen `za_transpose` - its steps above (Z1-Z6), FA64 declared - then the
+4. kappa == 1 branch, load/kappamul/store, packm presets (above), the configs
+   migrated; then ukrgen `za_transpose` - its steps above (Z1-Z6), FA64 declared - then the
    split kernels' cdim (U6).
 5. ukropt's measurements; strategies named by tileops (U4).
