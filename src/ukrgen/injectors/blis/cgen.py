@@ -547,27 +547,39 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: l
         """
         A trans case taking P's leading dimension: its kernels on blocks of
         rows - each as many times as fit, the widest first, at A's and P's
-        rows done - the reference for what's left of each block's last
-        vector-length chunk, the rows no kernel fits, and the zero padding
+        rows done; the rows left (fewer than its narrowest block: a ZA case's
+        blocks are whole tiles) a kernel of it ending at cdim - its first rows
+        packed again, the same values (vec-tail overlap) - or the reference;
+        the reference for what's left of each block's last vector-length
+        chunk and the zero padding
         """
-        calls = []
-        for k in sorted(ks, key=lambda k: -split_size(k.mr)[1] - split_size(k.mr)[0] * 1000):
+        def block(k, start, advance):
             rows = c_expr(k.mr, ctype, k.vl_fn)
             vl = c_expr("VL", ctype, k.vl_fn) if "VL" == k.loop_unit else "1"
-            args = ", ".join({"n": "chunks", "base(X)": f"( const {ctype}* )a + done * inca",
-                              "base(Y)": f"( {ctype}* )p + done"}.get(p) or
+            args = ", ".join({"n": "chunks", "base(X)": f"( const {ctype}* )a + {start} * inca",
+                              "base(Y)": f"( {ctype}* )p + {start}"}.get(p) or
                              PACKM_ARGS[p][1].format(ctype=ctype) for p in k.params)
-            calls.append(f"""\
-\t\twhile ( cdim - done >= {rows} )
-\t\t{{
+            return f"""\
 \t\t\tconst dim_t chunks = n / {vl}, packed = chunks * {vl};
 \t\t\tif ( chunks ) {asm_symbol(k)}( {args} );
 \t\t\tif ( packed < n )
 \t\t\t\tbli_{ch}{ch}packm_{config_name}_ref( conja, schema, {rows}, {rows}, cdim_bcast,
-\t\t\t\t    n - packed, n_max - packed, kappa, ( const {ctype}* )a + done * inca + packed * lda, inca, lda,
-\t\t\t\t    ( {ctype}* )p + done + packed * ldp, ldp, params, cntx );
-\t\t\tdone += {rows};
-\t\t}}""")
+\t\t\t\t    n - packed, n_max - packed, kappa, ( const {ctype}* )a + {start} * inca + packed * lda, inca, lda,
+\t\t\t\t    ( {ctype}* )p + {start} + packed * ldp, ldp, params, cntx );
+\t\t\t{advance};"""
+        widest = sorted(ks, key=lambda k: -split_size(k.mr)[1] - split_size(k.mr)[0] * 1000)
+        calls = [f"\t\twhile ( cdim - done >= {c_expr(k.mr, ctype, k.vl_fn)} )\n\t\t{{\n"
+                 + block(k, "done", f"done += {c_expr(k.mr, ctype, k.vl_fn)}") + "\n\t\t}"
+                 for k in widest]
+        if "overlap" == tail:
+            # the rows left: the narrowest kernel covering them that fits in cdim
+            tails = []
+            for k in reversed(widest):
+                rows = c_expr(k.mr, ctype, k.vl_fn)
+                tails.append(f"\t\t{'else ' if tails else ''}if ( done < cdim && cdim - done <= {rows} && "
+                             f"{rows} <= cdim )\n\t\t{{\n\t\t\tconst dim_t from = cdim - {rows};\n"
+                             + block(k, "from", "done = cdim") + "\n\t\t}")
+            calls += tails
         return (f"\t// {name}: A's rows contiguous, in blocks of rows - any cdim\n"
                 f"\tif ( cdim_bcast == 1 && n == n_max && lda == 1 )\n\t{{\n\t\tdim_t done = 0;\n"
                 + "\n".join(calls) + f"""

@@ -356,7 +356,11 @@ so the tests can't tell.
    feature set explicitly (sme-F64F64) had left it off, its scatter cases
    refused since the state check (0215). Panels not of whole tiles: Z4.
 4. **Z5** FA64 declared; SME configs without it on the ZA transpose.
-5. **Z4** partial tiles (cdim not a multiple of VL): the vertical slices
+5. **Z4** partial tiles - tile + reference and tile + overlap done (ukrgen
+   0226): a ZA case taking P's leading dimension (zblock) packs whole
+   tiles in blocks; the rows left a one-tile kernel ending at cdim
+   (vec-tail overlap) or the reference; below one tile the reference.
+   Still to come, tile + mask: the vertical slices
    stored under a first-R predicate (A3) - any cdim.
 6. **Z6** kappa 1: rows straight into horizontal slices (`ld1d
    {za0h.d[w12, i]}`), no vector, no `mova` - with the kappa copy cases.

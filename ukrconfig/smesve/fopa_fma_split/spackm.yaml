@@ -27,6 +27,17 @@ cases:
     X-layout: ['n:c', 'm:s']
     Y-layout: ['m:c', 'n:p']
     sme-F64F64: 'on'
+# blocks of whole tiles, P's leading dimension: any cdim from a tile up - the
+# rows left a one-tile kernel ending at cdim (vec-tail overlap) or the reference
+- kind: trans
+  name: zblock
+  m: [4, 2, 1]
+  params:
+    pack-tileop: ['mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){m=1, i=n}']
+    store-tileop: ['Y.TILE:slices_col']
+    X-layout: ['n:c', 'm:s']
+    Y-layout: ['m:c', 'n:s']
+    sme-F64F64: 'on'
 - kind: trans
   m: 1..16
   params:

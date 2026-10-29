@@ -369,7 +369,7 @@ int main( void )
                 if not built:
                     self.assertIn("no form whose state requirements hold (sm ==0", str(skipped[0][2]))
 
-    def packm_ztrans(self, sizes, cases, svls=(256, 512), ylayout=("m:c", "n:p"), extra=None):
+    def packm_ztrans(self, sizes, cases, svls=(256, 512), ylayout=("m:c", "n:p"), extra=None, tail="overlap"):
         # SME's ZA transpose: A's rows scaled and moved into a tile's horizontal
         # slices, its vertical slices stored as P's columns - through BLIS's
         # dispatch against the reference under qemu
@@ -393,7 +393,7 @@ int main( void )
               "\n#define bli_ddpackm_ukrgen_sme_ref REF\n" + "typedef int conj_t;\ntypedef int pack_t;\n" + \
               "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
               "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
-              packm_dispatch("ukrgen_sme", "FP64", built) + \
+              packm_dispatch("ukrgen_sme", "FP64", built, tail=tail) + \
               "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( double ) ); }\n"
         harness = open(os.path.join(HERE, "packm_harness.c")).read() \
             .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
@@ -438,6 +438,19 @@ int main( void )
             self.assertEqual([], skipped)
             loops[bool(irmods)] = sum(1 for l in asm_source(built[0]).split("\n") if l.strip().endswith("_slices:"))
         self.assertEqual(loops[True], 2 * loops[False])
+
+    def test_packm_ztrans_blocks(self):
+        # ZA kernels taking P's leading dimension: blocks of whole tiles, any
+        # cdim; the rows left - fewer than a tile - a one-tile kernel ending at
+        # cdim (vec-tail overlap: tile + overlap), or the reference (tile +
+        # reference); below one tile the reference either way
+        for tail, refs in (("overlap", 0), ("reference", 1)):
+            cases = ("{ 2 * vl, 2 * vl, 3 * vl, 3 * vl, 1, 0 }, "
+                     f"{{ 2 * vl + 3, 2 * vl + 3, 3 * vl, 3 * vl, 1, {refs} }}, "
+                     "{ 5 * vl, 5 * vl, 2 * vl, 2 * vl, 1, 0 }, { 3, 3, 2 * vl, 2 * vl, 1, 1 }")
+            with self.subTest(tail=tail):
+                for out in self.packm_ztrans([4, 2, 1], cases, ylayout=("m:c", "n:s"), tail=tail):
+                    self.assertIn(f"4 runs, {3 - refs} by generated cases, 0 wrong", out)
 
     def test_packm_ztrans_tile_limits(self):
         # the tiles an element type has - eight of doubles, four of singles -
