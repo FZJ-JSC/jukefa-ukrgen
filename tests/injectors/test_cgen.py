@@ -369,7 +369,8 @@ int main( void )
                 if not built:
                     self.assertIn("no form whose state requirements hold (sm ==0", str(skipped[0][2]))
 
-    def packm_ztrans(self, sizes, cases, svls=(256, 512), ylayout=("m:c", "n:p"), extra=None, tail="overlap"):
+    def packm_ztrans(self, sizes, cases, svls=(256, 512), ylayout=("m:c", "n:p"), extra=None, tail="overlap",
+                     mask=False):
         # SME's ZA transpose: A's rows scaled and moved into a tile's horizontal
         # slices, its vertical slices stored as P's columns - through BLIS's
         # dispatch against the reference under qemu
@@ -382,8 +383,10 @@ int main( void )
                   "store-tileop": ["Y.TILE:slices_col"], "X-layout": ["n:c", "m:s"], "Y-layout": list(ylayout),
                   "sme-F64F64": "on"}
         ztrans.update(extra or {})
-        fam = family.from_yaml("packm", {"family": "pk", "dtypes": ["FP64"], "cases": [
-            {"kind": "trans", "name": "ztrans", "m": list(sizes), "params": ztrans}]})
+        case = {"kind": "trans", "name": "ztrans", "m": list(sizes), "params": ztrans}
+        if mask:
+            case["mask"] = True
+        fam = family.from_yaml("packm", {"family": "pk", "dtypes": ["FP64"], "cases": [case]})
         built, skipped = build_packm("sme", "ukrgen_sme", fam)
         self.assertEqual([], skipped)
         for k in built:
@@ -451,6 +454,17 @@ int main( void )
             with self.subTest(tail=tail):
                 for out in self.packm_ztrans([4, 2, 1], cases, ylayout=("m:c", "n:s"), tail=tail):
                     self.assertIn(f"4 runs, {3 - refs} by generated cases, 0 wrong", out)
+
+    def test_packm_ztrans_masked(self):
+        # tile + mask: whole tiles and a last one of the rows left - its row
+        # loop counted tail(m) (A has no more), its column stores under the
+        # mask of the first tail(m) elements (whilelo) - any cdim up to the
+        # case's tiles in one call: below a tile, a tile and some, two and some
+        # with a column over (the reference's), padded
+        cases = ("{ 3, 3, 2 * vl, 2 * vl, 1, 0 }, { vl + 1, vl + 1, 3 * vl, 3 * vl, 1, 0 }, "
+                 "{ 2 * vl + 3, 2 * vl + 3, 2 * vl + 1, 3 * vl, 1, 1 }, { vl - 1, vl, vl, vl, 1, 1 }")
+        for out in self.packm_ztrans([0, 1, 2], cases, ylayout=("m:c", "n:s"), mask=True):
+            self.assertIn("4 runs, 2 by generated cases, 0 wrong", out)
 
     def test_packm_ztrans_tile_limits(self):
         # the tiles an element type has - eight of doubles, four of singles -

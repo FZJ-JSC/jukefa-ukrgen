@@ -403,6 +403,10 @@ class signature_specializer:
         loop - an enclosing loop's advance, its last iteration's - finds it
         there whatever iteration it is. The plan is the emitter's too
         """
+        if op.info.get("count"):
+            # a run-time count (a masked tile's rows): its walks copied into
+            # registers of their own (the emitter's), its addresses not moving
+            return [op]
         db = self.program.offsets
         order = []
         for b in op.block:

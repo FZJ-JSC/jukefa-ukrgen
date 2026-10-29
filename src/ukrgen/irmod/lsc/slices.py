@@ -117,6 +117,7 @@ class fuse_slices(lsc_irmod):
         """
         return first.info.get("axis") == second.info.get("axis") \
             and first.subtiling.count == second.subtiling.count \
+            and first.info.get("count") == second.info.get("count") \
             and (across_tiles or bool(tiles_of(first) & tiles_of(second)))
 
     @staticmethod

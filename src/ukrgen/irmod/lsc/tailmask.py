@@ -10,6 +10,7 @@ from ...lsc_model.addressing import sym
 from ...models.load_store_operations import lsc_load, lsc_state, lsc_store
 from ...specializers.signature import _sigs
 from .base import lsc_irmod, irmod_param, irmod_placement, blocks_and_sections
+from .slices import slice_loop, tiles_of
 
 
 def _masked(gen, op) -> list:
@@ -165,6 +166,25 @@ class tailmask(lsc_irmod):
         if program.tail_vl:
             for block, section in blocks_and_sections(program):
                 setattr(block, section, self.short_regions(list(getattr(block, section) or [])))
+        # a ZA case's last tile (tile + mask): its loop moving rows in counted
+        # tail(m) - the rows left, A has no more - its column stores under the
+        # mask of the first tail(m) elements
+        tiled = [op for block, section in blocks_and_sections(program)
+                 for op in getattr(block, section) or [] if slice_loop(op)]
+        if tiled:
+            last = max(r for loop in tiled for r in tiles_of(loop))
+            for loop in tiled:
+                if last not in tiles_of(loop):
+                    continue
+                stores = [o for o in loop.block if isinstance(o, lsc_store)]
+                if stores:
+                    for o in stores:
+                        o.add_property("tail", "m")
+                    loop.extra_reads_state.add("mask(m)")
+                else:
+                    loop.info["count"] = "tail(m)"
+                marked += 1
+            program.tails.add("m")
         # the mask route: each mask set once, first thing in the first block's
         # prologue - before every path, before any data register - as state
         # its last-vector accesses read (the schedulers order them after it)
@@ -173,7 +193,8 @@ class tailmask(lsc_irmod):
             first = program.blocks[0]
             sets = []
             for index in masked:
-                comp = next(c for c, i in program.vector_indices.items() if i == index)
+                comp = next((c for c, i in program.vector_indices.items() if i == index),
+                            next(iter(program.vector_indices)))     # a tile's rows: its component's
                 sets.append(lsc_state({f"mask({index})": f"tail({index})"}, self.ctx.component_dts[comp]))
             first.prologue = sets + list(first.prologue or [])
             for block, section in blocks_and_sections(program):

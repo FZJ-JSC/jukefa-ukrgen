@@ -360,8 +360,11 @@ so the tests can't tell.
    0226): a ZA case taking P's leading dimension (zblock) packs whole
    tiles in blocks; the rows left a one-tile kernel ending at cdim
    (vec-tail overlap) or the reference; below one tile the reference.
-   Still to come, tile + mask: the vertical slices
-   stored under a first-R predicate (A3) - any cdim.
+   Tile + mask done (ukrgen 0227): a ZA case with mask: true (P's leading
+   dimension) - size N packs N whole tiles and a last one of the rows left,
+   its row loop counted tail(m), its column stores under whilelo's mask -
+   any cdim up to (N+1) tiles in one call, below a tile too (ztail in the
+   SME configs, 0..7 tiles of doubles, 0..3 of singles; tried first).
 6. **Z6** kappa 1: rows straight into horizontal slices (`ld1d
    {za0h.d[w12, i]}`), no vector, no `mova` - with the kappa copy cases.
 

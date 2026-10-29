@@ -591,6 +591,40 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: l
 \t\treturn;
 \t}}""")
 
+    def trans_masked(name, ks):
+        """
+        A masked trans case (ZA: whole tiles and a last one under a mask, P's
+        leading dimension): the kernel whose whole tiles leave fewer rows
+        than a tile - tail the rest, in one call; chunks of a vector length
+        along n, the reference for the columns left and the padding
+        """
+        rows_of = []
+        for k in sorted(ks, key=lambda k: -split_size(k.mr)[0] * 1000 - split_size(k.mr)[1]):
+            rows = c_expr(k.mr, ctype, k.vl_fn)
+            vl = c_expr("VL", ctype, k.vl_fn)
+            args = ", ".join({"n": "chunks", "tail(m)": "tail"}.get(p) or PACKM_ARGS[p][1].format(ctype=ctype)
+                             for p in k.params)
+            rows_of.append(f"""\
+\t\t{{
+\t\t\tconst dim_t full = {rows} - {vl};
+\t\t\tif ( full < cdim && cdim - full < {vl} )
+\t\t\t{{
+\t\t\t\tconst dim_t tail = cdim - full, chunks = n / {vl}, packed = chunks * {vl};
+\t\t\t\tif ( chunks ) {asm_symbol(k)}( {args} );
+\t\t\t\tif ( packed < n )
+\t\t\t\t\tbli_{ch}{ch}packm_{config_name}_ref( conja, schema, cdim, cdim, cdim_bcast,
+\t\t\t\t\t    n - packed, n_max - packed, kappa, ( const {ctype}* )a + packed * lda, inca, lda,
+\t\t\t\t\t    ( {ctype}* )p + packed * ldp, ldp, params, cntx );
+\t\t\t\tif ( cdim < cdim_max )
+\t\t\t\t\tbli_{ch}{ch}packm_{config_name}_ref( conja, schema, 0, cdim_max - cdim, cdim_bcast,
+\t\t\t\t\t    n, n_max, kappa, ( const {ctype}* )a + cdim * inca, inca, lda,
+\t\t\t\t\t    ( {ctype}* )p + cdim, ldp, params, cntx );
+\t\t\t\treturn;
+\t\t\t}}
+\t\t}}""")
+        return (f"\t// {name}: A's rows contiguous, whole tiles and the rest under a mask - one call\n"
+                f"\tif ( cdim_bcast == 1 && n == n_max && lda == 1 )\n\t{{\n" + "\n".join(rows_of) + "\n\t}")
+
     blocks = []
     for name in names:
         ks = [k for k in mine if name == k.case]
@@ -601,6 +635,9 @@ def packm_dispatch(config_name: str, dtype: str, kernels: list[kernel], order: l
         strided = sorted([k for k in ks if "stride(Y,n)" in k.params],
                          key=lambda k: (-split_size(k.mr)[0] * k.lmul, -split_size(k.mr)[1]))
         full = [k for k in ks if k not in strided]
+        if strided and "trans" == kind and all(k.tail for k in strided):
+            blocks.append(trans_masked(name, strided))
+            strided = []
         if strided and "trans" == kind:
             # blocks of rows: A's rows contiguous, any cdim - B rows a call,
             # the widest blocks first, P's rows ldp apart (large vectors'

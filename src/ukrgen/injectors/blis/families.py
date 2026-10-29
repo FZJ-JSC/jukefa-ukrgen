@@ -334,8 +334,8 @@ class family:
         case_mask = set()
         for case in entry.get("cases") or []:
             if case.get("mask"):
-                if "vec" != case["kind"]:
-                    raise ValueError(f"{kind} family {entry['family']}: mask on a {case['kind']} case - vec "
+                if "vec" != case["kind"] and not any("TILE" in t for t in (case.get("params") or {}).get("store-tileop", [])):
+                    raise ValueError(f"{kind} family {entry['family']}: mask on a {case['kind']} case - vec cases' last vector, ZA ones' last tile "
                                      f"cases' last vector only")
                 case_mask.add(case.get("name") or case["kind"])
         vec_rest = entry.get("vec-rest")

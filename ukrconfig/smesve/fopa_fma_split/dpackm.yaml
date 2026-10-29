@@ -17,6 +17,18 @@ cases:
     sme-F64F64: 'on'
 # across the grain through ZA: A's rows scaled and moved into a tile's
 # horizontal slices, its vertical slices stored as P's columns - sizes in
+# tile + mask: whole tiles and a last one of the rows left (tail), its stores
+# under a mask - any cdim up to (N+1) tiles in one call, below a tile too
+- kind: trans
+  name: ztail
+  mask: true
+  m: 0..7
+  params:
+    pack-tileop: ['mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){m=1, i=n}']
+    store-tileop: ['Y.TILE:slices_col']
+    X-layout: ['n:c', 'm:s']
+    Y-layout: ['m:c', 'n:s']
+    sme-F64F64: 'on'
 # tiles (VL rows each), no scatters (streaming mode has them only with FA64)
 - kind: trans
   name: ztrans

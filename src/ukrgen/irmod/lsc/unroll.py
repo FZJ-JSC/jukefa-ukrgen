@@ -49,6 +49,8 @@ class unroll_loops(lsc_irmod):
         want = max(1, int(self.values["factor"]))
         changed = 0
         for op in list(repeats(program)) + list(slice_loops(program)):
+            if op.info.get("count"):
+                continue            # a run-time count (a masked tile's rows): not unrolled
             if op.info.get("explicit"):
                 # set for this component (--COMP-subtiling): left as set
                 continue

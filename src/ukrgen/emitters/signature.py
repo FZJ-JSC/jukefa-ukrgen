@@ -705,7 +705,7 @@ class signature_emitter:
         self.rt.reserve_specific_reg("greg", number)
         index = self.gen.greg(number)
         counter = self.greg()
-        lines = [asmops.mov(self.gen, src=self.vl_elements(dt), dst=counter),
+        lines = [asmops.mov(self.gen, src=self.slice_count(op, dt), dst=counter),
                  asmops.set_imm(self.gen, reg=index, imm=0)]
         # explicit copies in the block (unroll_loops): emitted once an
         # iteration, every pointer stepping by the unroll; a step register
@@ -1005,7 +1005,7 @@ class signature_emitter:
         walker, counter, delta = self.greg(), self.greg(), self.greg()
         lines = [asmops.mov(self.gen, src=self.aregs[(comp, reg)], dst=walker)]
         lines += self.add_bytes(walker, self.bytes_of(comp, start), comp)
-        lines.append(asmops.mov(self.gen, src=self.vl_elements(dt), dst=counter))
+        lines.append(asmops.mov(self.gen, src=self.slice_count(op, dt), dst=counter))
         # the walk's step, the element stride in bytes - negative where a fill
         # shifts up (SVE insr, into lane 0): from the last element backwards
         stride = op.walks[0].step
@@ -1110,7 +1110,13 @@ class signature_emitter:
             self.rt.reserve_specific_reg("vreg", 0)
             mreg = self.gen.vreg(0)
         else:
-            mreg = self.gen.mreg(self.rt.reserve_any_reg("mreg"))
+            # the lowest free mask register: a mask governs accesses, and a
+            # governing predicate is p0-p7 on SVE and SME (their slice stores
+            # among them); the tracker hands out the highest first
+            used = self.rt.get_used_regs("mreg")
+            number = next(i for i in range(self.gen.max_mregs()) if i not in used)
+            self.rt.reserve_specific_reg("mreg", number)
+            mreg = self.gen.mreg(number)
         call = dict(dreg=mreg, dt=dt, modifiers={opset_modifier.MASKAVL}, avlreg=self.params[count])
         taken = self.scratch(form, call) if form is not None else []
         if taken is None:
@@ -1238,6 +1244,14 @@ class signature_emitter:
     def unscratch(self, taken: list | None):
         for tag, number in taken or []:
             self.rt.unuse_reg(tag, number)
+
+    def slice_count(self, op, dt):
+        """
+        How many slices a loop over them takes: the tile's (its vector
+        length), or a run-time count (a masked tile's rows: tail(m)'s register)
+        """
+        count = op.info.get("count")
+        return self.params[count] if count else self.vl_elements(dt)
 
     def _predicate(self, sig, kwargs: dict, prefix: list | None = None, dt=None, op=None) -> bool:
         """
