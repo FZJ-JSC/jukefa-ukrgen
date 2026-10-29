@@ -17,12 +17,48 @@
 # tblock as in the FP32 file: cdim 32 85.06 / 6.02 (reference 160.51 / 3.19), cdim 48 128.98 / 5.95
 # (reference 254.05 / 3.02) at n=96 - about 1.9x. Structfuse's ldp-stride segment stores are what
 # it emits (vssseg<n> with P's rows ldp apart).
+# A masked vec case (vtail) takes the panels past whole vectors: size N packs N vectors and a masked
+# last one, so cdim N*VL..(N+1)*VL goes in one pass (N=0 covers below one vector). Measured at
+# inca=1 lda=1031, n=80/96, cycles a column against the unmasked dispatch:
+#   k1 FP64  cdim 14  31.90 (masked) vs 44.52 (vec + overlapping tail) vs 58.79 (vec + reference)
+#            cdim 6   26.13 vs 30.36 vs 43.25          cdim 3 (below VL) 18.26 with tailmask-route vl
+#   a100 FP64 cdim 14 38.76 vs 50.50 (vl route)         cdim 20 63.38 vs 72.58 vs 88.71
+#            cdim 30 73.48 vs 133.18 (reference)
+# tailmask-route stays mask (it wins everywhere except k1's below-one-vector case); vec-tail's default
+# overlap is right too - it beats the reference for the unmasked fallback by 30-45%.
+# lmul by SIZE on the vec case (NOT the vtail one): RVV's wider vectors pay where the core is
+# latency-bound, and must divide the case's vector count. Measured at inca=1 lda=1031, n=80/96,
+# cycles a column, lmul 1 against the best wider one:
+#   k1    FP64 cdim 8 (2v) 23.47 -> 22.58 (m2)    cdim 16 (4v) 36.11 -> 30.18 (m4, +16%)
+#         FP32 cdim 16 (2v) 23.64 -> 22.64 (m2)   cdim 32 (4v) 48.69 -> 32.14 (m4, +34%)
+#   a100  FP64 cdim 32 68.18 -> 62.18 (m2)       cdim 64 132.77 -> 102.33 (m4, +23%)
+#         FP32 cdim 64 90.10 -> 76.30 (m2)       cdim 128 171.31 -> 128.93 (m4, +25%)
+#   x100  HURTS - 9.71 -> 10.26, 10.02 -> 10.63, 14.69 -> 16.19, 15.57 -> 16.46 - so x100 keeps m1.
+# Odd vector counts fall back to m1 by the key's own rule, so nothing is clamped away silently.
+# Schedule: swept against lighter distance sets (none, RAW/WAW/WAR at 2/4/8) and every issue model
+# here in the tree (2:vl|vs|vf..., 2:vl|vs,vf..., 2:vl*2|vs|vf..., 1-issue, 3-wide). Three alternating
+# reps per variant on trans16 (cdim 16, inca 127, n 96): base 33.74/30.69/34.45 against 32.28/32.19/
+# 33.40 for no distances (FP32), and 39.51/38.44/40.54 against 39.70/40.59/38.89 for RAW 4 (FP64) -
+# i.e. within this core's +-5% run-to-run spread. The keys do change the emitted schedule, they just
+# do not change the rate: packm here is memory/issue bound, not scheduling bound. Left as inherited.
 isa: rvv
 family: pk
 min-inflight: 16
 cases:
 - kind: vec
+  lmul: {2: 2, 4: 4}
   m: 1..8
+  params:
+    pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){i=m, n=1}']
+    store-tileop: ['Y.VEC:direct']
+    X-layout: ['m:c', 'n:s']
+    Y-layout: ['m:c', 'n:s']
+    sched-cycle-slots: "2:vl|vs|vf,sl,i;vf-sl"
+  schedule: ['RAW:data::::13', 'WAW:data::::13', 'WAR:data::::13', 'RAW:address:greg:::3']
+- kind: vec
+  name: vtail
+  mask: true
+  m: 0..7
   params:
     pack-tileop: ['mul[bdreg:VF](X.VEC:direct, kappa.FP:use_scalar, Y.VEC){i=m, n=1}']
     store-tileop: ['Y.VEC:direct']
@@ -53,3 +89,4 @@ cases:
     Y-layout: ['m:c', 'n:s']
     X-data-regs: '4'
     pre-specialize-irmods: ['+structfuse']
+    structfuse-fields: 4
