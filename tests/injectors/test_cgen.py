@@ -356,8 +356,9 @@ int main( void )
         # config says FA64 is off (Apple's parts), built where it's on (LX2's)
         import copy
         from ukrgen.injectors.blis.families import configuration, build_packm
-        cfg = configuration.from_files({("packm", "FP64"): os.path.join(HERE, "..", "..", "ukrconfig", "sme",
-                                                                        "fopa_bc_vindex", "dpackm.yaml")})
+        # LX2's config keeps its scatter case (the Apple-safe one has none left)
+        cfg = configuration.from_files({("packm", "FP64"): os.path.join(HERE, "..", "..", "ukrconfig", "smesve",
+                                                                        "fopa_fma_split", "dpackm.yaml")})
         base = cfg.families[0]
         for fa64, expect in (("on", 1), ("off", 0)):
             fam = copy.deepcopy(base)
@@ -437,6 +438,53 @@ int main( void )
             self.assertEqual([], skipped)
             loops[bool(irmods)] = sum(1 for l in asm_source(built[0]).split("\n") if l.strip().endswith("_slices:"))
         self.assertEqual(loops[True], 2 * loops[False])
+
+    def test_packm_sme_configs(self):
+        # the SME configs pack across the grain through ZA (ztrans, sizes in
+        # tiles): the Apple-safe one (sme-FA64 off: no scatters in streaming
+        # mode) with no scatter case left, LX2's (FA64 declared) with its
+        # scatters for other row counts; their ztrans through BLIS's dispatch
+        # against the reference under qemu
+        import copy
+        from ukrgen.injectors.blis.families import configuration, build_packm
+        from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
+        root = os.path.join(HERE, "..", "..", "ukrconfig")
+        for cfgdir, scatters in (("sme/fopa_bc_vindex", False), ("smesve/fopa_fma_split", True)):
+            for dt, f in (("FP64", "dpackm"), ("FP32", "spackm")):
+                cfg = configuration.from_files({("packm", dt): os.path.join(root, cfgdir, f + ".yaml")})
+                built, skipped = build_packm(cfg.isa, cfg.name, cfg.families[0])
+                names = {k.symbol.rsplit("_", 1)[1] for k in built}
+                with self.subTest(config=cfgdir, f=f):
+                    self.assertTrue({"ztrans1v", "ztrans2v", "ztrans3v", "ztrans4v"} <= names)
+                    self.assertEqual(scatters, any(n.startswith("trans") for n in names))
+                    self.assertFalse([s for s in skipped if "processor state" in str(s[2])])
+        cc = ["aarch64-linux-gnu-gcc", "-static", "-Wa,-march=armv9-a+sme+sme-f64f64"]
+        if not (shutil.which(cc[0]) and shutil.which(QEMU)):
+            self.skipTest("needs aarch64-linux-gnu-gcc and qemu-aarch64-static")
+        cases = ("{ vl, vl, 2 * vl, 3 * vl, 1, 0 }, { 2 * vl, 2 * vl, 2 * vl + 1, 3 * vl, 1, 1 }, "
+                 "{ 3 * vl, 3 * vl, 5 * vl, 5 * vl, 1, 0 }, { 4 * vl, 4 * vl, vl + 2, 2 * vl, 1, 1 }, "
+                 "{ 4 * vl, 4 * vl, 9 * vl, 9 * vl, 1, 0 }")
+        for cfgdir, dt, f in (("sme/fopa_bc_vindex", "FP64", "dpackm"), ("smesve/fopa_fma_split", "FP32", "spackm")):
+            cfg = configuration.from_files({("packm", dt): os.path.join(root, cfgdir, f + ".yaml")})
+            fam = copy.deepcopy(cfg.families[0])
+            fam.cases = [c for c in fam.cases if "ztrans" == c[0]]
+            built, skipped = build_packm(cfg.isa, cfg.name, fam)
+            ctype, ch = ("float", "s") if "FP32" == dt else ("double", "d")
+            helper = vl_helpers(built, make_generator("sme")).replace('"smstart', '".arch_extension sme\\n\\tsmstart', 1)
+            src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + helper + \
+                  f"\n#define bli_{ch}{ch}packm_{cfg.name}_ref REF\n" + "typedef int conj_t;\ntypedef int pack_t;\n" + \
+                  "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
+                  "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
+                  packm_dispatch(cfg.name, dt, built) + \
+                  f"\ndim_t VL_OF( void ) {{ return ukrgen_vl( sizeof( {ctype} ) ); }}\n"
+            harness = open(os.path.join(HERE, "packm_harness.c")).read() \
+                .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
+            defs = [f"-DPACKM=bli_{ch}packm_{cfg.name}", f"-DCASES={cases}"] + (["-DWT=float"] if "FP32" == dt else [])
+            outs = self.run_c("sme", src + harness, built, [[QEMU, "-cpu", f"max,sme=on,sme{v}=on"] for v in (256, 512)],
+                              defs, cc=cc)
+            for out in outs:
+                with self.subTest(config=cfgdir, dt=dt):
+                    self.assertIn("5 runs, 3 by generated cases, 0 wrong", out)
 
     def test_packm_masked_tail_avx512(self):
         # AVX-512's masked vec cases, run here: the last vector's vmovupd

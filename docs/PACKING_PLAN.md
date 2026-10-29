@@ -349,11 +349,12 @@ so the tests can't tell.
    once wherever sections share it, the step back is the specializer's
    (an address computation after the loop). The tiles' loops fuse (one
    over every tile's rows, one over their columns).
-3. **Z3** a `ztrans` case sized in tiles (m: 1..4 - za0.d-za3.d of eight
-   for doubles, four for singles) for the SME configs: full panels of k·VL
-   rows - SME gemm's MR and NR (NR = 4 tiles, 4·VL rows, today past the
-   scatter cases' 16 rows: the reference) - and block kernels (0207) for
-   larger cdims.
+3. **Z3** a `ztrans` case sized in tiles - done (ukrgen 0224): every SME
+   packm config, m: 1..4 tiles (za0-za3), ahead of any scatter case. The
+   Apple-safe config (sme/fopa_bc_vindex) declares sme-FA64 off and has no
+   scatter case left; LX2's (smesve/fopa_fma_split) declares FA64 on - a
+   feature set explicitly (sme-F64F64) had left it off, its scatter cases
+   refused since the state check (0215). Panels not of whole tiles: Z4.
 4. **Z5** FA64 declared; SME configs without it on the ZA transpose.
 5. **Z4** partial tiles (cdim not a multiple of VL): the vertical slices
    stored under a first-R predicate (A3) - any cdim.

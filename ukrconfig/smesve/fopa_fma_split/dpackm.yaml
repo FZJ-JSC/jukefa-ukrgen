@@ -1,6 +1,10 @@
 # FP64 packm, sme (streaming): vectors along cdim, and along the panel (trans)
 isa: sme
 family: pk
+# LX2 has FEAT_SME_FA64: the scatters below run in streaming mode (a feature set
+# explicitly - sme-F64F64 - leaves the others off unless named)
+params:
+  sme-FA64: 'on'
 min-inflight: 8
 cases:
 - kind: vec
@@ -10,6 +14,18 @@ cases:
     store-tileop: ['Y.VEC:direct']
     X-layout: ['m:c', 'n:s']
     Y-layout: ['m:c', 'n:s']
+    sme-F64F64: 'on'
+# across the grain through ZA: A's rows scaled and moved into a tile's
+# horizontal slices, its vertical slices stored as P's columns - sizes in
+# tiles (VL rows each), no scatters (streaming mode has them only with FA64)
+- kind: trans
+  name: ztrans
+  m: 1..4
+  params:
+    pack-tileop: ['mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){m=1, i=n}']
+    store-tileop: ['Y.TILE:slices_col']
+    X-layout: ['n:c', 'm:s']
+    Y-layout: ['m:c', 'n:p']
     sme-F64F64: 'on'
 - kind: trans
   m: 1..16
