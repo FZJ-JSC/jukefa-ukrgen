@@ -21,8 +21,8 @@ families:
     order: kmn
     max-imm-offset: "min(me+e, 16e-1)"
   schedule: ['RAW:data:freg:::8', 'RAW:data:vreg:::13', 'WAR:data::::8', 'RAW:address:greg:::12']
-  max-addr-regs: {A: 2, B: 2}
-  addr-pattern: {A: rotate, B: "blocked:mnk/R"}
+  max-addr-regs: {A: 1, B: "min(4, max(2, 10-2n))"}
+  addr-pattern: {A: "blocked:mnk/R", B: rotate}
   c-storage: [row, any]
 - family: vm
   preset: gemm_fma_vf
@@ -37,7 +37,7 @@ families:
     order: kmn
     max-imm-offset: "min(ne+e, 16e-1)"
   schedule: ['RAW:data:freg:::8', 'RAW:data:vreg:::13', 'WAR:data::::8', 'RAW:address:greg:::12']
-  max-addr-regs: {A: 4, B: 2}
+  max-addr-regs: {A: "max(1, 12/m-2)", B: 2}
   c-storage: [col, any]
   addr-pattern: {A: rotate, B: "blocked:mnk/R"}
   default: 2x14

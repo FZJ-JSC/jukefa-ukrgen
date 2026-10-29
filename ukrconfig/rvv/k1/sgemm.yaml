@@ -21,7 +21,7 @@ families:
     order: knm
     max-imm-offset: "min(me+e, 16e-1)"
   schedule: ['RAW:data:freg:::8', 'RAW:data:vreg:::13', 'WAR:data::::8', 'RAW:address:greg:::12']
-  max-addr-regs: {A: 2, B: 4}
+  max-addr-regs: {A: "max(2, min(4, 12-m))", B: 4}
   addr-pattern: {A: "blocked:mnk/R", B: rotate}
   c-storage: [row, any]
 - family: vm
