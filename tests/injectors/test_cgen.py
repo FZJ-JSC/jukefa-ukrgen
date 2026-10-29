@@ -588,6 +588,50 @@ int main( void )
             c_expr("2*VL", "double")
         self.assertIn("vl_helpers first", str(caught.exception))
 
+    def test_packm_branch_loops(self):
+        # a branch whose cases loop (packm's kappa == 1 copy and its multiply,
+        # each over n): the loop order each index once, each case's loop its
+        # own counters - here both cases multiply, kappa 1 running the first,
+        # 2 the second, each against the reference (AVX2, natively)
+        from unittest import mock
+        import ukrgen.flow.stages.ukr.pack as pack
+        from ukrgen.flow.stages.ukr.ukr import (block_description as blk, branch_description as br,
+                                                case_description as cs)
+        from ukrgen.injectors.blis.families import build_packm
+        from ukrgen.injectors.blis.cgen import packm_dispatch
+        from tests.specializers.test_native import cpu_has
+        if not (cpu_has("avx2") and shutil.which("gcc")):
+            self.skipTest("needs AVX2 and gcc")
+        loop = lambda: blk(stos=("pack", "store"), loop_index="n", preload=True, tail=True)
+        branched = classmethod(lambda cls: [br(cases=(cs(when={"kappa": 1}, blocks=(loop(),)),
+                                                      cs(blocks=(loop(),))))])
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+               "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
+        fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "cases": [
+            {"kind": "vec", "m": [1, 2], "params": vec}]})
+        with mock.patch.object(pack.pack_composition, "get_blocks", branched):
+            built, skipped = build_packm("avx256", "ukrgen_avx2", fam)
+        self.assertEqual([], skipped)
+        for k in built:
+            asm = asm_source(k)
+            self.assertIn("_case1:", asm)
+            self.assertEqual(2, sum(1 for l in asm.split("\n") if l.strip().endswith("_loop:")))
+        src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
+              "\n#define bli_ddpackm_ukrgen_avx2_ref REF\n" + "typedef int conj_t;\ntypedef int pack_t;\n" + \
+              "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
+              "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
+              packm_dispatch("ukrgen_avx2", "FP64", built) + "\ndim_t VL_OF( void ) { return 4; }\n"
+        harness = open(os.path.join(HERE, "packm_harness.c")).read() \
+            .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
+        cases = "{ vl, vl, 7, 1, vl + 3, 0 }, { 2 * vl, 2 * vl, 5, 1, 2 * vl, 0 }"
+        for kappa in (1, 2):
+            with self.subTest(kappa=kappa):
+                outs = self.run_c("avx256", src + harness, built, [[]],
+                                  ["-DPACKM=bli_dpackm_ukrgen_avx2", f"-DCASES={cases}", f"-DKAPPA={kappa}"],
+                                  cc=["gcc", "-mavx2", "-mfma"])
+                for out in outs:
+                    self.assertIn("2 runs, 2 by generated cases, 0 wrong", out)
+
     def test_packm_lmul_by_size(self):
         # RVV's vec cases at LMUL 2 where it divides their vectors, 1 where it
         # doesn't: 2v and 4v one and two m2 groups, 1v and 3v m1 - each its

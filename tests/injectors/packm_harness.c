@@ -5,6 +5,9 @@
 #include "blis_stub.h"
 typedef int conj_t;
 typedef int pack_t;
+#ifndef KAPPA
+#define KAPPA 2
+#endif
 #ifndef WT
 #define WT double
 #endif
@@ -23,7 +26,8 @@ static WT A[ 64 * 1024 ], P[ 64 * 1024 ];
 int main( void )
 {
 	const dim_t vl = VL_OF();
-	const WT kappa = 2;
+	/* kappa 1 runs a kernel's kappa == 1 case (a copy), others its multiply */
+	const WT kappa = KAPPA;
 	int bad = 0, runs = 0, fast = 0;
 	for ( int i = 0; i < 64 * 1024; i++ ) A[ i ] = ( i % 13 ) - 6;
 	/* cdim, cdim_max, n, inca, lda, the reference calls expected */

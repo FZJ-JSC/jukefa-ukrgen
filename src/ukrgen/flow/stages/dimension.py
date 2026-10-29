@@ -42,7 +42,9 @@ class dimension_stage(stage):
                                 f"one after another along it",
                     multi=True)
 
-        loops = [b.loop_index for b in composition.all_blocks() if b.is_loop]
+        # each loop index once: a branch's cases may loop over the same index,
+        # alternatives (packm's kappa == 1 copy and its multiply)
+        loops = list(dict.fromkeys(b.loop_index for b in composition.all_blocks() if b.is_loop))
         default = loops + [i for i in self.indices if i not in loops]
         self.params["order"] = stage_param(
                 value=",".join(default),

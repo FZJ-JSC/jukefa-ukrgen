@@ -1808,7 +1808,17 @@ class signature_emitter:
             self.indexes = dict(start[7])
             self.region_loads = self.start_addresses(case_comps[j], set())
             self.start_indexes(c.blocks)
-            out = [self.block(b, list(c.blocks[i + 1:])) for i, b in enumerate(c.blocks)]
+            # a case's blocks may loop (packm's kappa == 1 copy and its multiply,
+            # each looping over n): their counters set up as the prefix's
+            out = []
+            case_loops = [b.loop_index for b in c.blocks]
+            for i, b in enumerate(c.blocks):
+                counters, count_lines = None, []
+                if b.loop_index is not None:
+                    counters, count_lines = self.loop_counts(b, b.loop_index in case_loops[i + 1:])
+                emitted = self.block(b, list(c.blocks[i + 1:]))
+                emitted.loads, emitted.counters = count_lines + list(emitted.loads or []), counters
+                out.append(emitted)
             if out:
                 out[0].loads = self.region_loads + out[0].loads
             cases.append((c.label, c.when, out))
