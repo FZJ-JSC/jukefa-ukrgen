@@ -491,6 +491,25 @@ network); a type conversion packing (mixed precision) is a computation,
 a compute STO. Worth adding if transposes move from the store
 resolutions into the STO graph.
 
+**Decided: the copy is an identity compute STO, not a LOAD kind.** A
+compute STO's candidates, tilings, resolutions and IR come from the
+operation search matching its expression (osb.find_hw_implementations) and
+the builder; a LOAD kind would duplicate both. The kappa == 1 path is
+`copy (Y = X) ; store`, the copy's input resolution its load
+(X.VEC:direct; X.TILE:slices_row on ZA - rows straight into slices).
+Needed: a hardware AST for a plain move, MOVE(dst, src) (support/op.py's
+ast_op_map has add, mul, fma, fdota, fopa, mma - MOVE(Y, X) matched none);
+its IR a register move (lsc_move) a vector; a pass renaming Y's registers
+to X's (copy propagation) so the copy emits nothing but its load - a move
+a vector until then.
+
+**Later: a transpose operation**, not the identity: input vectors along n,
+output along m - its implementation the permute network shufflenet
+computes (transpose_network), its scratch registers the emitter's. Load,
+transpose, (kappa)mul, a direct store: the solver weighing it against the
+store methods, the network scheduled as operations. Fixed-length ISAs only
+(a run-time vector length transposes through ZA).
+
 ## Order
 
 1. asmgen A1 (STRUCT is interleaving), A3 (first-M masks), A2 (SVE
