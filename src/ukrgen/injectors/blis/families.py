@@ -712,7 +712,18 @@ def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: in
     try:
         ctx, result, _ = run_unrolled(params, "n")
     except Exception as err:
-        return _skip(dt, (case, m), err)
+        # X's ring by default a register for each of a step's rows, Y's too:
+        # where the vector registers run out (trans16 - 16 rows of each,
+        # kappa's broadcast, the scatter's index), X - only streaming through,
+        # each row stored by Y - takes half; a case giving X-data-regs as it
+        # says. Built so only where it was skipped
+        if "no vector register left" not in str(err) or "X-data-regs" in params:
+            return _skip(dt, (case, m), err)
+        params["X-data-regs"] = str(max(1, -(-m // 2)))
+        try:
+            ctx, result, _ = run_unrolled(params, "n")
+        except Exception as again:
+            return _skip(dt, (case, m), again)
     if not result.completed or not ctx.emitted:
         return _skip(dt, (case, m), "the flow didn't complete")
     from .cgen import split_size

@@ -693,6 +693,12 @@ int main( void )
         # store, SVE's scatter
         self.packm_trans()
 
+    def test_packm_trans16(self):
+        # 16 rows: X's and Y's rings a register a row by default, with kappa's
+        # broadcast and the scatter's index more than 32 - X's ring halved
+        # where the registers ran out (it only streams through)
+        self.packm_trans(m=16)
+
     def test_packm_trans_structfuse(self):
         # the rows' vectors stored interleaved, one structure store a step:
         # SVE's st3d, RVV's vsseg3e64.v - the same panels
