@@ -17,7 +17,7 @@ from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage
 HERE = os.path.dirname(os.path.abspath(__file__))
 PARAMS = {"ukr": "pack", "X-data-type": "FP64", "Y-data-type": "FP64",
           "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:p"], "m": "2", "n": "1",
-          "pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
+          "pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
           "store-tileop": ["Y.VEC:direct"], "X-data-regs": "4", "Y-data-regs": "4",
           "kappa-data-regs": "1"}
 

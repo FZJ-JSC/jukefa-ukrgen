@@ -198,7 +198,7 @@ int main( void )
     def test_packm(self):
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:p"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"],
                                          "cases": [{"kind": "vec", "m": [1, 2], "params": vec}]})
@@ -229,7 +229,7 @@ int main( void )
         # case's, rows past the masked cases' vec and the reference
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "cases": [
             {"kind": "vec", "m": [1, 2], "params": vec},
@@ -269,7 +269,7 @@ int main( void )
         cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
         if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
             self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "cases": [
             {"kind": "vec", "m": [1, 2], "params": vec},
@@ -312,7 +312,7 @@ int main( void )
         cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
         if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
             self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         for merged in (False, True):
             with self.subTest(merged=merged):
@@ -572,7 +572,7 @@ int main( void )
         from tests.specializers.test_native import cpu_has
         if not (cpu_has("avx512f") and cpu_has("bmi2")):
             self.skipTest("needs AVX512F and BMI2")
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "cases": [
             {"kind": "vec", "m": [1, 2], "params": vec},
@@ -624,7 +624,7 @@ int main( void )
         from tests.specializers.test_native import cpu_has
         if not (cpu_has("avx2") and shutil.which("gcc")):
             self.skipTest("needs AVX2 and gcc")
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "cases": [
             {"kind": "vec", "m": [1, 2], "params": vec}]})
@@ -660,7 +660,7 @@ int main( void )
         cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
         if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
             self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:p"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"],
                                          "cases": [{"kind": "vec", "m": [1, 2, 3, 4], "lmul": 2, "params": vec}]})
@@ -787,7 +787,7 @@ int main( void )
         cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
         if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
             self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
-        trans = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){m=1, i=n}"],
+        trans = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){m=1, i=n}"],
                  "store-tileop": ["Y.VEC:strided"], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:s"],
                  "X-data-regs": "4", "pre-specialize-irmods": ["+structfuse"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "unroll": 2,
@@ -826,7 +826,7 @@ int main( void )
         cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
         if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
             self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         harness = open(os.path.join(HERE, "packm_harness.c")).read() \
             .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
@@ -881,7 +881,7 @@ int main( void )
         # rows not a multiple of the lanes (3 on AVX2's 4 doubles), or a
         # vector whose length isn't known (SVE): no transpose - refused
         from ukrgen.injectors.blis.families import build_packm
-        trans = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){m=1, i=n}"],
+        trans = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){m=1, i=n}"],
                  "store-tileop": ["Y.VEC:shuffle"], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"]}
         for isa, m, said in (("avx256", 3, "as many rows as a vector has lanes"),
                              ("sve", 4, "the vector's length isn't known")):
@@ -942,7 +942,7 @@ int main( void )
             if not available:
                 continue
             ran += 1
-            trans = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){m=1, i=n}"],
+            trans = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){m=1, i=n}"],
                      "store-tileop": [store], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"]}
             if irmods is not None:
                 trans["pre-specialize-irmods"] = irmods
@@ -1072,7 +1072,7 @@ int main( void )
         # reference the rows left and a narrower panel's edge
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import packm_dispatch
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"],
                                          "cases": [{"kind": "vec", "m": [1, 2, 4], "params": vec}]})
@@ -1103,7 +1103,7 @@ int main( void )
         # gathers), the kernel of the whole size first, the reference the rest
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import packm_dispatch
-        gather = {"pack-tileop": ["fmul(X.VEC:gather, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:gather, Y.VEC){i=m, n=1}"],
+        gather = {"pack-tileop": ["mul(X.VEC:gather, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:gather, Y.VEC){i=m, n=1}"],
                   "store-tileop": ["Y.VEC:direct"], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:s"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"],
                                          "cases": [{"kind": "gather", "m": [1, 2], "params": gather}]})

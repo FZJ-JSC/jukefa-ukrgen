@@ -12,14 +12,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 # gemm's epilogue cases, vectors along m: C contiguous along m, or general strides
 CASES_CONTIGUOUS = [
-    "--alphamul-tileop", "fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}",
-    "--add-tileop", "fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}",
+    "--alphamul-tileop", "mul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}",
+    "--add-tileop", "add(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}",
     "--alphaadd-tileop", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}",
     "--betaadd-tileop", "fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}",
     "--store_ab-tileop", "AB.VEC:direct"]
 CASES_STRIDED = [
-    "--alphamul-tileop", "fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}",
-    "--add-tileop", "fadd(AB.VEC, C.VEC:gather, C.VEC){i=m, n=1}",
+    "--alphamul-tileop", "mul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}",
+    "--add-tileop", "add(AB.VEC, C.VEC:gather, C.VEC){i=m, n=1}",
     "--alphaadd-tileop", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC:gather){i=m, n=1}",
     "--betaadd-tileop", "fma(C.VEC:gather, beta.VEC:bc_load, AB.VEC){i=m, n=1}",
     "--store_ab-tileop", "AB.VEC:scatter"]
@@ -41,7 +41,7 @@ class test_cli(unittest.TestCase):
         # handle SVE's predicates yet
         args = ["--isa", "neon"] + [a for d in dts for a in (d, "FP64")] + [
             "--A-layout", "m:c", "k:s", "--B-layout", "k:s", "n:c", "--C-layout", "m:c", "n:s",
-            "--mm-tileop", mm, "--betascale-tileop", "fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}",
+            "--mm-tileop", mm, "--betascale-tileop", "mul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}",
             "--alphascale-tileop", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}", "--store-tileop", "C.VEC:direct",
             "--m", "1", "--n", "1", "--k", "1",
             "--A-data-regs", "1", "--B-data-regs", "1", "--C-data-regs", "1"] + CASES_CONTIGUOUS
@@ -83,7 +83,7 @@ class test_cli_help_and_errors(unittest.TestCase):
         out = cli("--isa", "neon", "--ukr", "gemm", *dts,
                   "--A-layout", "m:c", "k:s", "--B-layout", "k:s", "n:c", "--C-layout", "m:c", "n:s",
                   "--mm-tileop", "fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}",
-                  "--betascale-tileop", "fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}",
+                  "--betascale-tileop", "mul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}",
                   "--alphascale-tileop", "fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}",
                   "--store-tileop", "C.VEC:direct", "--m", "1", "--n", "1", "--k", "1",
                   "--A-data-regs", "1", "--B-data-regs", "1", "--C-data-regs", "1",

@@ -3,7 +3,6 @@ Choosing how each STO is implemented in hardware ("to"s)
 """
 
 from __future__ import annotations
-import warnings
 import re
 
 import difflib
@@ -533,12 +532,6 @@ class solve_stage(stage):
         chosen = []
         for value in values:
             value = value.strip()
-            # op names before asmgen 0.6 renamed fadd and fmul: the same candidates
-            renamed = re.sub(r"(?<![\w.])f(mul|add)(?=[(\[])", r"\1", value)
-            if renamed != value:
-                warnings.warn(f"--{name}-tileop: fmul and fadd are mul and add (asmgen 0.6): {value}",
-                              DeprecationWarning, stacklevel=2)
-                value = renamed
             if value.isdigit() and int(value) < len(encodings):
                 chosen.append(encodings[int(value)])
             elif value in cands:

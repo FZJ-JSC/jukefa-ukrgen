@@ -32,8 +32,8 @@ def run(params):
 
 CASE_TOS = {
     # gemm's epilogue cases, all with vectors along m like the main loop
-    "alphamul-tileop": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
-    "add-tileop": ["fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}"],
+    "alphamul-tileop": ["mul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
+    "add-tileop": ["add(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}"],
     "alphaadd-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}"],
     "betaadd-tileop": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}"],
     "store_ab-tileop": ["AB.VEC:direct"],

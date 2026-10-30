@@ -12,7 +12,7 @@ from tests.stages.test_sto import CASE_TOS
 
 # vectors along m, B broadcast; A and B packed as BLIS packs them
 VM = {"mm-tileop": ["fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"],
-      "betascale-tileop": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"],
+      "betascale-tileop": ["mul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"],
       "alphascale-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
       "store-tileop": ["C.VEC:direct"],
       "A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"], "C-layout": ["m:c", "n:s"]}
@@ -21,11 +21,11 @@ VM.update(CASE_TOS)
 # vectors along n, A broadcast, C row-major (its vectors along n contiguous):
 # the 8x3v kind of kernel; the epilogue streams C, scheduled (--mru)
 VN = {"mm-tileop": ["fma(A.VEC:bc_load, B.VEC:direct, AB.VEC){m=1, i=n, k*=1}"],
-      "betascale-tileop": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){m=1, i=n}"],
+      "betascale-tileop": ["mul(C.VEC:direct, beta.VEC:bc_load, C.VEC){m=1, i=n}"],
       "alphascale-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
       "store-tileop": ["C.VEC:direct"],
-      "alphamul-tileop": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
-      "add-tileop": ["fadd(AB.VEC, C.VEC:direct, C.VEC){m=1, i=n}"],
+      "alphamul-tileop": ["mul(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
+      "add-tileop": ["add(AB.VEC, C.VEC:direct, C.VEC){m=1, i=n}"],
       "alphaadd-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){m=1, i=n}"],
       "betaadd-tileop": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){m=1, i=n}"],
       "store_ab-tileop": ["AB.VEC:direct"],
@@ -36,11 +36,11 @@ VN = {"mm-tileop": ["fma(A.VEC:bc_load, B.VEC:direct, AB.VEC){m=1, i=n, k*=1}"],
 # RVV: the broadcast operand an FP scalar the vector-scalar form takes
 # (vfmacc.vf), alpha and beta too - the FP registers a file of their own
 def _epilogue(tiling):
-    return {"betascale-tileop": [f"fmul[bdreg:VF](C.VEC:direct, beta.FP:use_scalar, C.VEC){{{tiling}}}"],
+    return {"betascale-tileop": [f"mul[bdreg:VF](C.VEC:direct, beta.FP:use_scalar, C.VEC){{{tiling}}}"],
             "alphascale-tileop": [f"fma[bdreg:VF](AB.VEC, alpha.FP:use_scalar, C.VEC){{{tiling}}}"],
             "store-tileop": ["C.VEC:direct"],
-            "alphamul-tileop": [f"fmul[bdreg:VF](AB.VEC, alpha.FP:use_scalar, C.VEC){{{tiling}}}"],
-            "add-tileop": [f"fadd(AB.VEC, C.VEC:direct, C.VEC){{{tiling}}}"],
+            "alphamul-tileop": [f"mul[bdreg:VF](AB.VEC, alpha.FP:use_scalar, C.VEC){{{tiling}}}"],
+            "add-tileop": [f"add(AB.VEC, C.VEC:direct, C.VEC){{{tiling}}}"],
             "alphaadd-tileop": [f"fma[bdreg:VF](AB.VEC, alpha.FP:use_scalar, C.VEC:direct){{{tiling}}}"],
             "betaadd-tileop": [f"fma[bdreg:VF](C.VEC:direct, beta.FP:use_scalar, AB.VEC){{{tiling}}}"],
             "store_ab-tileop": ["AB.VEC:direct"], "A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"]}
@@ -180,7 +180,7 @@ class test_families(unittest.TestCase):
         # at least 8 vectors an iteration: 2 vectors unrolled 4, 4 twice, 8 once;
         # an unroll the registers can't hold halved (x86's 1-vector case)
         from ukrgen.injectors.blis.families import build_packm
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "min-inflight": 8,
                                          "cases": [{"kind": "vec", "m": [2, 4, 8], "params": vec}]})
@@ -204,7 +204,7 @@ class test_families(unittest.TestCase):
         # alike - the kernels' assembly rendered there, their programs kept there
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import asm_source
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64", "FP32"], "min-inflight": 8,
                                          "cases": [{"kind": "vec", "m": [1, 2], "params": vec}]})

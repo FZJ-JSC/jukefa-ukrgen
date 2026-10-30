@@ -22,14 +22,14 @@ from ukrgen.models.load_store_operations import (
 TO_STAGES = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage]
 
 FMA_M = "fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"
-BETA = "fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"
+BETA = "mul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"
 ALPHA = "fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"
 
 
 CASE_TOS = {
     # gemm's epilogue cases, all with vectors along m like the main loop
-    "alphamul-tileop": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
-    "add-tileop": ["fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}"],
+    "alphamul-tileop": ["mul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
+    "add-tileop": ["add(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}"],
     "alphaadd-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}"],
     "betaadd-tileop": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}"],
     "store_ab-tileop": ["AB.VEC:direct"],
@@ -196,8 +196,8 @@ class test_builder_resolutions(unittest.TestCase):
 
     def test_chain_temporaries(self):
         ctx, res = run(**{"mm-tileop": [
-            "fmul(A.VEC:direct, B.VEC:bc_load, T0.VEC){i=m, n=1, k*=1} ; "
-            "fadd(AB.VEC, T0.VEC, AB.VEC){i=m, n=1, k*=1}"]})
+            "mul(A.VEC:direct, B.VEC:bc_load, T0.VEC){i=m, n=1, k*=1} ; "
+            "add(AB.VEC, T0.VEC, AB.VEC){i=m, n=1, k*=1}"]})
         self.assertTrue(res.completed)
         mm = program_builder(ctx, preload=False).build().blocks[0]
         ops = [op for op in mm.body if isinstance(op, lsc_transformation)]
@@ -294,12 +294,12 @@ class test_register_pressure(unittest.TestCase):
 
     GENERAL = {"A-layout": ["m:c", "k:s"], "B-layout": ["k:s", "n:c"], "C-layout": ["m:s", "n:s"],
                "mm-tileop": ["fma(A.VEC:bc_load, B.VEC:direct, AB.VEC){m=1, i=n, k*=1}"],
-               "betascale-tileop": ["fmul(C.VEC:gather, beta.VEC:bc_load, C.VEC){m=1, i=n}"],
+               "betascale-tileop": ["mul(C.VEC:gather, beta.VEC:bc_load, C.VEC){m=1, i=n}"],
                "alphascale-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
                "store-tileop": ["C.VEC:scatter"], "n": "2", "k": "2",
                # the epilogue cases, also with vectors along n
-               "alphamul-tileop": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
-               "add-tileop": ["fadd(AB.VEC, C.VEC:gather, C.VEC){m=1, i=n}"],
+               "alphamul-tileop": ["mul(AB.VEC, alpha.VEC:bc_load, C.VEC){m=1, i=n}"],
+               "add-tileop": ["add(AB.VEC, C.VEC:gather, C.VEC){m=1, i=n}"],
                "alphaadd-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:gather){m=1, i=n}"],
                "betaadd-tileop": ["fma(C.VEC:gather, beta.VEC:bc_load, AB.VEC){m=1, i=n}"],
                "store_ab-tileop": ["AB.VEC:scatter"]}

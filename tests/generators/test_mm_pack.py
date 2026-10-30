@@ -43,30 +43,30 @@ class test_mm_pack(unittest.TestCase):
                                      bands=(0,0))
         genpack = mm(pack_tile, scale_tile, pack_tile,
                      lo=order2D("kKmMnN"),
-                     opstr="fmul", tile_strs=["X","kappa","Y"])
+                     opstr="mul", tile_strs=["X","kappa","Y"])
 
         pack_ops = genpack.generate()
         pack_ops_next = genpack.generate(add_dims=[0,0,0,0,n,n])
 
         expected_pack_ops=[
-            "Y(0*VLEN,0) <- fmul(X(0*VLEN,0),kappa(0,0),Y(0*VLEN,0))",
-            "Y(1*VLEN,0) <- fmul(X(1*VLEN,0),kappa(0,0),Y(1*VLEN,0))",
-            "Y(0*VLEN,1) <- fmul(X(0*VLEN,1),kappa(1,1),Y(0*VLEN,1))",
-            "Y(1*VLEN,1) <- fmul(X(1*VLEN,1),kappa(1,1),Y(1*VLEN,1))",
-            "Y(0*VLEN,2) <- fmul(X(0*VLEN,2),kappa(2,2),Y(0*VLEN,2))",
-            "Y(1*VLEN,2) <- fmul(X(1*VLEN,2),kappa(2,2),Y(1*VLEN,2))",
-            "Y(0*VLEN,3) <- fmul(X(0*VLEN,3),kappa(3,3),Y(0*VLEN,3))",
-            "Y(1*VLEN,3) <- fmul(X(1*VLEN,3),kappa(3,3),Y(1*VLEN,3))",
+            "Y(0*VLEN,0) <- mul(X(0*VLEN,0),kappa(0,0),Y(0*VLEN,0))",
+            "Y(1*VLEN,0) <- mul(X(1*VLEN,0),kappa(0,0),Y(1*VLEN,0))",
+            "Y(0*VLEN,1) <- mul(X(0*VLEN,1),kappa(1,1),Y(0*VLEN,1))",
+            "Y(1*VLEN,1) <- mul(X(1*VLEN,1),kappa(1,1),Y(1*VLEN,1))",
+            "Y(0*VLEN,2) <- mul(X(0*VLEN,2),kappa(2,2),Y(0*VLEN,2))",
+            "Y(1*VLEN,2) <- mul(X(1*VLEN,2),kappa(2,2),Y(1*VLEN,2))",
+            "Y(0*VLEN,3) <- mul(X(0*VLEN,3),kappa(3,3),Y(0*VLEN,3))",
+            "Y(1*VLEN,3) <- mul(X(1*VLEN,3),kappa(3,3),Y(1*VLEN,3))",
         ]
         expected_pack_ops_next=[
-            "Y(0*VLEN,4) <- fmul(X(0*VLEN,4),kappa(4,4),Y(0*VLEN,4))",
-            "Y(1*VLEN,4) <- fmul(X(1*VLEN,4),kappa(4,4),Y(1*VLEN,4))",
-            "Y(0*VLEN,5) <- fmul(X(0*VLEN,5),kappa(5,5),Y(0*VLEN,5))",
-            "Y(1*VLEN,5) <- fmul(X(1*VLEN,5),kappa(5,5),Y(1*VLEN,5))",
-            "Y(0*VLEN,6) <- fmul(X(0*VLEN,6),kappa(6,6),Y(0*VLEN,6))",
-            "Y(1*VLEN,6) <- fmul(X(1*VLEN,6),kappa(6,6),Y(1*VLEN,6))",
-            "Y(0*VLEN,7) <- fmul(X(0*VLEN,7),kappa(7,7),Y(0*VLEN,7))",
-            "Y(1*VLEN,7) <- fmul(X(1*VLEN,7),kappa(7,7),Y(1*VLEN,7))",
+            "Y(0*VLEN,4) <- mul(X(0*VLEN,4),kappa(4,4),Y(0*VLEN,4))",
+            "Y(1*VLEN,4) <- mul(X(1*VLEN,4),kappa(4,4),Y(1*VLEN,4))",
+            "Y(0*VLEN,5) <- mul(X(0*VLEN,5),kappa(5,5),Y(0*VLEN,5))",
+            "Y(1*VLEN,5) <- mul(X(1*VLEN,5),kappa(5,5),Y(1*VLEN,5))",
+            "Y(0*VLEN,6) <- mul(X(0*VLEN,6),kappa(6,6),Y(0*VLEN,6))",
+            "Y(1*VLEN,6) <- mul(X(1*VLEN,6),kappa(6,6),Y(1*VLEN,6))",
+            "Y(0*VLEN,7) <- mul(X(0*VLEN,7),kappa(7,7),Y(0*VLEN,7))",
+            "Y(1*VLEN,7) <- mul(X(1*VLEN,7),kappa(7,7),Y(1*VLEN,7))",
         ]
         self.assertEqual(expected_pack_ops,
                          list(map(str,pack_ops)))

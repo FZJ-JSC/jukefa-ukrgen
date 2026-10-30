@@ -29,8 +29,8 @@ def run(params):
 
 CASE_TOS = {
     # gemm's epilogue cases, all with vectors along m like the main loop
-    "alphamul-tileop": ["fmul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
-    "add-tileop": ["fadd(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}"],
+    "alphamul-tileop": ["mul(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"],
+    "add-tileop": ["add(AB.VEC, C.VEC:direct, C.VEC){i=m, n=1}"],
     "alphaadd-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC:direct){i=m, n=1}"],
     "betaadd-tileop": ["fma(C.VEC:direct, beta.VEC:bc_load, AB.VEC){i=m, n=1}"],
     "store_ab-tileop": ["AB.VEC:direct"],
@@ -41,7 +41,7 @@ def gemm(**extra):
     p = {"isa": "sve", "ukr": "gemm", "A-data-type": "FP64", "B-data-type": "FP64",
          "AB-data-type": "FP64", "C-data-type": "FP64",
          # vectors along m in every STO: their tilings must line up
-         "mm-tileop": ["fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"], "betascale-tileop": ["fmul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"],
+         "mm-tileop": ["fma(A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}"], "betascale-tileop": ["mul(C.VEC:direct, beta.VEC:bc_load, C.VEC){i=m, n=1}"],
          "alphascale-tileop": ["fma(AB.VEC, alpha.VEC:bc_load, C.VEC){i=m, n=1}"], "store-tileop": ["C.VEC:direct"],
          "A-layout": ["m:c", "k:s"], "B-layout": ["k:s", "n:c"], "C-layout": ["m:c", "n:s"],
          "m": "2", "n": "3", "k": "2"}
