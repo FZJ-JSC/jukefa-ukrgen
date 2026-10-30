@@ -866,6 +866,18 @@ class signature_emitter:
                 if rgt.VEC == k[2] and k not in read and k not in local:
                     local.append(k)
         sets = [{} for _ in range(rotate)]
+        # with one register set, a temporary is free again after its last use
+        # in the iteration - the next tile's slice takes its register (cluster
+        # and the scheduler's budget ordered the tiles' chains one by one)
+        dead_after = {}
+        if 1 == rotate:
+            last_use = {}
+            for pos, b in enumerate(op.block):
+                for k in keys(b, list(b.reads) + list(b.writes)):
+                    if k in local:
+                        last_use[k] = pos
+            for k, pos in last_use.items():
+                dead_after.setdefault(pos, []).append(k)
         # software pipelined (preload): the first copy's loads - memory loads,
         # slices moved out of tiles - before the loop and, for the next
         # iteration, at the end of each; the last iteration without them
@@ -939,7 +951,7 @@ class signature_emitter:
                         sets[group][k] = (n, self.gen.vreg(n))
                     saved[k] = self.phys[k]
                     self.phys[k] = sets[group][k][1]
-            for b in op.block:
+            for pos, b in enumerate(op.block):
                 if b in sliced:
                     b.properties.update(slice_reg=index,
                                         slice_imm=b.properties.get("copy", 0) if explicit else u)
@@ -961,6 +973,9 @@ class signature_emitter:
                     lines.append(self.move(b))
                 else:
                     lines += self._emit_op(b)
+                for k in dead_after.get(pos, ()):
+                    if k in self.phys:
+                        self.release(k)
             if plan:
                 # explicit copies are in the block: an iteration takes unroll
                 # slices; otherwise each copy one

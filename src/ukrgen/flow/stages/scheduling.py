@@ -10,7 +10,7 @@ from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
 from ...models.lsc.reg import lsc_reg_type
 from ...schedulers.distance import distance_specification
-from ...schedulers.list_scheduler import list_scheduler, register_budget, _key
+from ...schedulers.list_scheduler import list_scheduler, register_budget, _key, TAGS
 
 SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
 
@@ -31,6 +31,31 @@ def _read_before_written(blocks) -> set:
                     seen.add(_key(op, p))
     return live
 
+
+
+def _across(order: list, pos: int, live_out: set, groups) -> dict:
+    """
+    The data registers live across order[pos] (a loop) it neither reads nor
+    writes - read after it, in its section or the blocks after - per register
+    tag: held while it runs, not its iterations'
+    """
+    loop = order[pos]
+    own = {_key(loop, p, groups) for p in list(loop.reads) + list(loop.writes)}
+    across, written = set(), set()
+    for op in order[pos + 1:]:
+        for p in op.reads:
+            k = _key(op, p, groups)
+            if lsc_reg_type.data == op.reg_types[p] and k not in written and k not in own:
+                across.add(k)
+        for p in op.writes:
+            written.add(_key(op, p, groups))
+    across |= {k for k in live_out if lsc_reg_type.data == k[0] and k not in own}
+    counts = {}
+    for k in across:
+        tag = TAGS.get(k[-1])
+        if tag is not None:
+            counts[tag] = counts.get(tag, 0) + 1
+    return counts
 
 class schedule_stage(stage):
     """
@@ -153,9 +178,20 @@ class schedule_stage(stage):
                         setattr(block, section, order)
                         # a loop's own block, as a loop body: a fused loop's
                         # tiles' chains, an unrolled one's copies, interleaved
-                        for op in order:
+                        for i, op in enumerate(order):
                             if isinstance(op, lsc_loop) and op.block:
-                                inner, _ = scheduler(list(op.block), loop=True,
+                                # within the registers the block left it: those
+                                # live across the loop - read after it, untouched
+                                # by it (gemm's other accumulators) - not its
+                                # iterations'; its own reads it counts itself
+                                inner_budget = None
+                                if budget is not None:
+                                    taken = _across(order, i, budget.live_out, program.groups)
+                                    inner_budget = register_budget(
+                                        registers={t: n - taken.get(t, 0) for t, n in budget.registers.items()},
+                                        inflight=budget.inflight)
+                                # (no window: apart as far as those registers allow)
+                                inner, _ = scheduler(list(op.block), loop=True, budget=inner_budget,
                                                      groups=program.groups)
                                 op.block = inner
                                 op.refresh()

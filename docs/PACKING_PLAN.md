@@ -443,9 +443,17 @@ overlapping call), row-major by ztail1, ztail2 - only a k remainder's
 partial chunk the reference's. The split mirrored, smesve/fopa_fma_split_n:
 outer products for NR's first part (ZA tiles of columns), FMAs for the rest
 with their vectors along m (tileop-vectorize: m) and C column-major - NR
-N·VL + M, MR 2VL or 4VL; 12 doubles and 7 singles, right the same way. Its
-2,4,4 (4,2,4 mirrored) still runs out of vector registers emitting C - its
-16 accumulators leave 16 once k is done: possible, not yet.
+N·VL + M, MR 2VL or 4VL; 12 doubles and 7 singles, right the same way. 
+2,4,4 (4,2,4 mirrored) fits (ukrgen 0247): its FMA part's 16 accumulators
+live through the ZA part's epilogue - one loop over every tile's slices
+(fuse_slices), unrolled into copies sharing their registers (2 doubles, 4
+singles). cluster pulls each tile's chains together inside the loop too -
+copy after copy, a tile's before the next's (a copy's load waits on the one
+before's reads); the scheduler spreads the loop's body within the registers
+the block leaves it (its budget less what is live across the loop, the
+accumulators: 14), apart as far as they allow; the emitter frees a
+temporary after its last use in an iteration (one register set) - the next
+tile renames into it. Built and right; only 2,6,4 (32 accumulators) left out.
 
 ## Related: the vector length the caller chooses (RVV)
 

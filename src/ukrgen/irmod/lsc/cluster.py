@@ -4,6 +4,7 @@ addresses are fixed
 """
 
 from ...schedulers.list_scheduler import cluster as cluster_order
+from ...models.load_store_operations import lsc_loop
 from .base import irmod_placement, lsc_irmod
 
 
@@ -23,7 +24,7 @@ class cluster(lsc_irmod):
     description = "pull straight-line code's dependent instructions together (MRU)"
     placement = irmod_placement.PRE_SPECIALIZE
     default_enabled = True
-    constraints = "straight-line blocks only; dependencies through registers kept"
+    constraints = "straight-line blocks and the loops in them; dependencies through registers kept"
 
     def apply(self, program) -> int:
         changed = 0
@@ -35,4 +36,15 @@ class cluster(lsc_irmod):
             if [id(op) for op in order] != [id(op) for op in block.body]:
                 block.body = order
                 changed += 1
+            # a loop's body in it - one iteration, unroll_loops' copies sharing
+            # their registers - pulled together too: each tile's chains, copy
+            # after copy (each copy's load waits on the one before's reads),
+            # before the next tile's (a fused slice loop: gemm's epilogue)
+            for op in block.body:
+                if isinstance(op, lsc_loop) and len(op.block) > 1:
+                    inner = cluster_order(list(op.block), program.groups)
+                    if [id(o) for o in inner] != [id(o) for o in op.block]:
+                        op.block = inner
+                        op.refresh()
+                        changed += 1
         return changed
