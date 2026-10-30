@@ -640,7 +640,19 @@ class signature_specializer:
         dt = min(self.ctx.component_dts.values(), key=adt_size)
         if self.ctx.gen.isa_setup().element_type_is_state():
             self.element_types(dt)
-        problems = check_state(self.program, self.ctx.gen.isa_setup().state(dt))
+        isa = self.ctx.gen.isa_setup()
+        state, engine = isa.state(dt), isa.engine()
+        if engine is not None:
+            # the engine on before every path and off after them, as state the
+            # emitter writes through the ISA's signatures (set's ENGINE): the
+            # state before it the setup's without its own switch
+            from ..models.load_store_operations import lsc_state
+            on, off = engine
+            if not self.program.entry:
+                self.program.entry = [lsc_state(dict(on), dt)]
+                self.program.exit = [lsc_state(dict(off), dt)]
+            state = {**state, **off}
+        problems = check_state(self.program, state)
         if problems:
             raise specialization_error("processor state: " + "; ".join(problems))
         return self.program

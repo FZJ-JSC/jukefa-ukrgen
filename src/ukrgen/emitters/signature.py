@@ -1137,6 +1137,15 @@ class signature_emitter:
         writing its avl operand's (RVV's vsetvli zero, avl)
         """
         from asmgen.asmblocks.op.opset import opset_modifier as setmod
+        # the engine's switches (SME's smstart, smstop): the form writing them
+        engine = next((f for f in self.gen.set.forms()
+                       if setmod.ENGINE in f.modifiers and f.state_writes == op.values), None)
+        if engine is not None:
+            call = dict(dt=op.dt, modifiers=set(engine.modifiers), **engine.structural_params)
+            why = self.gen.set.refusal(**call)
+            if why:
+                raise specialization_error(f"{op}: {why}")
+            return [l.strip() for l in self.gen.set(**call).splitlines() if l.strip()]
         lines = []
         for name, value in op.values.items():
             if name.startswith("mask(") and name.endswith(")"):
@@ -1728,7 +1737,11 @@ class signature_emitter:
         # registers an operation limits go first, from the bottom
         for key in sorted(self.bounds, key=lambda k: len(self.bounds[k])):
             self.reg(lsc_reg_index(key[0], [key[1]]), key[2])
-        setup = lines(isa.setup(rt=self.rt, dt=dt))
+        # the program's entry (the engine on: SME's smstart) before the rest -
+        # smstart zeroes the vector and predicate registers - the exit after
+        engine = bool(self.program.entry)
+        setup = [l for op in self.program.entry for l in self.state(op)] + \
+            lines(isa.setup(rt=self.rt, dt=dt, engine=not engine))
         self.isa_setup_lines = len(setup)
         # the last vectors' masks (tailmask): their first tail(<index>)
         # elements, set once - here, while the parameters are where the call
@@ -1855,7 +1868,8 @@ class signature_emitter:
         return emitted_program(
             gen=self.gen,
             setup=setup, blocks=blocks, cases=cases,
-            teardown=lines(isa.teardown(rt=self.rt, dt=dt)), data=lines(isa.data()),
+            teardown=lines(isa.teardown(rt=self.rt, dt=dt, engine=not engine)) +
+            [l for op in self.program.exit for l in self.state(op)], data=lines(isa.data()),
             bases=bases,
             registers={k: str(v) for k, v in self.phys.items()},
             code=[x for l in self.control(blocks, cases) for x in loaded.get(l.strip(), [l])],

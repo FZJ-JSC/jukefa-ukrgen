@@ -163,6 +163,11 @@ class ir_program:
     #: those of them whose last vector's accesses run at a shorter vector
     #: length (tailmask route vl: RVV's vsetvli around each) - not masked
     tail_vl : set[str] = field(default_factory=set)
+    #: run once before every path, and once after them: the ISA's engine
+    #: switched on and off as state (SME's smstart, smstop - streaming mode
+    #: and ZA), the setup's and teardown's own switches left out
+    entry : list = field(default_factory=list)
+    exit : list = field(default_factory=list)
 
     def render(self) -> str:
         db = self.offsets

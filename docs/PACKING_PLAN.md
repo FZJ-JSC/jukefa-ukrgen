@@ -396,8 +396,13 @@ specializer (ukrgen 0222): each section beginning and ending in the
 setup's type, a transformation whose signatures disagree left to the
 emitter. The masked tails' mask an lsc_state (ukrgen 0223): set
 first in the first block's prologue, read by the last-vector accesses as
-state; the emitter writes it through the ISA's MASKAVL form. Next:
-smstart and smstop as lsc_states.
+state; the emitter writes it through the ISA's MASKAVL form. smstart and smstop
+lsc_states (ukrgen 0238, asmgen 0098): the program's entry and exit - once
+before every path, once after them - switch the ISA's engine (asmgen's
+isa_setup().engine(): SME's streaming mode and ZA) on and off, written
+through set's ENGINE forms, the setup's own switches left out; the state
+checked from the setup's without its switch, every section beginning and
+ending with the entry's. The same instructions in the same places.
 
 The suggestion as it stood:
 

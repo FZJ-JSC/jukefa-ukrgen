@@ -71,6 +71,8 @@ class test_check_state(unittest.TestCase):
     class program:
         def __init__(self, *blocks):
             self.blocks, self.cases = list(blocks), []
+            # the entry and exit (the engine's switches): none here
+            self.entry, self.exit = [], []
 
     def check(self, *blocks):
         from ukrgen.lsc_model.state import check_state

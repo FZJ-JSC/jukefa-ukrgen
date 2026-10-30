@@ -35,15 +35,21 @@ def check_state(program, initial: dict[str, str]) -> list[str]:
     iterations would differ - a problem. The problems, empty where none
     """
     problems = []
+    # the program's entry first (the ISA's engine switched on): every section
+    # begins, and ends, with the state it leaves
+    start = dict(initial)
+    for op in program.entry:
+        if isinstance(op, lsc_state):
+            start.update(op.values)
     # states set once, in the first block's prologue (a masked tail's mask) -
     # the branch the whole kernel, in each case's first block's: every later
     # section begins with them
     firsts = first_blocks(program)
     once = {k: v for first in firsts for op in (first.prologue or []) if isinstance(op, lsc_state)
-            for k, v in op.values.items() if k not in initial}
+            for k, v in op.values.items() if k not in start}
     for block, section in blocks_and_sections(program):
-        state = dict(initial) if (any(block is f for f in firsts) and "prologue" == section) \
-            else {**initial, **once}
+        state = dict(start) if (any(block is f for f in firsts) and "prologue" == section) \
+            else {**start, **once}
         for op in getattr(block, section) or []:
             if isinstance(op, lsc_state):
                 state.update(op.values)
@@ -63,7 +69,7 @@ def check_state(program, initial: dict[str, str]) -> list[str]:
             elif len(held) < len(sigs):
                 op.sigs = held
         # the setup's states as they were (states set once may stay)
-        if any(state.get(k) != v for k, v in initial.items()):
+        if any(state.get(k) != v for k, v in start.items()):
             problems.append(f"{section}: ends with other state than it began with "
                             f"({', '.join(f'{k}={v}' for k, v in sorted(state.items()))})")
     return problems
