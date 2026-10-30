@@ -403,6 +403,14 @@ isa_setup().engine(): SME's streaming mode and ZA) on and off, written
 through set's ENGINE forms, the setup's own switches left out; the state
 checked from the setup's without its switch, every section beginning and
 ending with the entry's. The same instructions in the same places.
+--assume-state (ukrgen 0239, asmgen 0099): the state the caller guarantees
+around the kernel - sm=1 za=1, BLIS switching streaming mode around its
+loops: the check starts from it and the kernel leaves it as it found it; an
+engine it covers switched nowhere (no entry or exit, the setup's own switch
+left out), its clobbers not the kernel's (no saves of d8-d15). SME's
+get_simd_size() reads the streaming vector length with rdsvl, in either
+mode - no switch to undo the caller's (asmgen 0099). Where BLIS switches it
+(*_ker_var2.c's loops, bli_family_<config>.h) is open.
 
 The suggestion as it stood:
 

@@ -33,6 +33,13 @@ class isa_specialize_stage(stage):
         self.params["print-specialized-ir"] = stage_param(
                 value=False, default=False, flag=True, required=False,
                 description="Print the IR specialized for the ISA and exit")
+        self.params["assume-state"] = stage_param(
+                value=None, default=None, multi=True, required=False,
+                description="Processor state the caller guarantees around the kernel, name=value "
+                            "each (sm=1 za=1: SME's streaming mode and ZA on, the caller switching "
+                            "them around its loops): the kernel checked from it, leaving it as it "
+                            "found it - an engine it covers neither switched nor its switches' "
+                            "clobbers claimed")
         self.params["max-imm-offset"] = stage_param(
                 value=None, required=False,
                 description="Largest immediate offset in bytes, either sign, a load or store "
@@ -58,11 +65,33 @@ class isa_specialize_stage(stage):
             raise stage_error(f"--max-imm-offset {limit} is {value} bytes for this kernel")
         return value
 
+    def assumed_state(self) -> dict[str, str]:
+        """
+        --assume-state as name -> value: name=value entries (a list, or one
+        string, comma-separated), or a mapping (a config's {sm: 1, za: 1})
+        """
+        value = self.params["assume-state"].value
+        if not value:
+            return {}
+        if isinstance(value, dict):
+            return {str(k): str(v) for k, v in value.items()}
+        entries = [value] if isinstance(value, str) else list(value)
+        out = {}
+        for entry in (e.strip() for x in entries for e in str(x).split(",")):
+            if not entry:
+                continue
+            name, eq, val = entry.partition("=")
+            if not eq or not name.strip() or not val.strip():
+                raise stage_error(f"--assume-state {entry!r}: name=value (sm=1)")
+            out[name.strip()] = val.strip()
+        return out
+
     def progress(self):
         try:
             for program in self.context.programs:
                 sp = signature_specializer(self.context, program)
                 sp.max_imm_offset = self.imm_limit()
+                sp.assumed = self.assumed_state()
                 sp.specialize()
         except specialization_error as err:
             raise stage_error(f"specializing for the ISA: {err}") from err

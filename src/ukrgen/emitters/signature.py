@@ -1739,9 +1739,11 @@ class signature_emitter:
             self.reg(lsc_reg_index(key[0], [key[1]]), key[2])
         # the program's entry (the engine on: SME's smstart) before the rest -
         # smstart zeroes the vector and predicate registers - the exit after
-        engine = bool(self.program.entry)
+        # (or the caller's: --assume-state - neither the program's nor the
+        # setup's switch)
+        switches = not (self.program.entry or self.program.engine_assumed)
         setup = [l for op in self.program.entry for l in self.state(op)] + \
-            lines(isa.setup(rt=self.rt, dt=dt, engine=not engine))
+            lines(isa.setup(rt=self.rt, dt=dt, engine=switches))
         self.isa_setup_lines = len(setup)
         # the last vectors' masks (tailmask): their first tail(<index>)
         # elements, set once - here, while the parameters are where the call
@@ -1853,7 +1855,8 @@ class signature_emitter:
         # what the ISA's setup and teardown clobber beyond the allocation (SME:
         # changing streaming mode zeroes the vector registers) - the calling
         # convention keeps what its callee must
-        for tag, regs in isa.clobbers().items():
+        # (an engine the caller keeps on switches nowhere here: not the kernel's)
+        for tag, regs in ({} if self.program.engine_assumed else isa.clobbers()).items():
             self.cc.add_clobber(tag, regs)
         save, load, restore = self.fn.get_boilerplate(cc=self.cc)
         shift = self.fn.sp_shift
@@ -1868,7 +1871,7 @@ class signature_emitter:
         return emitted_program(
             gen=self.gen,
             setup=setup, blocks=blocks, cases=cases,
-            teardown=lines(isa.teardown(rt=self.rt, dt=dt, engine=not engine)) +
+            teardown=lines(isa.teardown(rt=self.rt, dt=dt, engine=switches)) +
             [l for op in self.program.exit for l in self.state(op)], data=lines(isa.data()),
             bases=bases,
             registers={k: str(v) for k, v in self.phys.items()},

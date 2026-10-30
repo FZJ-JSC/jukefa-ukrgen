@@ -195,6 +195,8 @@ class signature_specializer:
         # what's been placed and walked, the column pointers made on first use
         self.placed = set()
         self.walked_by = {}
+        #: the state the caller guarantees (--assume-state)
+        self.assumed = {}
         self._column_pointers = None
         self.ctx = ctx
         self.program = program
@@ -648,11 +650,14 @@ class signature_specializer:
             # state before it the setup's without its own switch
             from ..models.load_store_operations import lsc_state
             on, off = engine
-            if not self.program.entry:
+            if all(self.assumed.get(k) == v for k, v in on.items()):
+                # the caller's: the engine on around the kernel, no switch
+                self.program.engine_assumed = True
+            elif not self.program.entry:
                 self.program.entry = [lsc_state(dict(on), dt)]
                 self.program.exit = [lsc_state(dict(off), dt)]
             state = {**state, **off}
-        problems = check_state(self.program, state)
+        problems = check_state(self.program, {**state, **self.assumed})
         if problems:
             raise specialization_error("processor state: " + "; ".join(problems))
         return self.program

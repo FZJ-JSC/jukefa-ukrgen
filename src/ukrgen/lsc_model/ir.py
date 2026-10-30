@@ -168,6 +168,9 @@ class ir_program:
     #: and ZA), the setup's and teardown's own switches left out
     entry : list = field(default_factory=list)
     exit : list = field(default_factory=list)
+    #: the engine on around the kernel by the caller (--assume-state): no
+    #: switch, the setup's own left out too, its clobbers not the kernel's
+    engine_assumed : bool = False
 
     def render(self) -> str:
         db = self.offsets
