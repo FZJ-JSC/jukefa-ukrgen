@@ -34,9 +34,27 @@
 #   BLIS_KC_MAX_D=332
 #   BLIS_MR_IN_MC_MAX_D=56
 # ==================================================
+#
+#
+# larger matrix blistune:
+# ==================================================
+# BEST GFLOPs: 109.75
+# BEST CONFIGURATION:
+#   BLIS_MR_D=8
+#   BLIS_NR_D=12
+#   BLIS_JC_NT=2
+#   BLIS_IC_NT=4
+#   BLIS_JR_NT=1
+#   BLIS_IR_NT=1
+#   BLIS_KC_D=308
+#   BLIS_MR_IN_MC_D=32
+#   BLIS_NR_IN_NC_D=432
+#   BLIS_KC_MAX_D=332
+#   BLIS_MR_IN_MC_MAX_D=36
+# ==================================================
 
 isa: rvv
-blocksizes: {mr-in-mc: 32, mr-in-mc-max: 56, nr-in-nc: 432, kc: 256, kc-max: 332}
+blocksizes: {mr-in-mc: 32, mr-in-mc-max: 36, nr-in-nc: 432, nr-in-nc-max: 484, kc: 308, kc-max: 332}
 families:
 - family: vn
   preset: gemm_fma_vf
