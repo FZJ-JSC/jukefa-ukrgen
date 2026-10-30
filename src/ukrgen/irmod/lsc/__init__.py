@@ -24,13 +24,14 @@ from .widen import widen
 from .structfuse import structfuse
 from .shufflenet import shufflenet
 from .tailmask import tailmask
+from .copyprop import copyprop, copyprop_tiles
 from .hoist import hoist
 from .vectorize import vectorize_loops
 from .unroll import unroll_loops
 from .slices import fuse_slices, forward_slices, hoist_slices
 from .cluster import cluster
 
-IRMODS : list[type[lsc_irmod]] = [widen, structfuse, shufflenet, tailmask, vectorize_loops, fuse_slices, forward_slices, hoist_slices,
+IRMODS : list[type[lsc_irmod]] = [widen, structfuse, shufflenet, copyprop_tiles, copyprop, tailmask, vectorize_loops, fuse_slices, forward_slices, hoist_slices,
                                   unroll_loops, hoist, cluster, lanefuse, addrmerge, ldinc]
 
 

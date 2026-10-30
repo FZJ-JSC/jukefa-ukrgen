@@ -518,7 +518,7 @@ also `move(X.TILE:slices_row, Y.TILE){i=m, j=n}` - rows straight into a
 tile's slices (Z6) - and `slices_col`, and the vector copies into slices.
 
 Done (ukrgen 0235), the copy in the kernels: its IR an lsc_move through the
-move's plain copies, tagged copy (for copy propagation); a tile's copy
+move's plain copies, tagged copy_sto (for copy propagation; unroll_loops' copy property is its unrolled copies); a tile's copy
 refused until then. The composition: copy, then the branch -
 case(when={"kappa": 1}) copy and store, the default multiply and store.
 packm_bc, packm_vf: copy: move(X.VEC:$XL, Y.VEC){$K}; packm_za the vector
@@ -530,6 +530,26 @@ every block (all_blocks); the emitter's once-allocated registers (a
 clobbered mask - AVX2's gathers -, a tail's mask) each case's own. Every
 packm dispatch test runs kappa 1 and 2; SVE's singles' and halves' copies
 need asmgen 0097.
+
+Done (ukrgen 0236), copy propagation: irmod copyprop (vectors; default on, after
+shufflenet and structfuse) renames a copy's destination's reads to its
+source and drops the move - the builder's lsc_moves tagged copy only, no
+other move (lane moves, broadcasts, slices' extracts and inserts, permutes);
+renamed only while the reads read the same values (its source not written
+before the destination's last read, the destination not read before the
+copy - an earlier iteration's - a loop not both, no group's register),
+kept otherwise. Tiles' copies copyprop_tiles' - required, no list of
+modifications leaving it out - a tile's kept an error. After shufflenet: it knows a
+transpose's rows by the copy's registers. A loop's block taken as one of its
+iterations (ZA's slice loops: load, copy, insert a row), its destination
+not read after the loop. kappa 1 is a load and a store; packm_za's a load
+and a mova a row (the vector copy into slices, renamed).
+Z6's tile identity, move(X.TILE:slices_row, Y.TILE){i=m, j=n} - rows
+straight into slices, no mova - waits on streamed tiles: X loaded into
+tiles in a preloaded loop over n walks wrong (its tail rewinds X's pointer
+a vector length and advances it one an iteration - no net advance - P's
+alike; the main loop advances X 16 vector lengths for its 8 tiles).
+copyprop_tiles is ready for it.
 
 **Later: a transpose operation**, not the identity: input vectors along n,
 output along m - its implementation the permute network shufflenet

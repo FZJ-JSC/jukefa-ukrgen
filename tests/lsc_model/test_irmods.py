@@ -121,7 +121,7 @@ class test_irmod_metadata(unittest.TestCase):
 
     def test_placement(self):
         from ukrgen.irmod.lsc import irmods_at, irmod_placement
-        self.assertEqual(["widen", "structfuse", "shufflenet", "tailmask", "vectorize_loops", "fuse_slices", "forward_slices", "hoist_slices",
+        self.assertEqual(["widen", "structfuse", "shufflenet", "copyprop_tiles", "copyprop", "tailmask", "vectorize_loops", "fuse_slices", "forward_slices", "hoist_slices",
                           "unroll_loops", "hoist", "cluster", "lanefuse"],
                          [m.name for m in irmods_at(irmod_placement.PRE_SPECIALIZE)])
         self.assertEqual(["addrmerge", "ldinc"], [m.name for m in irmods_at(irmod_placement.POST_SPECIALIZE)])

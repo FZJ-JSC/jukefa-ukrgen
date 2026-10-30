@@ -1595,6 +1595,10 @@ class signature_emitter:
         (src, dst: other physical registers than the operation's, an unrolled
         loop's rotation)
         """
+        if op.properties.get("copy_sto") and rgt.TILE in (op.rtypes or []):
+            raise specialization_error(f"{op.properties['copy_sto']}: a tile's copy left to emit - "
+                                       f"no instruction copies a tile into another (copyprop_tiles "
+                                       f"renames them away)")
         src = self.reg(op.indices[0], op.rtypes[0]) if src is None else src
         dst = self.reg(op.indices[1], op.rtypes[1]) if dst is None else dst
         # the destination's type, or the source's where the destination is a

@@ -1023,18 +1023,15 @@ class program_builder:
                   rtypes: list) -> lsc_move:
         """
         A copy's step (a plain move shape): its source's register moved into
-        its destination's, through the move's plain copies - an instruction
-        until copy propagation renames the destination to the source. A
-        tile's copy has no instruction (SME has none from a tile to another):
-        refused until then
+        its destination's, through the move's plain copies - tagged copy, for
+        copy propagation (irmod copyprop) to rename away. A tile's copy has no
+        instruction (SME has none from a tile to another): renamed away, or
+        refused
         """
         src, dst = hws.index("adreg"), hws.index("bdreg")
-        if rgt.TILE == rtypes[dst]:
-            raise model_error(f"{sto} copies a tile into another, which no instruction does: "
-                              f"its tile is to be its source's (copy propagation)")
         move = lsc_move(indices[src], indices[dst], [tiles[src], tiles[dst]],
                         sigs=res.compute_sg, rtypes=[rtypes[src], rtypes[dst]])
-        move.add_property("copy", sto)
+        move.add_property("copy_sto", sto)
         return move
 
     def emit_store(self, sto: str, tiling, op) -> list:
