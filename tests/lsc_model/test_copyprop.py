@@ -124,15 +124,38 @@ class test_copyprop_kernels(unittest.TestCase):
         return text[a:b], text[b:]
 
     def test_copy_free_multiply_unchanged(self):
-        # the copy's case moves nothing; the multiply's - kappa broadcast,
-        # its moves - as without copyprop
+        # the copy's case moves nothing - its source loaded straight into the
+        # destination (the builder), copyprop or not; the multiply's - kappa
+        # broadcast, its moves - as without copyprop
         for isa, mov in (("neon", "mov v"), ("rvv", "vmv.v.v")):
             with self.subTest(isa=isa):
                 copy_case, multiply = self.kernels(isa)
                 kept_copy, kept_multiply = self.kernels(isa, ["-copyprop"])
                 self.assertFalse([l for l in copy_case if l.strip().startswith(mov)], copy_case)
-                self.assertTrue([l for l in kept_copy if l.strip().startswith(mov)], kept_copy)
+                self.assertFalse([l for l in kept_copy if l.strip().startswith(mov)], kept_copy)
                 self.assertEqual(kept_multiply, multiply)
+
+    def test_rvv_groups_and_rotations(self):
+        # the tuner's: trans's rows into structfuse's group (segment stores),
+        # vec3v's through rotating registers - copyprop renamed neither; loaded
+        # into the destination, no vmv.v.v left
+        import os
+        from ukrgen.injectors.blis.families import configuration, build_packm
+        from ukrgen.injectors.blis.cgen import asm_source
+        root = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "ukrconfig")
+        cfg = configuration.from_files({("packm", "FP64"): os.path.join(root, "rvv/k3-x100/dpackm.yaml")})
+        checked = 0
+        for fam in cfg.families:
+            built, skipped = build_packm(cfg.isa, cfg.name, fam)
+            for k in built:
+                if not k.symbol.endswith(("trans14", "trans4", "vec3v", "vec7v")):
+                    continue
+                text = asm_source(k).splitlines()
+                a = next(i for i, l in enumerate(text) if l.endswith("_case0:"))
+                b = next(i for i, l in enumerate(text) if l.endswith("_case1:"))
+                self.assertFalse([l for l in text[a:b] if l.strip().startswith("vmv.v.v")], k.symbol)
+                checked += 1
+        self.assertEqual(4, checked)
 
     def test_za_copy_no_mova(self):
         # ZA (packm_za): kappa 1 loads rows straight into the tile's slices -

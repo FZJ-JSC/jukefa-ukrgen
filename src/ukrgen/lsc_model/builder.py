@@ -933,6 +933,11 @@ class program_builder:
             hws, indices, tiles, reads, writes, read_regs = [], [], [], [], [], []
             written = []
             outward = []
+            # a copy's source loaded straight into its destination's register:
+            # no move (structfuse's groups and rotating source registers kept
+            # copyprop from renaming one away)
+            into = self.copy_into(tiling, op, step, res, sig, slices) \
+                if "move" == self.ctx.osb.ast_op_map[step.hw_ast] else None
             for pos, (hw, math) in enumerate(step.name_mapping.items()):
                 is_read, is_written = get_operand_io(step.hw_ast, hw)
                 rtype = sig.operands[hw].rtype
@@ -943,7 +948,7 @@ class program_builder:
                     tile = result_tile
                 else:
                     coord = self.gcoord(tiling, math, op.coord(math))
-                    reg = self.reg_of(math, rtype, coord)
+                    reg = into if into is not None else self.reg_of(math, rtype, coord)
                     tile = tiling.registers[math]
                     strat = res.operand_strategies.get((hw, dmd.IN))
                     by_lane = [l for l in op.lane(math) if l is not None]
@@ -1003,7 +1008,9 @@ class program_builder:
             items += sorted(loads, key=lambda g: rank.get(g.component, len(rank)))
             opname = self.ctx.osb.ast_op_map[step.hw_ast]
             rtypes = [sig.operands[hw].rtype for hw in hws]
-            if "move" == opname:
+            if into is not None:
+                pass                # loaded where it's copied to: nothing to move
+            elif "move" == opname:
                 items.append(compute_item(
                     self.copy_move(sto, res, hws, indices, tiles, rtypes), read_regs))
             else:
@@ -1017,6 +1024,32 @@ class program_builder:
                 for key in [k for k in self.lane_holder if k[0] == reg]:
                     del self.lane_holder[key]
         return items
+
+    def copy_into(self, tiling, op, step, res, sig, slices) -> vreg | None:
+        """
+        The register a copy's source is loaded into for the copy alone - its
+        destination's, the copy then elided - or None: a source held already,
+        read again, loaded lane by lane or moved from a tile, a tile's copy
+        (copyprop_tiles), or of another register type, copied by a move
+        """
+        src, dst = step.name_mapping.get("adreg"), step.name_mapping.get("bdreg")
+        if src not in self.components or dst not in self.components or slices:
+            return None
+        rtype = sig.operands["adreg"].rtype
+        if rtype != sig.operands["bdreg"].rtype or rtype not in (rgt.VEC, rgt.FP):
+            return None
+        strat = res.operand_strategies.get(("adreg", dmd.IN))
+        if strat is None or not strat.rsln.steps or _lane_steps(strat.rsln.steps) \
+                or strat.rsln.resident_rtype is not None:
+            return None
+        coord = self.gcoord(tiling, src, op.coord(src))
+        if any(held == (src, coord) for held in self.holder.values()) or \
+                self.next_use(src, coord) is not None:
+            return None
+        into = self.reg_of(dst, rtype, self.gcoord(tiling, dst, op.coord(dst)))
+        # held as the destination's from here: its own operand finds it
+        self.holder[into] = (dst, self.gcoord(tiling, dst, op.coord(dst)))
+        return into
 
     @staticmethod
     def copy_move(sto: str, res, hws: list, indices: list, tiles: list,

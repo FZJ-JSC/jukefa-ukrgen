@@ -573,6 +573,16 @@ rewinding one a tile (no gemm kernel changed). packm_za's copy the tile
 identity - kappa 1 loads A's rows straight into the tiles' horizontal
 slices, stores their vertical ones: no vector, no mova.
 
+Done (ukrgen 0240), copies elided: a copy whose source is loaded for it
+alone (a plain load, not held, not read again) loads it straight into the
+destination's register - no move, nothing for copyprop. copyprop renamed
+neither structfuse's groups (RVV's trans: segment stores need the rows in
+the group) nor copies whose rotating source registers were rewritten before
+the store (vec3v-7v) - the tuner's count, k3-x100's FP64: 1158 and 52
+moves; now none on k1, k3-a100, k3-x100. NEON's trans (shufflenet's
+networks) lost theirs too. copyprop, copyprop_tiles keep the rest: a
+source held or read again, loaded lane by lane, a tile's.
+
 **Later: a transpose operation**, not the identity: input vectors along n,
 output along m - its implementation the permute network shufflenet
 computes (transpose_network), its scratch registers the emitter's. Load,
