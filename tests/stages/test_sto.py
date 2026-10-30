@@ -103,7 +103,7 @@ class test_sto_stage(unittest.TestCase):
 
     def test_pack(self):
         ctx, res = run({"isa": "sve", "ukr": "pack", "X-data-type": "FP64",
-                        "Y-data-type": "FP64", "pack-tileop": ["0"], "store-tileop": ["0"],
+                        "Y-data-type": "FP64", "pack-tileop": ["0"], "copy-tileop": ["0"], "store-tileop": ["0"],
                         "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"],
                         "m": "3", "n": "2"})
         self.assertTrue(res.completed)

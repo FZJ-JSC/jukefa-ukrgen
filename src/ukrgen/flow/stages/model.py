@@ -226,9 +226,10 @@ def subtiling_listing(context, programs) -> list[str]:
     """
     from asmgen.registers import adt_size
     from ...models.load_store_operations import lsc_loop
+    from ...irmod.lsc.base import all_blocks
     lines, seen = [], set()
     for program in programs:
-        for block in program.blocks:
+        for block in all_blocks(program):
             for section in ("prologue", "body", "epilogue", "tail"):
                 for op in getattr(block, section, None) or []:
                     if not isinstance(op, lsc_loop):

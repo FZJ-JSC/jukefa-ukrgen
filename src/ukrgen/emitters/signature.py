@@ -1796,9 +1796,11 @@ class signature_emitter:
         # every case starts with the registers where the dispatch leaves them;
         # the cases exclude each other, so they share the registers left, and
         # a parameter's register can become an address register in each
+        # the registers allocated once - a clobbered mask (AVX2's gathers), a
+        # tail's mask - each case's own: its tracker starts without them
         start = (dict(self.positions), dict(self.phys), dict(self.numbers),
                  copy.deepcopy(self.rt), dict(self.aregs), set(self.live_params), self.vtype,
-                 dict(self.indexes))
+                 dict(self.indexes), dict(self.masks), dict(self.tails))
         main_rt = self.rt
         cases = []
         for j, c in enumerate(self.program.cases):
@@ -1806,6 +1808,7 @@ class signature_emitter:
             self.rt, self.aregs, self.live_params = copy.deepcopy(start[3]), dict(start[4]), set(start[5])
             self.vtype = start[6]
             self.indexes = dict(start[7])
+            self.masks, self.tails = dict(start[8]), dict(start[9])
             self.region_loads = self.start_addresses(case_comps[j], set())
             self.start_indexes(c.blocks)
             # a case's blocks may loop (packm's kappa == 1 copy and its multiply,

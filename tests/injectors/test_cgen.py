@@ -50,11 +50,23 @@ class test_cgen(unittest.TestCase):
                 objs.append(os.path.join(d, f"k{i}.o"))
             with open(os.path.join(d, "w.c"), "w") as f:
                 f.write(sources)
-            r = subprocess.run(cc + ["-O1", f"-I{HERE}", *defines, os.path.join(d, "w.c"), *objs,
-                                     "-o", os.path.join(d, "run")], capture_output=True, text=True)
-            self.assertEqual(0, r.returncode, r.stderr)
-            return [subprocess.run(q + [os.path.join(d, "run")], capture_output=True, text=True,
-                                   timeout=60).stdout for q in runners]
+            # packm's harness with kappa 1 - the copy - and 2 - the multiply -
+            # where the test doesn't choose
+            kappas = [None]
+            if any(x.startswith("-DPACKM=") for x in defines) and \
+                    not any(x.startswith("-DKAPPA=") for x in defines):
+                kappas = [1, 2]
+            outs = []
+            for kappa in kappas:
+                run = os.path.join(d, f"run{kappa or ''}")
+                r = subprocess.run(cc + ["-O1", f"-I{HERE}", *defines,
+                                         *([f"-DKAPPA={kappa}"] if kappa else []),
+                                         os.path.join(d, "w.c"), *objs, "-o", run],
+                                   capture_output=True, text=True)
+                self.assertEqual(0, r.returncode, r.stderr)
+                outs += [subprocess.run(q + [run], capture_output=True, text=True,
+                                        timeout=60).stdout for q in runners]
+            return outs
 
     @needs_tools
     def test_wrappers(self):
@@ -186,7 +198,7 @@ int main( void )
     def test_packm(self):
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:p"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"],
                                          "cases": [{"kind": "vec", "m": [1, 2], "params": vec}]})
@@ -217,7 +229,7 @@ int main( void )
         # case's, rows past the masked cases' vec and the reference
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "cases": [
             {"kind": "vec", "m": [1, 2], "params": vec},
@@ -257,7 +269,7 @@ int main( void )
         cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
         if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
             self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "cases": [
             {"kind": "vec", "m": [1, 2], "params": vec},
@@ -300,7 +312,7 @@ int main( void )
         cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
         if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
             self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         for merged in (False, True):
             with self.subTest(merged=merged):
@@ -319,7 +331,8 @@ int main( void )
     def check_vl_route(self, built, merged, cc):
         import re
         from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
-        whole = ["vle64.v", "vfmul.vv", "vse64.v"]
+        # the multiply's, or the copy's (kappa 1) while it moves
+        whole = ["vle64.v", "vfmul.vv", "vmv.v.v", "vse64.v"]
         merges = []
         for asm in [asm_source(k) for k in built if k.tail]:
             self.assertNotIn("v0.t", asm)
@@ -392,7 +405,7 @@ int main( void )
         cc = ["aarch64-linux-gnu-gcc", "-static", "-Wa,-march=armv9-a+sme+sme-f64f64"]
         if not (shutil.which(cc[0]) and shutil.which(QEMU)):
             self.skipTest("needs aarch64-linux-gnu-gcc and qemu-aarch64-static")
-        ztrans = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){m=1, i=n}"],
+        ztrans = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){m=1, i=n}"], "copy-tileop": ["move(X.VEC:direct, Y.TILE:>slice_vec_row){m=1, i=n}"],
                   "store-tileop": ["Y.TILE:slices_col"], "X-layout": ["n:c", "m:s"], "Y-layout": list(ylayout),
                   "sme-F64F64": "on"}
         ztrans.update(extra or {})
@@ -440,7 +453,7 @@ int main( void )
 
     def test_packm_ztrans_fused(self):
         from ukrgen.injectors.blis.families import build_packm
-        ztrans = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){m=1, i=n}"],
+        ztrans = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){m=1, i=n}"], "copy-tileop": ["move(X.VEC:direct, Y.TILE:>slice_vec_row){m=1, i=n}"],
                   "store-tileop": ["Y.TILE:slices_col"], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"],
                   "sme-F64F64": "on"}
         loops = {}
@@ -485,7 +498,7 @@ int main( void )
         # eight tiles of doubles packing right
         from ukrgen.injectors.blis.families import build_packm
         def fam(sizes, dt="FP64", extra=None):
-            z = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){m=1, i=n}"],
+            z = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){m=1, i=n}"], "copy-tileop": ["move(X.VEC:direct, Y.TILE:>slice_vec_row){m=1, i=n}"],
                  "store-tileop": ["Y.TILE:slices_col"], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"]}
             if "FP64" == dt:
                 z["sme-F64F64"] = "on"
@@ -559,7 +572,7 @@ int main( void )
         from tests.specializers.test_native import cpu_has
         if not (cpu_has("avx512f") and cpu_has("bmi2")):
             self.skipTest("needs AVX512F and BMI2")
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "cases": [
             {"kind": "vec", "m": [1, 2], "params": vec},
@@ -604,26 +617,18 @@ int main( void )
     def test_packm_branch_loops(self):
         # a branch whose cases loop (packm's kappa == 1 copy and its multiply,
         # each over n): the loop order each index once, each case's loop its
-        # own counters - here both cases multiply, kappa 1 running the first,
-        # 2 the second, each against the reference (AVX2, natively)
-        from unittest import mock
-        import ukrgen.flow.stages.ukr.pack as pack
-        from ukrgen.flow.stages.ukr.ukr import (block_description as blk, branch_description as br,
-                                                case_description as cs)
+        # own counters - kappa 1 running the copy, 2 the multiply, each against
+        # the reference (AVX2, natively)
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import packm_dispatch
         from tests.specializers.test_native import cpu_has
         if not (cpu_has("avx2") and shutil.which("gcc")):
             self.skipTest("needs AVX2 and gcc")
-        loop = lambda: blk(stos=("pack", "store"), loop_index="n", preload=True, tail=True)
-        branched = classmethod(lambda cls: [br(cases=(cs(when={"kappa": 1}, blocks=(loop(),)),
-                                                      cs(blocks=(loop(),))))])
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "cases": [
             {"kind": "vec", "m": [1, 2], "params": vec}]})
-        with mock.patch.object(pack.pack_composition, "get_blocks", branched):
-            built, skipped = build_packm("avx256", "ukrgen_avx2", fam)
+        built, skipped = build_packm("avx256", "ukrgen_avx2", fam)
         self.assertEqual([], skipped)
         for k in built:
             asm = asm_source(k)
@@ -655,7 +660,7 @@ int main( void )
         cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
         if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
             self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:p"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"],
                                          "cases": [{"kind": "vec", "m": [1, 2, 3, 4], "lmul": 2, "params": vec}]})
@@ -782,7 +787,7 @@ int main( void )
         cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
         if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
             self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
-        trans = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"],
+        trans = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){m=1, i=n}"],
                  "store-tileop": ["Y.VEC:strided"], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:s"],
                  "X-data-regs": "4", "pre-specialize-irmods": ["+structfuse"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "unroll": 2,
@@ -821,7 +826,7 @@ int main( void )
         cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
         if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
             self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         harness = open(os.path.join(HERE, "packm_harness.c")).read() \
             .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
@@ -876,7 +881,7 @@ int main( void )
         # rows not a multiple of the lanes (3 on AVX2's 4 doubles), or a
         # vector whose length isn't known (SVE): no transpose - refused
         from ukrgen.injectors.blis.families import build_packm
-        trans = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"],
+        trans = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){m=1, i=n}"],
                  "store-tileop": ["Y.VEC:shuffle"], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"]}
         for isa, m, said in (("avx256", 3, "as many rows as a vector has lanes"),
                              ("sve", 4, "the vector's length isn't known")):
@@ -937,7 +942,7 @@ int main( void )
             if not available:
                 continue
             ran += 1
-            trans = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"],
+            trans = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){m=1, i=n}"],
                      "store-tileop": [store], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"]}
             if irmods is not None:
                 trans["pre-specialize-irmods"] = irmods
@@ -1067,7 +1072,7 @@ int main( void )
         # reference the rows left and a narrower panel's edge
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import packm_dispatch
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"],
                                          "cases": [{"kind": "vec", "m": [1, 2, 4], "params": vec}]})
@@ -1098,7 +1103,7 @@ int main( void )
         # gathers), the kernel of the whole size first, the reference the rest
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import packm_dispatch
-        gather = {"pack-tileop": ["fmul(X.VEC:gather, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+        gather = {"pack-tileop": ["fmul(X.VEC:gather, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:gather, Y.VEC){i=m, n=1}"],
                   "store-tileop": ["Y.VEC:direct"], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:s"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"],
                                          "cases": [{"kind": "gather", "m": [1, 2], "params": gather}]})

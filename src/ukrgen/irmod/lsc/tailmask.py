@@ -9,7 +9,7 @@ from asmgen.asmblocks.op.opset import opset_modifier
 from ...lsc_model.addressing import sym
 from ...models.load_store_operations import lsc_load, lsc_state, lsc_store
 from ...specializers.signature import _sigs
-from .base import lsc_irmod, irmod_param, irmod_placement, blocks_and_sections
+from .base import lsc_irmod, irmod_param, irmod_placement, blocks_and_sections, first_blocks
 from .slices import slice_loop, tiles_of
 
 
@@ -187,16 +187,17 @@ class tailmask(lsc_irmod):
             program.tails.add("m")
         # the mask route: each mask set once, first thing in the first block's
         # prologue - before every path, before any data register - as state
-        # its last-vector accesses read (the schedulers order them after it)
+        # its last-vector accesses read (the schedulers order them after it);
+        # the branch the whole kernel, in each case's first block's
         masked = sorted(program.tails - program.tail_vl)
-        if masked and program.blocks:
-            first = program.blocks[0]
+        for first in first_blocks(program) if masked else []:
             sets = []
             for index in masked:
                 comp = next((c for c, i in program.vector_indices.items() if i == index),
                             next(iter(program.vector_indices)))     # a tile's rows: its component's
                 sets.append(lsc_state({f"mask({index})": f"tail({index})"}, self.ctx.component_dts[comp]))
             first.prologue = sets + list(first.prologue or [])
+        if masked:
             for block, section in blocks_and_sections(program):
                 for op in getattr(block, section) or []:
                     index = op.properties.get("tail")

@@ -728,9 +728,11 @@ def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: in
     # a loop stepping by vectors counts chunks of a vector length - a step by
     # VL, or along an index a component's vectors run along (a fixed vector
     # length's step is a number): what's left of a chunk is the reference's
+    # (every block's: the branch the whole kernel, its cases' - kappa's)
+    from ...irmod.lsc.base import all_blocks
     along = {i for p in ctx.programs for i in p.vector_indices.values() if i is not None}
     unit = "VL" if any(("VL",) in dict(b.step.terms) or b.loop_index in along
-                       for p in ctx.programs for b in p.blocks
+                       for p in ctx.programs for b in all_blocks(p)
                        if b.step is not None) else ""
     return _done(kernel(family=fam.name, dtype=dt, size=(m, 1), mr=cdim, nr="1", symbol=symbol,
                         params=list(program.params), c_layout="col", program=program, case=case, kind=fam.case_kinds.get(case, case),

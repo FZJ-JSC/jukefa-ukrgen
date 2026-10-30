@@ -24,5 +24,6 @@ components:
   XL: X
   YS: Y
 tileops:
+  copy: move(X.VEC:$XL, Y.VEC){$K}
   pack: mul(X.VEC:$XL, kappa.VEC:bc_load, Y.VEC){$K}
   store: Y.VEC:$YS

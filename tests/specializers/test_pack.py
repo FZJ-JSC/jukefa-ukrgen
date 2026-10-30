@@ -17,7 +17,7 @@ from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage
 HERE = os.path.dirname(os.path.abspath(__file__))
 PARAMS = {"ukr": "pack", "X-data-type": "FP64", "Y-data-type": "FP64",
           "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:p"], "m": "2", "n": "1",
-          "pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+          "pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
           "store-tileop": ["Y.VEC:direct"], "X-data-regs": "4", "Y-data-regs": "4",
           "kappa-data-regs": "1"}
 
@@ -53,12 +53,14 @@ class test_pack(unittest.TestCase):
         return r.stdout
 
     def test_kappa_hoisted(self):
-        # kappa's broadcast once, before the check skipping the loop (hoist)
+        # kappa's broadcast once - in the multiply's case, kappa 1 copying -
+        # before the check skipping its loop (hoist)
         ctx, res = pack("neon")
         code = ctx.emitted[0].code
         loads = [i for i, l in enumerate(code) if l.startswith("ld1r")]
         self.assertEqual(1, len(loads))
-        self.assertLess(loads[0], next(i for i, l in enumerate(code) if l.startswith("cbz")))
+        case = max(i for i, l in enumerate(code[:loads[0]]) if l.endswith(":") and "_case" in l)
+        self.assertLess(loads[0], next(i for i, l in enumerate(code) if i > case and l.startswith("cbz")))
 
     @unittest.skipUnless(shutil.which("gcc") and cpu_has("avx2"), "needs gcc and AVX2")
     def test_avx2(self):

@@ -18,5 +18,6 @@ components:
   XL: X
   YS: Y
 tileops:
+  copy: move(X.VEC:$XL, Y.VEC){$K}
   pack: mul[bdreg:VF](X.VEC:$XL, kappa.FP:use_scalar, Y.VEC){$K}
   store: Y.VEC:$YS

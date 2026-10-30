@@ -210,7 +210,7 @@ class test_tile_stores(unittest.TestCase):
     """
     def build(self, store):
         from ukrgen.injectors.blis.families import family, build_packm
-        ztrans = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){m=1, i=n}"],
+        ztrans = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){m=1, i=n}"], "copy-tileop": ["move(X.VEC:direct, Y.TILE:>slice_vec_row){m=1, i=n}"],
                   "store-tileop": [store], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"],
                   "sme-F64F64": "on"}
         fam = family.from_yaml("packm", {"family": "pk", "dtypes": ["FP64"], "cases": [

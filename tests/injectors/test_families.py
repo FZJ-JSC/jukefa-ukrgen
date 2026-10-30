@@ -180,7 +180,7 @@ class test_families(unittest.TestCase):
         # at least 8 vectors an iteration: 2 vectors unrolled 4, 4 twice, 8 once;
         # an unroll the registers can't hold halved (x86's 1-vector case)
         from ukrgen.injectors.blis.families import build_packm
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "min-inflight": 8,
                                          "cases": [{"kind": "vec", "m": [2, 4, 8], "params": vec}]})
@@ -188,8 +188,12 @@ class test_families(unittest.TestCase):
         built, skipped = build_packm("sve", "ukrgen_sve", fam)
         self.assertEqual(3, len(built), skipped)
         for k in built:
-            body = k.program.blocks[0].sections["body"]
-            self.assertEqual(8, sum(l.startswith("ld1d") for l in body), k.symbol)
+            # each case's loop over n: the copy's (kappa 1) and the multiply's
+            loops = [b for b in list(k.program.blocks) + [b for _, _, bs in k.program.cases for b in bs]
+                     if "n" == b.loop_index]
+            self.assertEqual(2, len(loops), k.symbol)
+            for b in loops:
+                self.assertEqual(8, sum(l.startswith("ld1d") for l in b.sections["body"]), k.symbol)
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64"], "min-inflight": 8,
                                          "cases": [{"kind": "vec", "m": [1], "params": vec}]})
         built, skipped = build_packm("avx256", "ukrgen_avx2", fam)
@@ -200,7 +204,7 @@ class test_families(unittest.TestCase):
         # alike - the kernels' assembly rendered there, their programs kept there
         from ukrgen.injectors.blis.families import build_packm
         from ukrgen.injectors.blis.cgen import asm_source
-        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+        vec = {"pack-tileop": ["fmul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"]}
         fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP64", "FP32"], "min-inflight": 8,
                                          "cases": [{"kind": "vec", "m": [1, 2], "params": vec}]})
@@ -247,9 +251,9 @@ class test_packm_dispatch_choices(unittest.TestCase):
     its cases' names (two of a kind side by side): the family's to choose,
     for tuning
     """
-    TRANS = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"],
+    TRANS = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){m=1, i=n}"],
              "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:p"], "X-data-regs": "4", "Y-data-regs": "8"}
-    GATHER = {"pack-tileop": ["mul(X.VEC:gather, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+    GATHER = {"pack-tileop": ["mul(X.VEC:gather, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:gather, Y.VEC){i=m, n=1}"],
               "store-tileop": ["Y.VEC:direct"], "X-layout": ["n:c", "m:s"], "Y-layout": ["m:c", "n:s"]}
 
     def family(self, **extra):
@@ -293,7 +297,7 @@ class test_packm_dispatch_choices(unittest.TestCase):
         with self.assertRaises(ValueError):
             family.from_yaml("packm", {"family": "pk", "dtypes": ["FP64"], "cases": [{"kind": "vec", "m": [1], "lmul": 3}]})
         fam = family.from_yaml("packm", {"family": "pk", "dtypes": ["FP64"], "lmul": 2, "cases": [
-            {"kind": "vec", "m": [2], "params": {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+            {"kind": "vec", "m": [2], "params": {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
                                                  "store-tileop": ["Y.VEC:direct"], "X-layout": ["m:c", "n:s"],
                                                  "Y-layout": ["m:c", "n:p"], "rvv-LMUL": "1"}}]})
         self.assertEqual({"vec": 2}, fam.case_lmul)        # the family's, for its cases
@@ -305,7 +309,7 @@ class test_packm_dispatch_choices(unittest.TestCase):
         # a key a family's YAML doesn't know - a flow parameter beside m: -
         # refused, pointing to params:, not dropped without a word
         from ukrgen.injectors.blis.families import family
-        trans = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"]}
+        trans = {"pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){m=1, i=n}"], "copy-tileop": ["move(X.VEC:direct, Y.VEC){m=1, i=n}"]}
         for entry in ({"family": "pk", "dtypes": ["FP64"],
                        "cases": [{"kind": "trans", "m": [4], "pre-specialize-irmods": ["+structfuse"], "params": trans}]},
                       {"family": "pk", "dtypes": ["FP64"], "pre-specialize-irmods": ["+structfuse"],

@@ -94,10 +94,27 @@ class lsc_irmod:
         raise NotImplementedError
 
 
+def first_blocks(program) -> list:
+    """
+    The blocks the program's paths begin with: its first block, or - the
+    branch the whole kernel (packm's kappa cases) - each case's first
+    """
+    if program.blocks:
+        return [program.blocks[0]]
+    return [case.blocks[0] for case in program.cases if case.blocks]
+
+
+def all_blocks(program) -> list:
+    """
+    Every block of the program: its own, then its cases'
+    """
+    return program.blocks + [b for case in program.cases for b in case.blocks]
+
+
 def blocks_and_sections(program):
     """
     Every section of every block of a program, as (block, section name)
     """
-    for block in program.blocks + [b for c in program.cases for b in c.blocks]:
+    for block in all_blocks(program):
         for section in ("prologue", "body", "epilogue", "tail", "subtail"):
             yield block, section

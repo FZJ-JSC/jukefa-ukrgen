@@ -6,7 +6,7 @@ whose requirements hold where it is
 """
 from __future__ import annotations
 
-from ..irmod.lsc.base import blocks_and_sections
+from ..irmod.lsc.base import blocks_and_sections, first_blocks
 from ..models.load_store_operations import lsc_load, lsc_state, lsc_store
 
 
@@ -35,13 +35,15 @@ def check_state(program, initial: dict[str, str]) -> list[str]:
     iterations would differ - a problem. The problems, empty where none
     """
     problems = []
-    # states set once, in the first block's prologue (a masked tail's mask):
-    # every later section begins with them
-    first = program.blocks[0] if program.blocks else None
-    once = {k: v for op in ((first.prologue or []) if first else []) if isinstance(op, lsc_state)
+    # states set once, in the first block's prologue (a masked tail's mask) -
+    # the branch the whole kernel, in each case's first block's: every later
+    # section begins with them
+    firsts = first_blocks(program)
+    once = {k: v for first in firsts for op in (first.prologue or []) if isinstance(op, lsc_state)
             for k, v in op.values.items() if k not in initial}
     for block, section in blocks_and_sections(program):
-        state = dict(initial) if (block is first and "prologue" == section) else {**initial, **once}
+        state = dict(initial) if (any(block is f for f in firsts) and "prologue" == section) \
+            else {**initial, **once}
         for op in getattr(block, section) or []:
             if isinstance(op, lsc_state):
                 state.update(op.values)

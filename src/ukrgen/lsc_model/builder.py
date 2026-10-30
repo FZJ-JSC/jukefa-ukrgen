@@ -1002,17 +1002,40 @@ class program_builder:
             rank = {c: i for i, c in enumerate(self.resolve_order)}
             items += sorted(loads, key=lambda g: rank.get(g.component, len(rank)))
             opname = self.ctx.osb.ast_op_map[step.hw_ast]
-            items.append(compute_item(
-                lsc_transformation(opname, indices, tiles, reads, writes,
-                                   resolution=res, hw_operands=hws,
-                                   rtypes=[sig.operands[hw].rtype for hw in hws]),
-                read_regs))
+            rtypes = [sig.operands[hw].rtype for hw in hws]
+            if "move" == opname:
+                items.append(compute_item(
+                    self.copy_move(sto, res, hws, indices, tiles, rtypes), read_regs))
+            else:
+                items.append(compute_item(
+                    lsc_transformation(opname, indices, tiles, reads, writes,
+                                       resolution=res, hw_operands=hws, rtypes=rtypes),
+                    read_regs))
             items += outward
             for reg, math, coord in written:
                 self.holder[reg] = (math, coord)
                 for key in [k for k in self.lane_holder if k[0] == reg]:
                     del self.lane_holder[key]
         return items
+
+    @staticmethod
+    def copy_move(sto: str, res, hws: list, indices: list, tiles: list,
+                  rtypes: list) -> lsc_move:
+        """
+        A copy's step (a plain move shape): its source's register moved into
+        its destination's, through the move's plain copies - an instruction
+        until copy propagation renames the destination to the source. A
+        tile's copy has no instruction (SME has none from a tile to another):
+        refused until then
+        """
+        src, dst = hws.index("adreg"), hws.index("bdreg")
+        if rgt.TILE == rtypes[dst]:
+            raise model_error(f"{sto} copies a tile into another, which no instruction does: "
+                              f"its tile is to be its source's (copy propagation)")
+        move = lsc_move(indices[src], indices[dst], [tiles[src], tiles[dst]],
+                        sigs=res.compute_sg, rtypes=[rtypes[src], rtypes[dst]])
+        move.add_property("copy", sto)
+        return move
 
     def emit_store(self, sto: str, tiling, op) -> list:
         choice = self.part[sto].impl

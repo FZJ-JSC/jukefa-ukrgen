@@ -517,6 +517,20 @@ tf.NONE. MOVE(Y, X)'s candidates, named for asmgen's operation:
 also `move(X.TILE:slices_row, Y.TILE){i=m, j=n}` - rows straight into a
 tile's slices (Z6) - and `slices_col`, and the vector copies into slices.
 
+Done (ukrgen 0235), the copy in the kernels: its IR an lsc_move through the
+move's plain copies, tagged copy (for copy propagation); a tile's copy
+refused until then. The composition: copy, then the branch -
+case(when={"kappa": 1}) copy and store, the default multiply and store.
+packm_bc, packm_vf: copy: move(X.VEC:$XL, Y.VEC){$K}; packm_za the vector
+copy into slices, move(X.VEC:direct, Y.TILE:>slice_vec_row){$K} - a mova -
+until copy propagation gives a tile its source's (X.TILE:slices_row then).
+The branch the whole kernel needed: the masks set at each path's start, the
+state check alike (first_blocks); loop_unit and the subtiling listing over
+every block (all_blocks); the emitter's once-allocated registers (a
+clobbered mask - AVX2's gathers -, a tail's mask) each case's own. Every
+packm dispatch test runs kappa 1 and 2; SVE's singles' and halves' copies
+need asmgen 0097.
+
 **Later: a transpose operation**, not the identity: input vectors along n,
 output along m - its implementation the permute network shufflenet
 computes (transpose_network), its scratch registers the emitter's. Load,
