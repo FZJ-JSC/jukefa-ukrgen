@@ -26,6 +26,11 @@ def _constant(delta) -> bool:
     return all(() == factors for factors, _ in _sym(delta).terms)
 
 
+def _vectors(delta) -> bool:
+    """a number of vector lengths: VL its only factor - no constant, no stride"""
+    return all(("VL",) == factors for factors, _ in _sym(delta).terms)
+
+
 def _addresses(op) -> set[str]:
     """
     The components whose address registers an operation names - its indices
@@ -47,9 +52,12 @@ class addrmerge(lsc_irmod):
     don't count) add up the same, so every access's offset stays.
     Conservative: any access through any of the component's address
     registers between - the emitter derives some from others (C's columns) -
-    keeps the moves apart; moves by vector lengths or strides (RVV's in
-    registers, a sum perhaps one more) aren't merged; nor is anything across
-    sections, loops or labels.
+    keeps the moves apart. Moves by vector lengths merge where the ISA adds
+    them as immediates (SVE's, SME's incb, decb, addvl: a section's walk
+    moved back and the loop's advance, -8 and +8 vector lengths, nothing);
+    not RVV's (in registers, a sum perhaps one more), nor moves by strides,
+    nor a constant with vector lengths (a polynomial: a register's). Nor
+    anything across sections, loops or labels.
     """
     name = "addrmerge"
     description = "an address register's moves with nothing between using it merged into one"
@@ -58,6 +66,9 @@ class addrmerge(lsc_irmod):
                    "the register between them")
 
     def apply(self, program) -> int:
+        from ...emitters.asmops import adds_vectors
+        vectors = adds_vectors(self.ctx.gen)
+        mergeable = lambda delta: _constant(delta) or (vectors and _vectors(delta))
         changed = 0
         for block, section in blocks_and_sections(program):
             ops = list(getattr(block, section) or [])
@@ -67,9 +78,9 @@ class addrmerge(lsc_irmod):
                     pending.clear()
                     out.append(op)
                     continue
-                if _in_place(op) and _constant(op.delta):
+                if _in_place(op) and mergeable(op.delta):
                     key = _key(op.indices[0])
-                    if key in pending:
+                    if key in pending and _constant(out[pending[key]].delta) == _constant(op.delta):
                         first = out[pending[key]]
                         first.delta = _sym(first.delta) + _sym(op.delta)
                         advances = [a for a in (first.properties.get("advance"),

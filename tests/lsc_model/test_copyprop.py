@@ -179,5 +179,22 @@ class test_copyprop_kernels(unittest.TestCase):
             self.assertTrue(starts(text[b:], "mova"), k.symbol)
 
 
+    def test_za_walks_merged(self):
+        # a section's walk moved back and the loop's advance - vector lengths,
+        # SME's incb and decb immediates - one move, here none (addrmerge)
+        import os, re
+        from ukrgen.injectors.blis.families import configuration, build_packm
+        from ukrgen.injectors.blis.cgen import asm_source
+        root = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "ukrconfig")
+        cfg = configuration.from_files({("packm", "FP64"): os.path.join(root, "sme/fopa_bc_vindex/dpackm.yaml")})
+        fam = cfg.families[0]
+        fam.cases = [c for c in fam.cases if "ztrans" == c[0]][:1]
+        built, skipped = build_packm(cfg.isa, cfg.name, fam)
+        code = [l.strip() for l in asm_source(built[0]).splitlines()]
+        moves = [re.match(r"(inc|dec)b (x\d+), ALL, MUL #(\d+)", l) for l in code]
+        for a, b in zip(moves, moves[1:]):
+            if a and b and a.group(2) == b.group(2):
+                self.assertNotEqual(a.group(3), b.group(3), "a cancelling pair")
+
 if __name__ == "__main__":
     unittest.main()

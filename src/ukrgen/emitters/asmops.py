@@ -96,6 +96,19 @@ def load(gen: asmgen, *, areg: greg_base, offset: int, dst: greg_base | freg_bas
     return gen.load(dregs=[dst], areg=areg, dt=dt, **kwargs)
 
 
+def adds_vectors(gen: asmgen) -> bool:
+    """
+    Whether the ISA adds counts of vector lengths to an address register as
+    immediates (SVE's and SME's incb, decb, addvl): a sum of two such moves
+    then costs no more than they did - RVV's take a register
+    """
+    if not gen.is_vla:
+        return False
+    reg = gen.greg(0)
+    return bool(gen.add.fits(adreg=reg, bimm=1, cdreg=reg, a_dt=GP, c_dt=GP,
+                             modifiers={optransform_modifier.VOFFSET}))
+
+
 def add_vectors(gen: asmgen, *, reg: greg_base, offset: int) -> str:
     """
     reg += offset vectors' bytes: counted in vector lengths where they're the
