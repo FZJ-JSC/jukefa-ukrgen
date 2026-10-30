@@ -1741,16 +1741,26 @@ class signature_emitter:
         # smstart zeroes the vector and predicate registers - the exit after
         # (or the caller's: --assume-state - neither the program's nor the
         # setup's switch)
-        switches = not (self.program.entry or self.program.engine_assumed)
-        setup = [l for op in self.program.entry for l in self.state(op)] + \
-            lines(isa.setup(rt=self.rt, dt=dt, engine=switches))
-        self.isa_setup_lines = len(setup)
-        # the last vectors' masks (tailmask): their first tail(<index>)
-        # elements, set once - here, while the parameters are where the call
-        # put them - each in a mask register of its own for the whole kernel
+        # the last vectors' masks (tailmask), in the entry: their first
+        # tail(<index>) elements, set once - here, while the parameters are
+        # where the call put them - each in a mask register of its own for the
+        # whole kernel
         self.tails = {}
         #: the vl route's indices: their counts read at every last vector
         self.tail_vl = {index: None for index in self.program.tail_vl}
+        engine = isa.engine()
+        switched = engine is not None and any(
+            isinstance(op, lsc_state) and op.values == engine[0] for op in self.program.entry)
+        switches = not (switched or self.program.engine_assumed)
+        # the engine's switch first (smstart zeroes the predicates), the
+        # setup's own (an all-true predicate: p0), then the rest of the entry
+        # (the tails' masks: the predicates left)
+        first = [op for op in self.program.entry if engine is not None
+                 and isinstance(op, lsc_state) and op.values == engine[0]]
+        setup = [l for op in first for l in self.state(op)] + \
+            lines(isa.setup(rt=self.rt, dt=dt, engine=switches)) + \
+            [l for op in self.program.entry if not any(op is f for f in first) for l in self.state(op)]
+        self.isa_setup_lines = len(setup)
         # adjacent short-length regions one, the schedule final (the state's
         # requirements were checked when specializing)
         merge_switches(self.program)

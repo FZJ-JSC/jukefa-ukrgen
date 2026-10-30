@@ -653,9 +653,10 @@ class signature_specializer:
             if all(self.assumed.get(k) == v for k, v in on.items()):
                 # the caller's: the engine on around the kernel, no switch
                 self.program.engine_assumed = True
-            elif not self.program.entry:
-                self.program.entry = [lsc_state(dict(on), dt)]
-                self.program.exit = [lsc_state(dict(off), dt)]
+            elif not any(isinstance(op, lsc_state) and op.values == on for op in self.program.entry):
+                # first: smstart zeroes the predicates - a tail's mask after it
+                self.program.entry = [lsc_state(dict(on), dt)] + list(self.program.entry)
+                self.program.exit = list(self.program.exit) + [lsc_state(dict(off), dt)]
             state = {**state, **off}
         problems = check_state(self.program, {**state, **self.assumed})
         if problems:

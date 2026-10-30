@@ -588,6 +588,18 @@ moves; now none on k1, k3-a100, k3-x100. NEON's trans (shufflenet's
 networks) lost theirs too. copyprop, copyprop_tiles keep the rest: a
 source held or read again, loaded lane by lane, a tile's.
 
+Fixed (ukrgen 0245), tile + mask's last tiles: tailmask took the tail tile
+for the highest tile register - right while an iteration holds one chunk of
+columns. ztail's loops over n hold several (ztail0 eight, ztail1 four,
+ztail2 three, ztail3 two), each but the last packing a whole tile past cdim
+and storing its columns unmasked, spilling into the next column of P; a
+remainder section found no tile to mask. Every chunk's last tile now, by
+its place along m. And the masks set in the program's entry, not the first
+block's prologue - a loop running no iteration skipped it, its remainder
+storing under an unset mask: the engine's switch, the setup's all-true
+predicate, then the masks. Every ztail kernel at 2, 8 and 9 chunks, tails
+of 1 and VL - 1 rows, SVL 256 and 512: right (test_packm_ztail_chunks).
+
 **Later: a transpose operation**, not the identity: input vectors along n,
 output along m - its implementation the permute network shufflenet
 computes (transpose_network), its scratch registers the emitter's. Load,

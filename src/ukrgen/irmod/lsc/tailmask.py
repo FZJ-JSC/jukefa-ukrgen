@@ -9,7 +9,7 @@ from asmgen.asmblocks.op.opset import opset_modifier
 from ...lsc_model.addressing import sym
 from ...models.load_store_operations import lsc_load, lsc_state, lsc_store
 from ...specializers.signature import _sigs
-from .base import lsc_irmod, irmod_param, irmod_placement, blocks_and_sections, first_blocks
+from .base import lsc_irmod, irmod_param, irmod_placement, blocks_and_sections
 from .slices import slice_loop, tiles_of
 
 
@@ -172,9 +172,19 @@ class tailmask(lsc_irmod):
         tiled = [op for block, section in blocks_and_sections(program)
                  for op in getattr(block, section) or [] if slice_loop(op)]
         if tiled:
+            # every chunk's last tile, by its place along m - its accesses'
+            # block of rows - not by its register: a loop over n holds several
+            # chunks' tiles (ztail0's eight, ztail3's two), a tail section one
+            def place(loop):
+                at = [_vectors(program.offsets.records[o.offset].along("m"))
+                      for o in loop.block if isinstance(o, (lsc_load, lsc_store))]
+                at = [a for a in at if a is not None]
+                return max(at) if at else None
+            places = [place(loop) for loop in tiled]
+            final = max((p for p in places if p is not None), default=None)
             last = max(r for loop in tiled for r in tiles_of(loop))
-            for loop in tiled:
-                if last not in tiles_of(loop):
+            for loop, at in zip(tiled, places):
+                if (final != at) if at is not None else (last not in tiles_of(loop)):
                     continue
                 stores = [o for o in loop.block if isinstance(o, lsc_store)]
                 if stores:
@@ -185,18 +195,18 @@ class tailmask(lsc_irmod):
                     loop.info["count"] = "tail(m)"
                 marked += 1
             program.tails.add("m")
-        # the mask route: each mask set once, first thing in the first block's
-        # prologue - before every path, before any data register - as state
-        # its last-vector accesses read (the schedulers order them after it);
-        # the branch the whole kernel, in each case's first block's
+        # the mask route: each mask set once, in the program's entry - before
+        # every path, a loop running no iteration too (its prologue skipped:
+        # a tail section after it read the mask unset), before any data
+        # register - as state its last-vector accesses read (the schedulers
+        # order them after it)
         masked = sorted(program.tails - program.tail_vl)
-        for first in first_blocks(program) if masked else []:
-            sets = []
-            for index in masked:
-                comp = next((c for c, i in program.vector_indices.items() if i == index),
-                            next(iter(program.vector_indices)))     # a tile's rows: its component's
-                sets.append(lsc_state({f"mask({index})": f"tail({index})"}, self.ctx.component_dts[comp]))
-            first.prologue = sets + list(first.prologue or [])
+        sets = []
+        for index in masked:
+            comp = next((c for c, i in program.vector_indices.items() if i == index),
+                        next(iter(program.vector_indices)))     # a tile's rows: its component's
+            sets.append(lsc_state({f"mask({index})": f"tail({index})"}, self.ctx.component_dts[comp]))
+        program.entry = list(program.entry) + sets
         if masked:
             for block, section in blocks_and_sections(program):
                 for op in getattr(block, section) or []:

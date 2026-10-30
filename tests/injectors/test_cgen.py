@@ -514,6 +514,39 @@ int main( void )
         for out in self.packm_ztrans([8], "{ 8 * vl, 8 * vl, 3 * vl, 3 * vl, 1, 0 }, { 8 * vl, 8 * vl, vl + 1, 2 * vl, 1, 1 }"):
             self.assertIn("2 runs, 1 by generated cases, 0 wrong", out)
 
+    def test_packm_ztail_chunks(self):
+        # tile + mask, each case N whole tiles and a last one under the mask:
+        # a loop over n holds several chunks of columns (ztail0 eight, ztail3
+        # two) - each chunk's last tile its tail, not the highest register's -
+        # and the mask is set before a loop running no iteration (two chunks:
+        # ztail0's remainder only). Every N, tails of 1 and vl - 1 rows
+        from ukrgen.injectors.blis.families import configuration, build_packm
+        from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
+        cc = ["aarch64-linux-gnu-gcc", "-static", "-Wa,-march=armv9-a+sme+sme-f64f64"]
+        if not (shutil.which(cc[0]) and shutil.which(QEMU)):
+            self.skipTest("needs aarch64-linux-gnu-gcc and qemu-aarch64-static")
+        root = os.path.join(HERE, "..", "..", "ukrconfig")
+        cfg = configuration.from_files({("packm", "FP64"): os.path.join(root, "smesve/fopa_fma_split/dpackm.yaml")})
+        fam = cfg.families[0]
+        fam.cases = [c for c in fam.cases if "ztail" == c[0]]
+        built, skipped = build_packm(cfg.isa, cfg.name, fam)
+        self.assertEqual(8, len(built), skipped)
+        cases = ", ".join(f"{{ {n} * vl + {m}, {n} * vl + {m}, {k} * vl, {k} * vl + 2, 1, 0 }}"
+                          for k in (2, 8) for n in range(8) for m in ("1", "vl - 1"))
+        src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
+              vl_helpers(built, make_generator("sme")) + \
+              f"\n#define bli_ddpackm_{cfg.name}_ref REF\ntypedef int conj_t;\ntypedef int pack_t;\n" + \
+              "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
+              "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
+              packm_dispatch(cfg.name, "FP64", built) + \
+              "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( double ) ); }\n"
+        harness = open(os.path.join(HERE, "packm_harness.c")).read() \
+            .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
+        outs = self.run_c("sme", src + harness, built, [[QEMU, "-cpu", f"max,sme{v}=on"] for v in (256, 512)],
+                          [f"-DPACKM=bli_dpackm_{cfg.name}", f"-DCASES={cases}"], cc=cc)
+        for out in outs:
+            self.assertIn("32 runs, 32 by generated cases, 0 wrong", out)
+
     def test_packm_sme_configs(self):
         # the SME configs pack across the grain through ZA (ztrans, sizes in
         # tiles): the Apple-safe one (sme-FA64 off: no scatters in streaming
