@@ -433,6 +433,12 @@ class signature_specializer:
             to_home = p["home"] - self.positions[(comp, reg)]
             if dict(to_home.terms):
                 inserted.append(lsc_addr_compute(comp, reg, reg, to_home, scalar_tile))
+                # a move like an access's: the section moves it back at its
+                # end - a loop's next iteration, its tail, start where it did
+                # (a streamed tile's: ZA's kappa 1 loads X's rows into tiles)
+                walked = self.walked_by
+                walked[(comp, reg)] = walked.get((comp, reg), sym.const(0)) + to_home
+                self.walked_by = walked
             # every slice walked - a vector length of steps on - then its walk
             # stepped back: home
             walk = sym._make({tuple(sorted(("VL",) + f)): c for f, c in dict(p["step"].terms).items()})

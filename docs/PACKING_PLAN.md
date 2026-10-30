@@ -551,6 +551,15 @@ a vector length and advances it one an iteration - no net advance - P's
 alike; the main loop advances X 16 vector lengths for its 8 tiles).
 copyprop_tiles is ready for it.
 
+Done (ukrgen 0237), Z6: a slice loop's move to its home (the first slice
+of its first walk) walked like an access's - the section moves the register
+back at its end, a loop's next iteration and its tail starting where it did.
+A streamed tile's pointer drifted without it: X's, loaded into tiles in the
+preloaded loop over n, 16 vector lengths an iteration of 8 tiles, its tail
+rewinding one a tile (no gemm kernel changed). packm_za's copy the tile
+identity - kappa 1 loads A's rows straight into the tiles' horizontal
+slices, stores their vertical ones: no vector, no mova.
+
 **Later: a transpose operation**, not the identity: input vectors along n,
 output along m - its implementation the permute network shufflenet
 computes (transpose_network), its scratch registers the emitter's. Load,

@@ -134,6 +134,27 @@ class test_copyprop_kernels(unittest.TestCase):
                 self.assertTrue([l for l in kept_copy if l.strip().startswith(mov)], kept_copy)
                 self.assertEqual(kept_multiply, multiply)
 
+    def test_za_copy_no_mova(self):
+        # ZA (packm_za): kappa 1 loads rows straight into the tile's slices -
+        # no vector, no mova; the multiply's rows through vectors, movas
+        import os
+        from ukrgen.injectors.blis.families import configuration, build_packm
+        from ukrgen.injectors.blis.cgen import asm_source
+        root = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "ukrconfig")
+        cfg = configuration.from_files({("packm", "FP64"): os.path.join(root, "sme/fopa_bc_vindex/dpackm.yaml")})
+        fam = cfg.families[0]
+        fam.cases = [c for c in fam.cases if "ztrans" == c[0]]
+        built, skipped = build_packm(cfg.isa, cfg.name, fam)
+        self.assertTrue(built, skipped)
+        for k in built[:2]:
+            text = asm_source(k).splitlines()
+            a = next(i for i, l in enumerate(text) if l.endswith("_case0:"))
+            b = next(i for i, l in enumerate(text) if l.endswith("_case1:"))
+            starts = lambda part, t: [l for l in part if l.strip().startswith(t)]
+            self.assertFalse(starts(text[a:b], "mova"), k.symbol)
+            self.assertTrue(starts(text[a:b], "ld1d {za"), k.symbol)
+            self.assertTrue(starts(text[b:], "mova"), k.symbol)
+
 
 if __name__ == "__main__":
     unittest.main()

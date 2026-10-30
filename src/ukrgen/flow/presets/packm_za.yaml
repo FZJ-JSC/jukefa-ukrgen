@@ -5,6 +5,6 @@ variants:
   n:
     K: m=1, i=n
 tileops:
-  copy: move(X.VEC:direct, Y.TILE:>slice_vec_row){$K}
+  copy: move(X.TILE:slices_row, Y.TILE){i=m, j=n}
   pack: mul(X.VEC:direct, kappa.VEC:bc_load, Y.TILE:>slice_vec_row){$K}
   store: Y.TILE:slices_col
