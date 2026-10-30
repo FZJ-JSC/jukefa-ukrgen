@@ -8,7 +8,7 @@ and per data type a table of the kernels with a chooser by MR and NR.
 from __future__ import annotations
 import re
 
-from .families import kernel, DT_CHAR
+from .families import kernel, DT_CHAR, resolve_blocksizes
 
 CTYPE = {"FP32": "float", "FP64": "double"}
 
@@ -218,9 +218,9 @@ static inline dim_t ukrgen_size( dim_t vectors, dim_t elements, dim_t vl )
 """
 
 
-#: the cache blocksizes' defaults: MC and NC as multiples of MR and NR, KC -
-#: BLIS_MR_IN_MC_<dt>, BLIS_NR_IN_NC_<dt>, BLIS_KC_<dt> override them
-BLOCKSIZE_DEFAULTS = {"mr-in-mc": 16, "nr-in-nc": 200, "kc": 256}
+#: a cache blocksize: its name in C, and the register blocksize MC and NC are
+#: multiples of (KC is in elements) - the variable's suffix
+BLOCKSIZE_IDS = {"mr-in-mc": ("MC", "mr"), "nr-in-nc": ("NC", "nr"), "kc": ("KC", "")}
 
 #: BLIS's names of a data type
 NUM = {"FP32": "BLIS_FLOAT", "FP64": "BLIS_DOUBLE"}
@@ -238,8 +238,9 @@ def cntx_init(config_name: str, gen, kernels: list[kernel], defaults: dict, bloc
     per data type with kernels the one BLIS_MR_<dt> x BLIS_NR_<dt> names -
     the family's default where unset or not made - registered with its
     orientation, MR and NR from it, MC, NC and KC from the configuration's
-    defaults (PR 960 overriding them afterwards); a data type without
-    kernels keeps the reference's kernel and blocksizes
+    blocksizes and their maxima where it gives ones (PR 960 overriding them
+    afterwards); a data type without kernels keeps the reference's kernel
+    and blocksizes
     """
     dts = [dt for dt in ("FP32", "FP64") if any(dt == k.dtype and not k.case for k in kernels)]
     packs = [dt for dt in ("FP32", "FP64") if any(dt == k.dtype and k.case for k in kernels)]
@@ -247,11 +248,17 @@ def cntx_init(config_name: str, gen, kernels: list[kernel], defaults: dict, bloc
                        [packm_prototype(config_name, dt) for dt in packs] +
                        # defined below, called by the init: C99 wants it declared first
                        [f"void bli_cntx_init_{config_name}_ref( cntx_t* cntx );"])
+    bs = {dt: resolve_blocksizes(blocksizes.get(dt) or {}, f"{dt} blocksizes")
+          for dt in ("FP32", "FP64")}
+    # a maximum the configuration gives above the default: BLIS's blksz_t holds
+    # one beside each default (bli_blksz_init_easy sets them alike), so the last
+    # block of a dimension may run up to it - and the packing pools are sized
+    # for it
+    above = [b for b in BLOCKSIZE_IDS
+             if any(bs[dt][f"{b}-max"] != bs[dt][b] for dt in ("FP32", "FP64"))]
     lines = []
     for dt in ("FP32", "FP64"):
         ch, ctype = DT_CHAR[dt], CTYPE[dt]
-        bs = dict(BLOCKSIZE_DEFAULTS)
-        bs.update(blocksizes.get(dt, {}))
         if dt in dts:
             lines.append(f"""\
 	const ukrgen_gemm_entry* k_{ch} = ukrgen_{ch}gemm_choose( ukrgen_env( "BLIS_MR_{ch.upper()}" ),
@@ -259,13 +266,42 @@ def cntx_init(config_name: str, gen, kernels: list[kernel], defaults: dict, bloc
 	const dim_t vl_{ch} = k_{ch}->vl( sizeof( {ctype} ) );
 	const dim_t mr_{ch} = ukrgen_size( k_{ch}->mr_vectors, k_{ch}->mr_elements, vl_{ch} );
 	const dim_t nr_{ch} = ukrgen_size( k_{ch}->nr_vectors, k_{ch}->nr_elements, vl_{ch} );
-	const dim_t mc_{ch} = {int(bs["mr-in-mc"])} * mr_{ch};
-	const dim_t nc_{ch} = {int(bs["nr-in-nc"])} * nr_{ch};
-	const dim_t kc_{ch} = {int(bs["kc"])};""")
+	const dim_t mc_{ch} = {int(bs[dt]["mr-in-mc"])} * mr_{ch};
+	const dim_t nc_{ch} = {int(bs[dt]["nr-in-nc"])} * nr_{ch};
+	const dim_t kc_{ch} = {int(bs[dt]["kc"])};""")
         else:
             lines.append("\n".join(
-                f"\tconst dim_t {b}_{ch} = bli_cntx_get_blksz_def_dt( {NUM[dt]}, BLIS_{b.upper()}, cntx );"
+                f"	const dim_t {b}_{ch} = bli_cntx_get_blksz_def_dt( {NUM[dt]}, BLIS_{b.upper()}, cntx );"
                 for b in ("mr", "nr", "mc", "nc", "kc")))
+    # the maxima: MC and NC still multiples of the kernel's MR and NR, KC in
+    # elements - a data type without kernels reads the reference's, as it keeps
+    # the reference's blocksizes
+    maxima = []
+    for b in above:
+        name, unit = BLOCKSIZE_IDS[b]
+        lc = name.lower()
+        for dt in ("FP32", "FP64"):
+            ch = DT_CHAR[dt]
+            if dt in dts:
+                maxima.append(f"	const dim_t {lc}_{ch}_max = {int(bs[dt][b + '-max'])}"
+                              f"{' * ' + unit + '_' + ch if unit else ''};")
+            else:
+                maxima.append(f"	const dim_t {lc}_{ch}_max = "
+                              f"bli_cntx_get_blksz_max_dt( {NUM[dt]}, BLIS_{name}, cntx );")
+    # MR and NR are the microkernels', MC, KC and NC the configuration's: both
+    # halves of a blksz_t where it gives a maximum, else one value for both
+    inits = [f"	bli_blksz_init_easy( &blkszs[ BLIS_MR ], mr_s, mr_d, -1, -1 );",
+             f"	bli_blksz_init_easy( &blkszs[ BLIS_NR ], nr_s, nr_d, -1, -1 );"]
+    for b in ("mr-in-mc", "kc", "nr-in-nc"):
+        name = BLOCKSIZE_IDS[b][0]
+        lc = name.lower()
+        if b in above:
+            inits.append(f"	bli_blksz_init( &blkszs[ BLIS_{name} ], {lc}_s, {lc}_d, -1, -1, "
+                         f"{lc}_s_max, {lc}_d_max, -1, -1 );")
+        else:
+            inits.append(f"	bli_blksz_init_easy( &blkszs[ BLIS_{name} ], {lc}_s, {lc}_d, -1, -1 );")
+    maxima = "\n\n" + "\n".join(maxima) if maxima else ""
+    inits = "\n".join(inits)
     ukrs = "".join(f"\t                   BLIS_GEMM_UKR, {NUM[dt]}, k_{DT_CHAR[dt]}->ukr,\n" for dt in dts) + \
            "".join(f"\t                   BLIS_PACKM_KER, {NUM[dt]}, bli_{DT_CHAR[dt]}packm_{config_name},\n"
                    for dt in packs)
@@ -302,16 +338,13 @@ void bli_cntx_init_{config_name}( cntx_t* cntx )
 
 	// the microkernels: BLIS_MR_<dt> x BLIS_NR_<dt> (elements) where such a
 	// kernel was made, the default otherwise
-{choose}
+{choose}{maxima}
 
 {register}
 	// MC, NC and KC are defaults: BLIS_MR_IN_MC_<dt>, BLIS_NR_IN_NC_<dt> and
-	// BLIS_KC_<dt> override them once the context is made (bli_gks.c)
-	bli_blksz_init_easy( &blkszs[ BLIS_MR ], mr_s, mr_d, -1, -1 );
-	bli_blksz_init_easy( &blkszs[ BLIS_NR ], nr_s, nr_d, -1, -1 );
-	bli_blksz_init_easy( &blkszs[ BLIS_MC ], mc_s, mc_d, -1, -1 );
-	bli_blksz_init_easy( &blkszs[ BLIS_KC ], kc_s, kc_d, -1, -1 );
-	bli_blksz_init_easy( &blkszs[ BLIS_NC ], nc_s, nc_d, -1, -1 );
+	// BLIS_KC_<dt> override them once the context is made (bli_gks.c); where
+	// the configuration gives a maximum, a last block may run up to it
+{inits}
 
 	bli_cntx_set_blkszs
 	(

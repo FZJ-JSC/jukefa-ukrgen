@@ -108,6 +108,43 @@ PER_COMPONENT = {"max-data-regs": "{c}-max-data-regs", "max-preload": "{c}-max-p
                  "max-addr-regs": "{c}-addr-regs", "addr-pattern": "{c}-addr-pattern"}
 #: the loop a family's unroll is along
 UNROLL = {"gemm": "k", "packm": "n"}
+
+#: a data type's cache blocksizes: MC and NC as multiples of the kernel's MR
+#: and NR, KC in elements - the defaults where the configuration gives none
+BLOCKSIZE_DEFAULTS = {"mr-in-mc": 16, "nr-in-nc": 200, "kc": 256}
+#: the keys a blocksizes: mapping knows: each one of them and its maximum
+BLOCKSIZES = tuple(BLOCKSIZE_DEFAULTS) + tuple(f"{b}-max" for b in BLOCKSIZE_DEFAULTS)
+
+
+def resolve_blocksizes(spec: dict, where: str = "blocksizes") -> dict:
+    """
+    A data type's blocksizes: the defaults, then spec's mr-in-mc, nr-in-nc and
+    kc - MC and NC multiples of the kernel's MR and NR, KC in elements - and
+    their -max forms, a maximum left out the default's own (BLIS's blksz_t
+    holds one beside each default; bli_blksz_init_easy sets them alike). A key
+    that names no blocksize refused, and a maximum below its default: BLIS
+    aborts on one (bli_gks_env_blksz)
+    """
+    resolved = dict(BLOCKSIZE_DEFAULTS)
+    for key, value in spec.items():
+        if key not in BLOCKSIZES:
+            raise ValueError(f"{where}: no blocksize {key} there - "
+                             f"{', '.join(BLOCKSIZE_DEFAULTS)} and their -max forms")
+        try:
+            resolved[key] = int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{where}: blocksize {key} {value!r} - a number") from None
+        if resolved[key] < 1:
+            raise ValueError(f"{where}: blocksize {key} {resolved[key]} - 1 or more")
+    for base in BLOCKSIZE_DEFAULTS:
+        key = f"{base}-max"
+        resolved.setdefault(key, resolved[base])
+        if resolved[key] < resolved[base]:
+            raise ValueError(f"{where}: {key} {resolved[key]} below {base} {resolved[base]} - "
+                             f"BLIS's maximum blocksize is its default's at least")
+    return resolved
+
+
 #: the keys a family's YAML knows, by where they go - a flow parameter of
 #: anything else goes under params:
 _COMMON = set(KEYS) | set(PER_COMPONENT) | {"unroll", "store", "alternatives"}
@@ -385,7 +422,9 @@ class configuration:
     #: BLIS_STACK_BUF_MAX_SIZE in bytes: given (stack-buf-size, or blisgen's
     #: --stack-buf-size), else from the largest kernel
     stack_buf_size: int | None = None
-    #: per data type, the cache blocksizes' defaults (mr-in-mc, nr-in-nc, kc)
+    #: per data type, its cache blocksizes and their maxima - mr-in-mc,
+    #: nr-in-nc, kc and the -max forms, the defaults filled in
+    #: (resolve_blocksizes)
     blocksizes: dict = field(default_factory=dict)
 
     @staticmethod
@@ -396,10 +435,11 @@ class configuration:
         files maps (kind, data type), e.g. ("gemm", "FP64"), to a path. A
         file names the ISA and holds one family (or a list under families):
         its params, sizes (m, n), default size, and - gemm - the data type's
-        cache blocksizes (mr-in-mc, nr-in-nc, kc). The ISAs must agree
+        cache blocksizes and their maxima (mr-in-mc, nr-in-nc, kc and the
+        -max forms). The ISAs must agree
         """
         import yaml
-        families, blocksizes = [], {}
+        families, blocksizes, given = [], {}, {}
         for (kind, dt), path in files.items():
             if path is None:
                 continue
@@ -418,7 +458,14 @@ class configuration:
                 entry.setdefault("family", kind)
                 families.append(family.from_yaml(kind, entry))
             if "blocksizes" in data:
-                blocksizes[dt] = dict(data["blocksizes"])
+                # a family file of the data type's own: the gemm one unless a
+                # packm file says otherwise - two that differ said, not one
+                # quietly the other's
+                spec = resolve_blocksizes(data["blocksizes"], f"{path} blocksizes")
+                if dt in blocksizes and blocksizes[dt] != spec:
+                    raise ValueError(f"{path}: the {dt} blocksizes, given in {given[dt]} too, "
+                                     f"differ")
+                blocksizes[dt], given[dt] = spec, path
         if isa is None:
             raise ValueError("no ISA: a family file names it (isa: ...)")
         return configuration(isa=isa, name=name or f"ukrgen_{isa}", families=families,
@@ -426,14 +473,21 @@ class configuration:
 
     @staticmethod
     def load(path: str) -> "configuration":
+        """
+        A configuration from one YAML holding the ISA, the gemm and packm
+        families, the stack temporary's size and per data type the cache
+        blocksizes (blocksizes: {FP64: {kc: 128, kc-max: 256}})
+        """
         import yaml
         with open(path) as f:
             data = yaml.safe_load(f)
         families = [family.from_yaml(kind, entry)
                     for kind in ("gemm", "packm") for entry in (data.get(kind) or [])]
+        blocksizes = {dt: resolve_blocksizes(spec, f"{path} {dt} blocksizes")
+                      for dt, spec in (data.get("blocksizes") or {}).items()}
         return configuration(isa=data["isa"], name=data.get("config-name", f"ukrgen_{data['isa']}"),
                              families=families, stack_buf_size=data.get("stack-buf-size"),
-                             blocksizes=dict(data.get("blocksizes") or {}))
+                             blocksizes=blocksizes)
 
 
 @dataclass

@@ -24,7 +24,8 @@ def main():
         for ch, dt in (("s", "FP32"), ("d", "FP64")):
             parser.add_argument(f"--{ch}{kind}-config",
                                 help=f"the {dt} {kind} kernel family (YAML): its ukrgen "
-                                     f"parameters, the sizes to try, its default size")
+                                     f"parameters, the sizes to try, its default size, its "
+                                     f"cache blocksizes and their maxima")
     parser.add_argument("--config-name",
                         help="the BLIS configuration's name (default: ukrgen_<isa>)")
     parser.add_argument("--parent-config-name",

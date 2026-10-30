@@ -3,11 +3,13 @@ blisgen's configuration files: every family's kernels, wrappers, the context
 initialization, the family header and the report of sizes skipped
 """
 
+import contextlib
+import io
 import os
 import tempfile
 import unittest
 
-from ukrgen.injectors.blis.families import family, configuration
+from ukrgen.injectors.blis.families import family, configuration, resolve_blocksizes
 from ukrgen.injectors.blis.generate import generate
 from tests.injectors.test_families import VM
 
@@ -49,12 +51,59 @@ class test_generate(unittest.TestCase):
             self.assertEqual(("sve", "ukrgen_sve"), (cfg.isa, cfg.name))
             self.assertEqual([["FP32"], ["FP64"]], [f.dtypes for f in cfg.families])
             self.assertEqual({"FP64": (8, 3)}, cfg.families[1].default)
-            self.assertEqual({"kc": 128}, cfg.blocksizes["FP64"])
+            # a maximum left out: the default's own
+            self.assertEqual({"mr-in-mc": 16, "mr-in-mc-max": 16, "nr-in-nc": 200, "nr-in-nc-max": 200,
+                              "kc": 128, "kc-max": 128}, cfg.blocksizes["FP64"])
             with open(os.path.join(d, "other.yaml"), "w") as f:
                 f.write("isa: neon\nfamily: x\n")
             with self.assertRaisesRegex(ValueError, "is for neon"):
                 configuration.from_files({("gemm", "FP32"): os.path.join(d, "sgemm.yaml"),
                                           ("gemm", "FP64"): os.path.join(d, "other.yaml")})
+
+    def test_blocksizes(self):
+        """mr-in-mc, nr-in-nc and kc, and the -max forms BLIS keeps beside them"""
+        with tempfile.TemporaryDirectory() as d:
+            def write(name, spec):
+                path = os.path.join(d, name)
+                with open(path, "w") as f:
+                    f.write("isa: rvv\nfamily: vn\nm: [2]\nn: [2]\nblocksizes: " + spec + "\n")
+                return path
+            cfg = configuration.from_files({
+                ("gemm", "FP32"): write("sgemm.yaml", "{mr-in-mc: 16, nr-in-nc: 64, kc: 256}"),
+                ("gemm", "FP64"): write("dgemm.yaml", "{mr-in-mc: 36, kc: 308, nr-in-nc-max: 424, "
+                                                      "kc-max: 512}")})
+            # the maxima the configuration gives, and its defaults' ones else
+            self.assertEqual({"mr-in-mc": 36, "mr-in-mc-max": 36, "nr-in-nc": 200,
+                              "nr-in-nc-max": 424, "kc": 308, "kc-max": 512}, cfg.blocksizes["FP64"])
+            self.assertEqual({"mr-in-mc": 16, "mr-in-mc-max": 16, "nr-in-nc": 64,
+                              "nr-in-nc-max": 64, "kc": 256, "kc-max": 256}, cfg.blocksizes["FP32"])
+            for spec, why in (("{kc: 256, kc-max: 128}", "kc-max 128 below kc 256"),
+                              ("{mc: 128}", "no blocksize mc there"),
+                              ("{kc: 0}", "1 or more"),
+                              ("{kc: two}", "a number")):
+                with self.assertRaisesRegex(ValueError, why):
+                    configuration.from_files({("gemm", "FP64"): write("x.yaml", spec)})
+            # one data type's blocksizes in two files: said, not one the other's
+            with self.assertRaisesRegex(ValueError, "given in .*sgemm.yaml too"):
+                configuration.from_files({("gemm", "FP32"): write("sgemm.yaml", "{kc: 256}"),
+                                          ("packm", "FP32"): write("spackm.yaml", "{kc: 128}")})
+            # alike: no complaint
+            cfg = configuration.from_files({("gemm", "FP32"): write("sgemm.yaml", "{kc: 256}"),
+                                            ("packm", "FP32"): write("spackm.yaml", "{kc: 256}")})
+            self.assertEqual(256, cfg.blocksizes["FP32"]["kc"])
+
+    def test_blocksizes_without_kernels(self):
+        """a data type's blocksizes with no kernel of it: said, not dropped"""
+        fam = family.from_yaml("gemm", {"family": "vm", "dtypes": ["FP64"], "params": VM,
+                                        "m": [1], "n": [2]})
+        cfg = configuration(isa="neon", name="ukrgen_neon", families=[fam],
+                            blocksizes={"FP32": resolve_blocksizes({"kc": 128}),
+                                        "FP64": resolve_blocksizes({"mr-in-mc": 8})})
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as d, contextlib.redirect_stderr(err):
+            generate(cfg, d)
+        self.assertIn("FP32 blocksizes given, no FP32 gemm kernel", err.getvalue())
+        self.assertNotIn("FP64 blocksizes given", err.getvalue())
 
     @unittest.skipUnless(os.environ.get("BLIS_SOURCE"), "BLIS_SOURCE names a BLIS tree")
     def test_patch(self):

@@ -99,11 +99,13 @@ int main( void )
         fam, built = build("sve", "FP64", [1, 2], [2, 3], default="2x3")
         src = "#include \"cntx_stub.h\"\n" + \
               cntx_init("ukrgen_sve", make_generator("sve"), built, fam.default,
-                        {"FP64": {"kc": 128}}).replace('#include "blis.h"', "") + \
+                        {"FP64": {"kc": 128, "kc-max": 512, "mr-in-mc-max": 32}}).replace('#include "blis.h"', "") + \
               "".join(gemm_wrapper(k) for k in built) + """
 #include <stdio.h>
 void bli_cntx_init_ukrgen_sve_ref( cntx_t* c )
-{ stub_bs[ BLIS_MR ][ 0 ] = 7; stub_bs[ BLIS_NR ][ 0 ] = 5; stub_bs[ BLIS_MC ][ 0 ] = 70; stub_bs[ BLIS_KC ][ 0 ] = 99; }
+{ stub_bs[ BLIS_MR ][ 0 ] = 7; stub_bs[ BLIS_NR ][ 0 ] = 5; stub_bs[ BLIS_MC ][ 0 ] = 70; stub_bs[ BLIS_KC ][ 0 ] = 99;
+  stub_bs_max[ BLIS_MR ][ 0 ] = 7; stub_bs_max[ BLIS_NR ][ 0 ] = 5; stub_bs_max[ BLIS_MC ][ 0 ] = 70;
+  stub_bs_max[ BLIS_KC ][ 0 ] = 198; }
 int main( void )
 {
 	cntx_t c; bli_cntx_init_ukrgen_sve( &c );
@@ -114,6 +116,11 @@ int main( void )
 	        stub_bs[ BLIS_MR ][ 1 ], stub_bs[ BLIS_NR ][ 1 ], stub_bs[ BLIS_MC ][ 1 ], stub_bs[ BLIS_NC ][ 1 ],
 	        stub_bs[ BLIS_KC ][ 1 ], stub_bs[ BLIS_MR ][ 0 ], stub_bs[ BLIS_KC ][ 0 ],
 	        stub_ukr[ 0 ] ? "set" : "reference" );
+	// the maxima: the configuration's where it gives one, else its default's
+	printf( "d max mr %ld nr %ld mc %ld nc %ld kc %ld | s max mr %ld kc %ld\\n",
+	        stub_bs_max[ BLIS_MR ][ 1 ], stub_bs_max[ BLIS_NR ][ 1 ], stub_bs_max[ BLIS_MC ][ 1 ],
+	        stub_bs_max[ BLIS_NC ][ 1 ], stub_bs_max[ BLIS_KC ][ 1 ], stub_bs_max[ BLIS_MR ][ 0 ],
+	        stub_bs_max[ BLIS_KC ][ 0 ] );
 	return 0;
 }
 """
@@ -142,6 +149,12 @@ int main( void )
             self.assertIn("d vm_1vx2 mr 4 nr 2", run({"BLIS_MR_D": "4", "BLIS_NR_D": "2"}))
             # a size not made: the default
             self.assertIn("d vm_2vx3 mr 8 nr 3", run({"BLIS_MR_D": "5", "BLIS_NR_D": "5"}))
+            # the maxima: MC 32 x MR and KC 512 the configuration's, NC, MR and
+            # NR its defaults'; FP32's are the reference's, which differ
+            self.assertIn("d max mr 8 nr 3 mc 256 nc 600 kc 512 | s max mr 7 kc 198", run({}))
+            # another kernel: MR 4, so MC's maximum follows it
+            self.assertIn("d max mr 4 nr 2 mc 128 nc 400 kc 512",
+                          run({"BLIS_MR_D": "4", "BLIS_NR_D": "2"}))
 
     @needs_tools
     def test_large_tiles(self):

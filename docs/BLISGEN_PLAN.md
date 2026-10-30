@@ -41,7 +41,9 @@ family: vn                     # a name for the kernels' symbols
 m: [4, 8]                      # the sizes tried: m in elements here
 n: 1..3                        # n in vectors
 default: 8x3                   # the kernel when BLIS_MR_D/BLIS_NR_D name none made
-blocksizes: {mr-in-mc: 16, nr-in-nc: 64, kc: 256}
+blocksizes: {mr-in-mc: 16, nr-in-nc: 64, kc: 256}  # and mr-in-mc-max, nr-in-nc-max,
+                                                   # kc-max: BLIS keeps a maximum beside
+                                                   # each default
 params:                        # ukrgen parameters for every size
   mm-tileop: ["fma(A.VEC:bc_load, B.VEC:direct, AB.VEC){m=1, i=n, k*=1}"]
   ...                          # the epilogue's choices, layouts, preload, irmods
@@ -89,7 +91,7 @@ params:                        # ukrgen parameters for every size
 |---|------|--------|
 | 1 | Family configuration: loading, size enumeration, a flow run per size; kernel metadata (symbol, mr/nr, parameters, C layout) | done for gemm: `injectors/blis/families.py`, `tests/injectors/test_families.py` |
 | 2 | gemm wrappers (BLIS signature, edge-case macros) and the kernel table | done: `injectors/blis/cgen.py`, `tests/injectors/test_cgen.py` |
-| 3 | Context initialization: run-time kernel choice from `BLIS_{MR,NR}_{S,D}`, default and fallback; cache blocksize defaults | done: `cgen.cntx_init`, `family_header`, `generate.py`; `--family-config`, `--stack-buf-size` |
+| 3 | Context initialization: run-time kernel choice from `BLIS_{MR,NR}_{S,D}`, default and fallback; cache blocksize defaults and maxima | done: `cgen.cntx_init`, `family_header`, `generate.py`; `--family-config`, `--stack-buf-size` |
 | 3b | Large tiles: C streamed through the epilogue (MRU renaming), register fitting by liveness | done: the default 8x3v builds |
 | 4 | BLIS patching: configuration and kernel directories, registry, PR 960, `inherit` | done: `patch.py`, `clitools/blisgen.py` |
 | 5 | BLIS build and testsuite: x86 natively, SVE/RVV under qemu | SVE done (gemm ukr + gemm, sd, rcg); x86, RVV (LMUL 1 and 2), NEON next |
@@ -147,8 +149,10 @@ void bli_cntx_init_<config>( cntx_t* cntx )
 	                              BLIS_GEMM_UKR_ROW_PREF, BLIS_DOUBLE, d->row_pref, BLIS_VA_END );
 	// MR, NR from the kernels; MC, NC as multiples of them and KC: the
 	// configuration's defaults - BLIS_MR_IN_MC_<dt>, BLIS_NR_IN_NC_<dt>,
-	// BLIS_KC_<dt> override them after this (PR 960, frame/base/bli_gks.c)
+	// BLIS_KC_<dt> override them after this (PR 960, frame/base/bli_gks.c) -
+	// and the maximum it gives, where it gives one: the blksz_t's other half
 	bli_blksz_init_easy( &blkszs[ BLIS_MR ], mr_s, mr_d, -1, -1 ); ...
+	bli_blksz_init( &blkszs[ BLIS_MC ], mc_s, mc_d, -1, -1, mc_s_max, mc_d_max, -1, -1 );
 	bli_cntx_set_blkszs( cntx, BLIS_NC, ..., BLIS_NR, BLIS_KC, ..., BLIS_KR, BLIS_MC, ..., BLIS_MR,
 	                     BLIS_NR, ..., BLIS_NR, BLIS_MR, ..., BLIS_MR, BLIS_VA_END );
 }
@@ -162,18 +166,25 @@ void bli_cntx_init_<config>( cntx_t* cntx )
   (MR x NR x element size) at the longest vector length the ISA allows (SVE/SME
   2048 bits; RVV: a configuration parameter).
 - Cache blocksize defaults (`mr-in-mc`, `nr-in-nc`, `kc` per data type) come from the
-  configuration YAML, defaulting to the old templates' 16, 200, 256.
+  configuration YAML, defaulting to the old templates' 16, 200, 256 - and each one's
+  maximum (`mr-in-mc-max`, `nr-in-nc-max`, `kc-max`) too, defaulting to its default:
+  BLIS's `blksz_t` holds a maximum beside each default (`bli_blksz_init_easy` sets
+  both alike, `bli_blksz_init` apart), the partition code runs the last block of a
+  dimension up to it, and `bli_pba_init` sizes the packing pools by it - so a maximum
+  is memory, not just a bound. PR 960's `BLIS_*_MAX_<dt>` override them at run time.
 - Tested without BLIS first: the generated file compiled against a stub recording
   `bli_cntx_set_*` calls, with `BLIS_MR_*`/`BLIS_NR_*` set, unset and absent sizes.
 - Step 3: `cgen.cntx_init` writes the context initialization - the reference's
   first, then per data type with kernels the one `BLIS_MR_<dt>` x
   `BLIS_NR_<dt>` names (default where unset or not made), registered with its
   orientation; MR/NR from it, MC/NC as multiples of them and KC from the
-  configuration's `blocksizes` (defaults 16, 200, 256), PR 960 overriding
-  them afterwards; a data type without kernels keeps the reference's kernel
-  and blocksizes. Tested against a stub recording the `bli_cntx_set_*` calls
+  configuration's `blocksizes` (defaults 16, 200, 256), each a `bli_blksz_init`
+  carrying the maximum where the configuration gives one above its default, PR 960
+  overriding them afterwards; a data type without kernels keeps the reference's
+  kernel and blocksizes. Tested against a stub recording the `bli_cntx_set_*` calls
   (`tests/injectors/cntx_stub.h`) under qemu: unset (default), an existing
-  size, an absent size (default). `bli_family_<config>.h` defines
+  size, an absent size (default), and the defaults and maxima each blocksize ends
+  with (a data type's without kernels the reference's). `bli_family_<config>.h` defines
   `BLIS_STACK_BUF_MAX_SIZE` and `BLIS_RELAX_MCNR_NCMR_CONSTRAINTS` (nearly
   every configuration does). The stack size is a parameter: `--stack-buf-size`
   (blisgen), `stack-buf-size` (YAML), else the largest kernel's tile at the

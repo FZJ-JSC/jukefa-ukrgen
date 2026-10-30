@@ -8,9 +8,10 @@ at run time, the family header - written under a BLIS tree's layout
 from __future__ import annotations
 
 import os
+import sys
 
 from ...flow.isa_map import make_generator
-from .families import configuration, build_gemm, build_packm
+from .families import configuration, build_gemm, build_packm, resolve_blocksizes
 from .cgen import (asm_source, gemm_wrapper, cntx_init, family_header, stack_buf_size,
                    vl_helpers, packm_dispatch)
 
@@ -67,6 +68,12 @@ def generate(cfg: configuration, out_dir: str, stack_size: int | None = None,
               "\n".join(packm_dispatch(cfg.name, dt, kernels, order, rest, tail) for dt in packs))
     write(f"config/{cfg.name}/bli_cntx_init_{cfg.name}.c",
           cntx_init(cfg.name, gen, kernels, defaults, cfg.blocksizes))
+    # a data type's blocksizes with no gemm kernel of its own do nothing - the
+    # reference's stand there: said, not silently dropped
+    given = {dt for dt, spec in cfg.blocksizes.items() if spec != resolve_blocksizes({})}
+    for dt in sorted(given - {k.dtype for k in kernels if not k.case}):
+        print(f"warning: {dt} blocksizes given, no {dt} gemm kernel: the reference's stand",
+              file=sys.stderr)
     size = stack_buf_size(cfg.isa, gen, kernels, stack_size or cfg.stack_buf_size)
     write(f"config/{cfg.name}/bli_family_{cfg.name}.h", family_header(cfg.name, size))
     report = [f"{len(kernels)} kernels, {len(skipped)} sizes skipped, stack temporary {size} bytes"]
