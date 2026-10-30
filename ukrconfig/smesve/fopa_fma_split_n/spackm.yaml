@@ -1,0 +1,60 @@
+# FP32 packm, sme (streaming): vectors along cdim, and along the panel (trans)
+isa: sme
+family: pk
+# LX2 has FEAT_SME_FA64: the scatters below run in streaming mode (a feature set
+# explicitly - sme-F64F64 - leaves the others off unless named)
+params:
+  sme-FA64: 'on'
+min-inflight: 8
+cases:
+- kind: vec
+  m: 1..8
+  preset: packm_bc
+  vectorize: m
+  params:
+    X-layout: ['m:c', 'n:s']
+    Y-layout: ['m:c', 'n:s']
+    sme-F64F64: 'on'
+# across the grain through ZA: A's rows scaled and moved into a tile's
+# horizontal slices, its vertical slices stored as P's columns - sizes in
+# tile + mask: whole tiles and a last one of the rows left (tail), its stores
+# under a mask - any cdim up to (N+1) tiles in one call, below a tile too
+- kind: trans
+  name: ztail
+  mask: true
+  m: 0..3
+  preset: packm_za
+  vectorize: n
+  params:
+    X-layout: ['n:c', 'm:s']
+    Y-layout: ['m:c', 'n:s']
+# tiles (VL rows each), no scatters (streaming mode has them only with FA64)
+- kind: trans
+  name: ztrans
+  m: 1..4
+  preset: packm_za
+  vectorize: n
+  params:
+    X-layout: ['n:c', 'm:s']
+    Y-layout: ['m:c', 'n:p']
+    sme-F64F64: 'on'
+# blocks of whole tiles, P's leading dimension: any cdim from a tile up - the
+# rows left a one-tile kernel ending at cdim (vec-tail overlap) or the reference
+- kind: trans
+  name: zblock
+  m: [4, 2, 1]
+  preset: packm_za
+  vectorize: n
+  params:
+    X-layout: ['n:c', 'm:s']
+    Y-layout: ['m:c', 'n:s']
+    sme-F64F64: 'on'
+- kind: trans
+  m: 1..16
+  preset: packm_bc
+  vectorize: n
+  store: scatter
+  params:
+    X-layout: ['n:c', 'm:s']
+    Y-layout: ['m:c', 'n:p']
+    sme-F64F64: 'on'

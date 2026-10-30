@@ -1,0 +1,23 @@
+# FP32 gemm, sme: the microtile split along n - outer products for its first part (ZA tiles of
+# columns), FMAs for the rest (vectors along m: C column-major), the FMA part sized by the ratio
+# of their instructions (split-ratios) - fopa_fma_split mirrored
+isa: sme
+blocksizes: {mr-in-mc: 16, nr-in-nc: 64, kc: 256}
+families:
+- family: sf
+  split: n
+  split-ratios: 1..2:1..3
+  unroll: 4
+  m: [2]
+  default: 2x2+2
+  parts:
+  - {preset: gemm_fopa_bc_vindex, n: 1..2}
+  - {preset: gemm_fma_bc, tileop-vectorize: m}
+  params:
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    C-layout: ['m:c', 'n:s']
+    sme-F64F64: 'on'
+    pre-specialize-irmods: [fuse_slices, forward_slices, hoist_slices, unroll_loops, hoist, cluster]
+    unroll_loops-factor: '4'
+    unroll_loops-registers: '2'

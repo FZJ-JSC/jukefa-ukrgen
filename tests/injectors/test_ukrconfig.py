@@ -26,7 +26,7 @@ class test_ukrconfig(unittest.TestCase):
         self.assertEqual(["avx2/fma_bc_blocks", "avx512/fma_bc_blocks", "avx512/fma_bc_vindex",
                           "neon/fma_bc_lanes", "neon/fma_lane", "rvv/fma_vf", "rvv/fma_vf_m2",
                           "rvv/k1", "rvv/k3-a100", "rvv/k3-x100",
-                          "sme/fopa_bc_vindex", "smesve/fopa_fma_split", "sve/fma_bc_vindex",
+                          "sme/fopa_bc_vindex", "smesve/fopa_fma_split", "smesve/fopa_fma_split_n", "sve/fma_bc_vindex",
                           "sve/fma_blocklane"], found)
         for d in configs():
             files = {(kind, dt): os.path.join(d, f"{ch}{kind}.yaml")

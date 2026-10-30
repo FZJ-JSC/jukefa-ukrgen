@@ -435,6 +435,18 @@ else may run between. Modelled, the state would schedule like a register:
 - **Distance specs** for state: `RAW:state::::N` (the register class field
   meaningless there - or an instruction type, "sta").
 
+Checked (ukrgen 0246): every split kernel the config builds - 12 doubles
+(MR VL+1 .. 2VL+6, NR 2VL, 4VL), 7 singles - right against the reference
+at SVL 256 and 512; their A panels (cdim N·VL + M) packed by generated
+cases either way round - column-major A by vec (the rows left by an
+overlapping call), row-major by ztail1, ztail2 - only a k remainder's
+partial chunk the reference's. The split mirrored, smesve/fopa_fma_split_n:
+outer products for NR's first part (ZA tiles of columns), FMAs for the rest
+with their vectors along m (tileop-vectorize: m) and C column-major - NR
+N·VL + M, MR 2VL or 4VL; 12 doubles and 7 singles, right the same way. Its
+2,4,4 (4,2,4 mirrored) still runs out of vector registers emitting C - its
+16 accumulators leave 16 once k is done: possible, not yet.
+
 ## Related: the vector length the caller chooses (RVV)
 
 On some hardware a vector length other than the most there is performs

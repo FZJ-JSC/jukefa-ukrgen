@@ -1061,6 +1061,29 @@ int main( void )
                     self.assertIn(f"{tile}: 81 runs, 0 wrong", out, k.symbol)
 
     @needs_tools
+    def test_split_family_n(self):
+        # the split mirrored (smesve/fopa_fma_split_n): outer products for NR's
+        # first part (ZA tiles of columns), FMAs - vectors along m, C
+        # column-major - for the rest; the configs' defaults, 4x2+2 doubles and
+        # 2x2+2 singles, against the reference at two streaming lengths
+        cc = ["aarch64-linux-gnu-gcc", "-static", "-Wa,-march=armv9-a+sme+sme-f64f64"]
+        root = os.path.join(HERE, "..", "..", "ukrconfig", "smesve", "fopa_fma_split_n")
+        for dt, ctype, f, nr in (("FP64", "double", "dgemm", "2*VL + 2"), ("FP32", "float", "sgemm", "2*VL + 2")):
+            cfg = configuration.from_files({("gemm", dt): os.path.join(root, f + ".yaml")})
+            fam = cfg.families[0]
+            built, skipped = build_gemm(cfg.isa, cfg.name, fam)
+            k = next(k for k in built if tuple(k.size) == fam.default[dt])
+            self.assertEqual(nr, k.nr)
+            src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator("sme")) + gemm_wrapper(k) + \
+                  f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, ctype, k.vl_fn)}; }}\n" \
+                  f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, ctype, k.vl_fn)}; }}\n" + \
+                  open(os.path.join(HERE, "wrapper_harness.c")).read()
+            outs = self.run_c("sme", src, [k], [[QEMU, "-cpu", f"max,sme{v}=on"] for v in (256, 512)],
+                              [f"-DUKR={k.symbol}", f"-DWT={ctype}"], cc=cc)
+            for out in outs:
+                self.assertIn("81 runs, 0 wrong", out, k.symbol)
+
+    @needs_tools
     def test_split_family(self):
         # outer products and FMAs split along m, each part its preset: 2vx4v +
         # 2x4v doubles, 2vx2v + 2x2v singles (one fopa per fma); MR the parts'
