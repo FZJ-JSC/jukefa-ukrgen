@@ -7,8 +7,36 @@
 # Same rules as the FP32 file: issue model 2:vl|vs,vf,sl,i, per-family loop order (vm kmn, vn knm),
 # and shape-dependent address register counts - vm {A: max(1, 2m-2), B: n/4} rotated, vn
 # {A: m/4, B: max(1, 2n-2)} with A blocked. nr 8 = 2*VL keeps the packm vec case dispatchable.
+#
+# blistune.py mid matrix results (1000-1350, step 70, mean aggregate, fixed NC):
+# PER-MICROKERNEL RESULTS
+#   MRxNR      GFLOPs  trials  threads   blocksizes
+#   12x8      89.25     134  1_8_1_1   KC_D=256 KC_MAX_D=316 MR_D=12 MR_IN_MC_D=42 MR_IN_MC_MAX_D=72 NR_D=8 NR_IN_NC_D=432
+#    8x12     92.56     134  1_8_1_1   KC_D=256 KC_MAX_D=332 MR_D=8 MR_IN_MC_D=32 MR_IN_MC_MAX_D=56 NR_D=12 NR_IN_NC_D=432
+#   14x8      89.61     133  1_8_1_1   KC_D=256 KC_MAX_D=360 MR_D=14 MR_IN_MC_D=48 MR_IN_MC_MAX_D=80 NR_D=8 NR_IN_NC_D=432
+#    8x14     90.63     133  2_1_4_1   KC_D=280 KC_MAX_D=388 MR_D=8 MR_IN_MC_D=36 MR_IN_MC_MAX_D=62 NR_D=14 NR_IN_NC_D=432
+#   16x6      85.36     133  1_8_1_1   KC_D=248 KC_MAX_D=292 MR_D=16 MR_IN_MC_D=34 MR_IN_MC_MAX_D=62 NR_D=6 NR_IN_NC_D=432
+#    6x16     86.32     133  2_4_1_1   KC_D=256 KC_MAX_D=268 MR_D=6 MR_IN_MC_D=24 MR_IN_MC_MAX_D=34 NR_D=16 NR_IN_NC_D=432
+#   winner: 8x12 at 92.56 GFLOPs
+# 
+# ==================================================
+# BEST GFLOPs: 92.56  (trial 104, 8x12)
+# BEST CONFIGURATION:
+#   BLIS_MR_D=8
+#   BLIS_NR_D=12
+#   BLIS_JC_NT=1
+#   BLIS_IC_NT=8
+#   BLIS_JR_NT=1
+#   BLIS_IR_NT=1
+#   BLIS_KC_D=256
+#   BLIS_MR_IN_MC_D=32
+#   BLIS_NR_IN_NC_D=432
+#   BLIS_KC_MAX_D=332
+#   BLIS_MR_IN_MC_MAX_D=56
+# ==================================================
+
 isa: rvv
-blocksizes: {mr-in-mc: 36, nr-in-nc: 424, kc: 308}
+blocksizes: {mr-in-mc: 32, mr-in-mc-max: 56, nr-in-nc: 432, kc: 256, kc-max: 332}
 families:
 - family: vn
   preset: gemm_fma_vf
