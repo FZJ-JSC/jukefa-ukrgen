@@ -503,6 +503,20 @@ its IR a register move (lsc_move) a vector; a pass renaming Y's registers
 to X's (copy propagation) so the copy emits nothing but its load - a move
 a vector until then.
 
+Done (ukrgen 0233), the matching: two plain move shapes, each a step of its
+own, never of a chain (inside one a move only copied a temporary - gemm's mm
+had 12 such chains). MOVE(bdreg[i], adreg[i]) is asmgen's move, its plain
+copies only - not its permutes, lane moves, broadcasts, rotations, shifts
+(a shape's signatures selected from its operation's: ast_sigs).
+MOVE(bdreg[i,j], adreg[i,j]) is a tile's identity: no instruction does it
+(SME has none from a tile to another), its signatures ukrgen's - the copy's
+tile is to be renamed to its source's, as a tile's load is a virtual one
+expanded into slices. The slice resolutions also for a tile operand's
+tf.NONE. MOVE(Y, X)'s candidates, named for asmgen's operation:
+`move(X.VEC:direct, Y.VEC){i=m, n=1}` and `{m=1, i=n}` on every ISA; on SME
+also `move(X.TILE:slices_row, Y.TILE){i=m, j=n}` - rows straight into a
+tile's slices (Z6) - and `slices_col`, and the vector copies into slices.
+
 **Later: a transpose operation**, not the identity: input vectors along n,
 output along m - its implementation the permute network shufflenet
 computes (transpose_network), its scratch registers the emitter's. Load,

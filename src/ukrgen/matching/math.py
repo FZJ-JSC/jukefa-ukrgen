@@ -911,9 +911,13 @@ def solve_requirement(req: ast_node, hw_asts: list[ast_node],
         if not dependencies:
             continue
 
-        dep_solutions = solve_requirement(dependencies[0], hw_asts,
+        # a plain move (an operand on its right) solves a requirement that
+        # is one; inside a chain it would only copy a temporary
+        chain_asts = [hw_ast for hw_ast in hw_asts
+                      if not isinstance(hw_ast.right, operand_ref)]
+        dep_solutions = solve_requirement(dependencies[0], chain_asts,
                                           temp_counter=temp_counter+1)
-        remainder_solutions = solve_requirement(split_ast, hw_asts,
+        remainder_solutions = solve_requirement(split_ast, chain_asts,
                                                 temp_counter=temp_counter+1)
 
 
@@ -949,6 +953,22 @@ def solve_requirement(req: ast_node, hw_asts: list[ast_node],
                     all_valid_chains.append(dep_chain+rem_chain)
 
     return dedup_chains(all_valid_chains)
+
+# A plain move: asmgen's move names its source adreg and its destination
+# bdreg
+HW_MOVE_AST = expression_node(
+        op=operation.MOVE,
+        left=operand_ref(name="bdreg", indices=('i',)),
+        right=operand_ref(name="adreg", indices=('i',))
+        )
+
+# A tile's plain move: no instruction does it (SME has none from a tile to
+# another), so the copy is never emitted - its tile is renamed to its source's
+HW_MOVE_TILE_AST = expression_node(
+        op=operation.MOVE,
+        left=operand_ref(name="bdreg", indices=('i', 'j')),
+        right=operand_ref(name="adreg", indices=('i', 'j'))
+        )
 
 HW_FADD_AST = expression_node(
         op=operation.MOVE,

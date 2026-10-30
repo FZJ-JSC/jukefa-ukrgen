@@ -9,6 +9,7 @@ Solving data movement requirements of possible computational solutions.
 """
 
 import itertools
+from collections.abc import Callable
 
 from .domains import operand_values
 from dataclasses import dataclass, field
@@ -357,7 +358,8 @@ def enumerate_resolutions(*,
         opname : str,
         registry : resolution_registry,
         allowed_semantics : frozenset[opmod] = frozenset(),
-        hw_locs : dict[tuple[str,dmd], dml] | None = None
+        hw_locs : dict[tuple[str,dmd], dml] | None = None,
+        select_sigs : Callable[[list[opsig]], list[opsig]] | None = None
         ) -> list[operation_resolution]:
     """
     Given an operation, operand names, transformations, directions, data and register
@@ -371,6 +373,9 @@ def enumerate_resolutions(*,
     :param opname: name of the operation
     :param registry: Registry containing available operand transformation resolutions
     :param allowed_semantics: Semantic operation modifiers the requirement asks for
+    :param select_sigs: the signatures implementing the step, from the
+                        operation's - where not all of them do, or where it
+                        has none; None for all of the operation's
     :return: list of operation resolutions that can be used to satisfy the requirements
     """
 
@@ -380,7 +385,10 @@ def enumerate_resolutions(*,
         return []
 
 
-    all_sigs = filter_by_forbidden_semantics(op.get_signatures(), allowed_semantics)
+    all_sigs = op.get_signatures()
+    if select_sigs is not None:
+        all_sigs = select_sigs(all_sigs)
+    all_sigs = filter_by_forbidden_semantics(all_sigs, allowed_semantics)
     if not all_sigs:
         return []
 
@@ -477,7 +485,8 @@ def resolve_ast_solution(
         target_op: str,
         registry: resolution_registry,
         locs: dict[str, tuple[dml, dml]] | None = None,
-        layouts: dict[str, str|None] | None = None
+        layouts: dict[str, str|None] | None = None,
+        select_sigs: Callable[[list[opsig]], list[opsig]] | None = None
         ) -> list[operation_resolution]:
     """
     Given one step of a solution to a requirement AST, determine hw requirements and find
@@ -494,6 +503,9 @@ def resolve_ast_solution(
                     if it is contiguous along none. A vector bound to another
                     index is accessed strided. Operands not listed are
                     contiguous along whatever their vector is bound to.
+    :param select_sigs: the signatures implementing the step, from the compute
+                        operation's - where not all of them do, or where it
+                        has none; None for all of the operation's
     :return: list of valid resolutions for this operation and solution step
     """
 
@@ -535,7 +547,8 @@ def resolve_ast_solution(
             hw_rtypes=hw_rtypes,
             opname=target_op,
             registry=registry,
-            hw_locs=hw_locs)
+            hw_locs=hw_locs,
+            select_sigs=select_sigs)
 
 
 

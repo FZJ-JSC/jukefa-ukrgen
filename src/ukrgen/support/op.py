@@ -39,7 +39,9 @@ from ..matching.math import (
     HW_FMA_AST,
     HW_FDOTA_AST,
     HW_FOPA_AST,
-    HW_MMA_AST
+    HW_MMA_AST,
+    HW_MOVE_AST,
+    HW_MOVE_TILE_AST
 )
 
 from .data_move import resolution_registry, dm_location as dml
@@ -155,6 +157,43 @@ def generate_op_supports(gen : asmgen,
 
 
 
+def plain_copies(sigs : list[opsig]) -> list[opsig]:
+    """
+    The move signatures that copy their source as it is: asmgen's move also
+    broadcasts, moves single lanes, rotates, shifts and permutes - forms with
+    operation or operand modifiers, or structural parameters
+
+    :param sigs: the move operation's signatures
+    :return: the plain copies among them
+    """
+    return [sig for sig in sigs
+            if not sig.modifiers and not sig.structural_params and
+            all(not shape.modifiers for shape in sig.operands.values()
+                if orl.DATA == shape.orole)]
+
+
+def tile_identities(sigs : list[opsig]) -> list[opsig]:
+    """
+    A tile's copy into another, of each data type the move signatures move
+    tile slices of. No instruction does it, so it is never emitted: the
+    copy's tile is renamed to its source's (copy propagation), as a tile's
+    load is a virtual one expanded into its slices
+
+    :param sigs: the move operation's signatures
+    :return: a tile identity signature for each data type
+    """
+    dts = {shape.dt for sig in sigs for shape in sig.operands.values()
+           if orl.DATA == shape.orole and rtype.TILE == shape.rtype}
+
+    def tile(dt):
+        return operand_shape(otype=otype.REGISTER, orole=orl.DATA,
+                             rtype=rtype.TILE, dt=dt)
+
+    return [opsig(modifiers=set(), structural_params={},
+                  operands={'adreg': tile(dt), 'bdreg': tile(dt)})
+            for dt in sorted(dts, key=lambda dt: dt.name)]
+
+
 class op_support_builder:
 
     ast_op_map = {
@@ -163,7 +202,16 @@ class op_support_builder:
         HW_FMA_AST:   'fma',
         HW_FDOTA_AST: 'fdota',
         HW_FOPA_AST:  'fopa',
-        HW_MMA_AST:   'mma'
+        HW_MMA_AST:   'mma',
+        HW_MOVE_AST:  'move',
+        HW_MOVE_TILE_AST: 'move'
+    }
+
+    # the signatures implementing a shape, from its operation's: where not
+    # all of them do, or where it has none
+    ast_sigs = {
+        HW_MOVE_AST:      plain_copies,
+        HW_MOVE_TILE_AST: tile_identities
     }
 
     def _operation(self, name : str) -> bool:
@@ -352,7 +400,8 @@ class op_support_builder:
                         dts, self.ast_op_map[sstep.hw_ast],
                         registry,
                         locs=locs,
-                        layouts=io_layouts)
+                        layouts=io_layouts,
+                        select_sigs=self.ast_sigs.get(sstep.hw_ast))
                 if not step_candidates:
                     step_invalid = True
                     break
