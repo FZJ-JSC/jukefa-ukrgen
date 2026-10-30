@@ -63,6 +63,9 @@ class test_check_state(unittest.TestCase):
         def __init__(self, *names):
             self.extra_reads_state = set(names)
 
+        def state_sigs(self):
+            return []
+
     class block:
         def __init__(self, prologue=(), body=()):
             self.prologue, self.body = list(prologue), list(body)

@@ -7,7 +7,7 @@ whose requirements hold where it is
 from __future__ import annotations
 
 from ..irmod.lsc.base import blocks_and_sections, first_blocks
-from ..models.load_store_operations import lsc_load, lsc_state, lsc_store
+from ..models.load_store_operations import lsc_load, lsc_loop, lsc_move, lsc_state, lsc_store
 
 
 def satisfied(requires: dict[str, str], state: dict[str, str]) -> bool:
@@ -50,30 +50,47 @@ def check_state(program, initial: dict[str, str]) -> list[str]:
     for block, section in blocks_and_sections(program):
         state = dict(start) if (any(block is f for f in firsts) and "prologue" == section) \
             else {**start, **once}
-        for op in getattr(block, section) or []:
-            if isinstance(op, lsc_state):
-                state.update(op.values)
-                continue
-            for name in sorted(op.extra_reads_state):
-                if state.get(name) is None:
-                    problems.append(f"{section}: {type(op).__name__[4:]} reads {name} before it's set")
-            if not isinstance(op, (lsc_load, lsc_store)):
-                continue
-            sigs = op.state_sigs()
-            held = [s for s in sigs if satisfied(s.state_requires, state)]
-            if sigs and not held:
-                needs = sorted({f"{k} {v}" for s in sigs for k, v in s.state_requires.items()})
-                problems.append(f"{section}: {op.indices[1]}'s {type(op).__name__[4:]}: no form whose state "
-                                f"requirements hold ({', '.join(needs)}; the state "
-                                f"{', '.join(f'{k}={v}' for k, v in sorted(state.items())) or 'none'})")
-            elif len(held) < len(sigs):
-                op.sigs = held
+        _walk(getattr(block, section) or [], state, section, problems)
         # the setup's states as they were (states set once may stay)
         if any(state.get(k) != v for k, v in start.items()):
             problems.append(f"{section}: ends with other state than it began with "
                             f"({', '.join(f'{k}={v}' for k, v in sorted(state.items()))})")
     return problems
 
+
+
+def _walk(ops, state: dict, where: str, problems: list) -> None:
+    """
+    Operations in order from a state, updated as they set it: each one's
+    state reads set, its signatures' requirements held (a load's, store's or
+    move's pruned to those that hold - a transformation's only checked); a
+    loop's block walked where the loop is, ending in the state it began with
+    - its iterations alike
+    """
+    for op in ops:
+        if isinstance(op, lsc_state):
+            state.update(op.values)
+            continue
+        for name in sorted(op.extra_reads_state):
+            if state.get(name) is None:
+                problems.append(f"{where}: {type(op).__name__[4:]} reads {name} before it's set")
+        if isinstance(op, lsc_loop):
+            began = dict(state)
+            _walk(op.block, state, f"{where}, a loop", problems)
+            if state != began:
+                problems.append(f"{where}: a loop's block ends with other state than it began with "
+                                f"({', '.join(f'{k}={v}' for k, v in sorted(state.items()))})")
+            continue
+        sigs = op.state_sigs()
+        held = [s for s in sigs if satisfied(s.state_requires, state)]
+        if sigs and not held:
+            needs = sorted({f"{k} {v}" for s in sigs for k, v in s.state_requires.items()})
+            what = f"{op.indices[1]}'s " if isinstance(op, (lsc_load, lsc_store)) else ""
+            problems.append(f"{where}: {what}{type(op).__name__[4:]}: no form whose state "
+                            f"requirements hold ({', '.join(needs)}; the state "
+                            f"{', '.join(f'{k}={v}' for k, v in sorted(state.items())) or 'none'})")
+        elif len(held) < len(sigs) and isinstance(op, (lsc_load, lsc_store, lsc_move)):
+            op.sigs = held
 
 def merge_switches(program) -> int:
     """

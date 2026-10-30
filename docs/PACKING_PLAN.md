@@ -411,6 +411,11 @@ left out), its clobbers not the kernel's (no saves of d8-d15). SME's
 get_simd_size() reads the streaming vector length with rdsvl, in either
 mode - no switch to undo the caller's (asmgen 0099). Where BLIS switches it
 (*_ker_var2.c's loops, bli_family_<config>.h) is open.
+The check inside loops (ukrgen 0242): a loop's block walked where the loop
+is, ending in the state it began with (its iterations alike) - the tiles'
+accesses in slice loops, a loop's scatters, checked at last; moves and
+transformations checked too (a move's forms pruned as an access's). No
+kernel refused or changed by it.
 
 The suggestion as it stood:
 

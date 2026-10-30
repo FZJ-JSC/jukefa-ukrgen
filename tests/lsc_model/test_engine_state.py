@@ -45,6 +45,14 @@ class test_engine_state(unittest.TestCase):
         self.assertEqual({"sm": "1", "za": "1"}, program.entry[0].values)
         self.assertEqual({"sm": "0", "za": "0"}, program.exit[0].values)
         self.assertEqual([], check_state(program, {"sm": "0", "za": "0"}))
+        # without the entry's switch: the tiles' accesses - in slice loops,
+        # the check walking them - refused
+        entry, program.entry = program.entry, []
+        try:
+            problems = check_state(program, {"sm": "0", "za": "0"})
+        finally:
+            program.entry = entry
+        self.assertTrue([p for p in problems if "a loop" in p and "sm ==1" in p], problems)
 
     def test_assumed(self):
         # --assume-state sm=1 za=1 (a list, or a config's mapping): the caller
