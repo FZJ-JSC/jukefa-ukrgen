@@ -18,6 +18,7 @@ from asmgen.asmblocks.noarch import asmgen
 from asmgen.asmblocks.op import (
     operation_signature as opsig,
     operation_modifier as opmod,
+    operand_modifier as omod,
     register_type as rgt
 )
 from asmgen.registers import (
@@ -297,6 +298,12 @@ def deduce_operand_rtype(
     raise ValueError(f"Invalid number of dimensions in operand {opd_name}: {dim_count}")
 
 
+# Lane selections - a lane of the register, or a lane of each of its blocks -
+# read an element of it: an operand the matching left whole (no
+# transformation) is every lane of its register
+LANE_MODS = frozenset({omod.ILANE, omod.GLANE, omod.BLOCKLANE})
+
+
 def get_opd_candidates(*,
         gen : asmgen,
         tfs : dict[str,tf],
@@ -325,6 +332,15 @@ def get_opd_candidates(*,
 
     for opd_name, opd_tfs in tfs.items():
 
+        # an operand left whole is no lane of its register
+        opd_sg = compute_sg
+        if not set(opd_tfs) - {tf.NONE}:
+            whole = filter_by_forbidden_operand_mods(
+                    list(compute_sg.sigs), LANE_MODS, opd_name)
+            if not whole:
+                return {}
+            opd_sg = sig_group(ident=compute_sg.ident, sigs=tuple(whole))
+
         for ddir in dir_reqs.get(opd_name,set()):
             loc = (hw_locs or {}).get((opd_name, ddir), dml.MEMORY)
             key = tfr_key(tfs=frozenset(opd_tfs), rtype=hw_rtypes[opd_name],
@@ -337,7 +353,7 @@ def get_opd_candidates(*,
                     rslns=rslns,
                     target_opd_name=opd_name,
                     target_dt=hw_dts[opd_name],
-                    compute_sg=compute_sg,
+                    compute_sg=opd_sg,
                     target_rtype=hw_rtypes[opd_name])
 
             if not candidates:
