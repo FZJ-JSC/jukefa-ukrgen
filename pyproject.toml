@@ -20,7 +20,7 @@ dependencies = [
     "mako",
     "GitPython",
     "PyYAML",
-    "asmgen>=0.5.0"
+    "asmgen>=0.6.0"
 ]
 
 [project.optional-dependencies]
