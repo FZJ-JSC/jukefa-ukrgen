@@ -84,7 +84,8 @@ def generate(cfg: configuration, out_dir: str, stack_size: int | None = None,
     size = stack_buf_size(cfg.isa, gen, kernels, stack_size or cfg.stack_buf_size)
     write(f"config/{cfg.name}/bli_family_{cfg.name}.h", family_header(cfg.name, size))
     report = [f"{len(kernels)} kernels, {len(skipped)} sizes skipped, stack temporary {size} bytes"]
-    report += [f"skipped {fam} {dt} {m}x{n}: {why}" for fam, dt, (m, n), why in skipped]
+    report += [f"skipped {fam} {dt} {'x'.join(str(v) for v in size)}: {why}"
+               for fam, dt, size, why in skipped]
     if reduced:
         report.append(f"{len(reduced)} kernel{'s' if len(reduced) > 1 else ''} at a smaller unroll than asked")
     report += [f"unroll {got} of {asked}: {fam} {symbol}" for fam, symbol, asked, got in reduced]
