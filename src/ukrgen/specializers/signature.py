@@ -198,6 +198,8 @@ class signature_specializer:
         #: the state the caller guarantees (--assume-state)
         self.assumed = {}
         self._column_pointers = None
+        #: the loop index of the block being adapted (None: straight-line)
+        self.loop_index = None
         self.ctx = ctx
         self.program = program
         self.positions: dict[tuple[str, int], sym] = {
@@ -238,6 +240,30 @@ class signature_specializer:
         inserted = []
 
         strided = {f: c for f, c in rel.items() if f}
+        # an offset along the loop's own index at its stride (k:s - a
+        # gemmsup's unpacked A, B): the access's register walked there, from
+        # whichever of the component's registers is the fewest strides away -
+        # rotating ones leapfrog, one add of the stride's register each - not
+        # a column pointer per offset and register
+        along = (f"stride({comp},{self.loop_index})",) if self.loop_index is not None else None
+        if along is not None and set(strided) == {along} and "lane" not in op.properties:
+            target = self.positions[(comp, reg)] + sym._make(strided)
+            def strides_away(r):
+                d = dict((target - self.positions[(comp, r)]).terms)
+                return abs(d.get(along, 0)) if set(d) <= {along} else float("inf")
+            bases = [r for (c, r) in self.program.addr_setup if c == comp and (c, r) in self.positions]
+            source = min(bases or [reg], key=strides_away)
+            move = target - self.positions[(comp, source)]
+            if dict(move.terms) or source != reg:
+                # (source first, then the register set: dest = src + delta)
+                inserted.append(lsc_addr_compute(comp, source, reg, move, scalar_tile))
+                walked = self.walked_by
+                walked[(comp, reg)] = walked.get((comp, reg), sym.const(0)) + \
+                    (target - self.positions[(comp, reg)])
+                self.walked_by = walked
+                self.positions[(comp, reg)] = target
+            rel = {f: c for f, c in rel.items() if not f}
+            strided = {}
         if strided:
             for factors, count in strided.items():
                 vl_times_stride = 2 == len(factors) and "VL" == factors[0] \
@@ -539,6 +565,7 @@ class signature_specializer:
         return out
 
     def adapt_block(self, block: ir_block):
+        self.loop_index = block.loop_index
         rebased = {}
         for section in ("prologue", "body", "epilogue", "tail", "subtail"):
             ops = []
@@ -554,6 +581,19 @@ class signature_specializer:
                 comp, reg = key
                 moved = walked.get(key, sym.const(0))
                 step = advances.get(key)
+                # strides walked (k:s - a gemmsup's A, B): one move, the advance
+                # less the walk - two would each add the stride's register as
+                # often as it counts (8 strides back, 8 on: 16 adds for none);
+                # addrmerge merges constants and vector lengths, not strides
+                strided = any(f and f != ("VL",) for x in (moved, step) if x is not None
+                              for f in dict(x.terms))
+                if strided and step is not None:
+                    net = step - moved
+                    op = lsc_addr_compute(comp, reg, reg, net, scalar_tile)
+                    op.properties = dict(op.properties or {}, advance=step)
+                    ops.append(op)
+                    self.positions[key] = self.positions[key] - moved
+                    continue
                 if any(dict(moved.terms).values()):
                     ops.append(lsc_addr_compute(comp, reg, reg, sym.const(0) - moved, scalar_tile))
                 if step is not None and any(dict(step.terms).values()):

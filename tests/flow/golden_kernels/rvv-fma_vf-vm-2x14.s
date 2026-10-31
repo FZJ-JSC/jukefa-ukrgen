@@ -573,8 +573,7 @@ add t5,t5,a6
 add t5,t5,a6
 add t5,t5,a6
 vse64.v v1, (t4)
-add t6,t4,0
-add t6,t6,a6
+add t6,t4,a6
 add a0,t4,0
 add a0,a0,a6
 add a0,a0,a6
@@ -656,8 +655,7 @@ j .ukr0_cases_end
 .ukr0_case1:
 add t4,a3,0
 fld f0, 0(a4)
-add t5,t4,0
-add t5,t5,a6
+add t5,t4,a6
 add t6,t4,0
 add t6,t6,a6
 add t6,t6,a6
@@ -773,14 +771,12 @@ vse64.v v3, (a7)
 j .ukr0_cases_end
 .ukr0_case2:
 add t4,a3,0
-add t5,t4,0
-add t5,t5,a6
+add t5,t4,a6
 vle64.v v29, (t4)
 add t6,t4,0
 add t6,t6,a6
 add t6,t6,a6
-add a0,a3,0
-add a0,a0,a6
+add a0,a3,a6
 vle64.v v30, (t5)
 add a1,a3,0
 add a1,a1,a6
@@ -963,14 +959,12 @@ j .ukr0_cases_end
 .ukr0_case3:
 add t4,a3,0
 fld f0, 0(a4)
-add t5,t4,0
-add t5,t5,a6
+add t5,t4,a6
 add t6,t4,0
 add t6,t6,a6
 add t6,t6,a6
 vle64.v v29, (t4)
-add a0,a3,0
-add a0,a0,a6
+add a0,a3,a6
 vle64.v v30, (t5)
 add a1,a3,0
 add a1,a1,a6
@@ -1153,14 +1147,12 @@ j .ukr0_cases_end
 .ukr0_case4:
 add t4,a3,0
 fld f0, 0(a5)
-add t5,t4,0
-add t5,t5,a6
+add t5,t4,a6
 add t6,t4,0
 add t6,t6,a6
 add t6,t6,a6
 vle64.v v29, (t4)
-add a0,a3,0
-add a0,a0,a6
+add a0,a3,a6
 vle64.v v30, (t5)
 add a1,a3,0
 add a1,a1,a6
@@ -1343,16 +1335,14 @@ j .ukr0_cases_end
 .ukr0_case5:
 add t4,a3,0
 fld f0, 0(a5)
-add t5,t4,0
-add t5,t5,a6
+add t5,t4,a6
 fld f1, 0(a4)
 vle64.v v29, (t4)
 add t6,t4,0
 add t6,t6,a6
 add t6,t6,a6
 vle64.v v30, (t5)
-add a0,a3,0
-add a0,a0,a6
+add a0,a3,a6
 vle64.v v31, (t6)
 vfmul.vf v29,v29,f0
 vfmul.vf v30,v30,f0

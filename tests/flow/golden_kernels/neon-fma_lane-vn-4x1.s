@@ -271,8 +271,7 @@ b .ukr0_cases_end
 .ukr0_case0:
 mov x0,x3
 mov x1,x3
-mov x2,x0
-add x2,x2,x6
+add x2,x0,x6
 mov x8,x0
 add x8,x8,x6, LSL #1
 mov x9,x0
@@ -287,8 +286,7 @@ b .ukr0_cases_end
 mov x0,x3
 mov x1,x3
 ld1r {v4.2d}, [x4]
-mov x2,x0
-add x2,x2,x6
+add x2,x0,x6
 mov x8,x0
 add x8,x8,x6, LSL #1
 mov x9,x0
@@ -306,15 +304,13 @@ b .ukr0_cases_end
 .ukr0_case2:
 mov x0,x3
 mov x1,x3
-mov x2,x0
-add x2,x2,x6
+add x2,x0,x6
 mov x8,x0
 add x8,x8,x6, LSL #1
 ld1 {v4.2d}, [x0]
 ld1 {v5.2d}, [x2]
 ld1 {v6.2d}, [x8]
-mov x9,x1
-add x9,x9,x6
+add x9,x1,x6
 fadd v4.2d,v0.2d,v4.2d
 mov x10,x0
 add x10,x10,x6
@@ -336,16 +332,14 @@ b .ukr0_cases_end
 .ukr0_case3:
 mov x0,x3
 mov x1,x3
-mov x2,x0
-add x2,x2,x6
+add x2,x0,x6
 mov x8,x0
 add x8,x8,x6, LSL #1
 ld1r {v4.2d}, [x4]
 ld1 {v5.2d}, [x0]
 ld1 {v6.2d}, [x2]
 ld1 {v7.2d}, [x8]
-mov x9,x1
-add x9,x9,x6
+add x9,x1,x6
 fmla v5.2d,v0.2d,v4.2d
 mov x10,x0
 add x10,x10,x6
@@ -367,16 +361,14 @@ b .ukr0_cases_end
 .ukr0_case4:
 mov x0,x3
 mov x1,x3
-mov x2,x0
-add x2,x2,x6
+add x2,x0,x6
 mov x8,x0
 add x8,x8,x6, LSL #1
 ld1r {v4.2d}, [x5]
 ld1 {v5.2d}, [x0]
 ld1 {v6.2d}, [x2]
 ld1 {v7.2d}, [x8]
-mov x9,x1
-add x9,x9,x6
+add x9,x1,x6
 fmla v0.2d,v5.2d,v4.2d
 mov x10,x0
 add x10,x10,x6
@@ -398,8 +390,7 @@ b .ukr0_cases_end
 .ukr0_case5:
 mov x0,x3
 mov x1,x3
-mov x2,x0
-add x2,x2,x6
+add x2,x0,x6
 ld1r {v4.2d}, [x5]
 mov x8,x0
 add x8,x8,x6, LSL #1
@@ -410,8 +401,7 @@ ld1r {v16.2d}, [x4]
 fmul v5.2d,v5.2d,v4.2d
 fmul v6.2d,v6.2d,v4.2d
 fmul v7.2d,v7.2d,v4.2d
-mov x9,x1
-add x9,x9,x6
+add x9,x1,x6
 fmla v5.2d,v0.2d,v16.2d
 fmla v6.2d,v1.2d,v16.2d
 fmla v7.2d,v2.2d,v16.2d
@@ -433,22 +423,17 @@ st1 {v0.2d}, [x12]
 b .ukr0_cases_end
 .ukr0_case6:
 mov x0,x3
-mov x1,x0
-add x1,x1,x7
+add x1,x0,x7
 st1 {v0.d}[1], [x1]
-mov x2,x0
-add x2,x2,x6
-mov x8,x0
-add x8,x8,x6
-mov x1,x2
-add x1,x1,x7
+add x2,x0,x6
+add x8,x0,x6
+add x1,x2,x7
 st1 {v1.d}[0], [x8]
 st1 {v1.d}[1], [x1]
 mov x9,x0
 add x9,x9,x6, LSL #1
 add x8,x8,x6
-mov x1,x9
-add x1,x1,x7
+add x1,x9,x7
 st1 {v2.d}[0], [x8]
 st1 {v0.d}[0], [x0]
 st1 {v2.d}[1], [x1]
@@ -456,26 +441,21 @@ mov x10,x0
 add x10,x10,x6
 add x10,x10,x6, LSL #1
 add x8,x8,x6
-mov x1,x10
-add x1,x1,x7
+add x1,x10,x7
 st1 {v3.d}[0], [x8]
 st1 {v3.d}[1], [x1]
 b .ukr0_cases_end
 .ukr0_case7:
 mov x0,x3
 ld1r {v4.2d}, [x4]
-mov x1,x0
-add x1,x1,x7
-mov x2,x0
-add x2,x2,x6
-mov x8,x0
-add x8,x8,x6
+add x1,x0,x7
+add x2,x0,x6
+add x8,x0,x6
 fmul v5.2d,v0.2d,v4.2d
 fmul v0.2d,v1.2d,v4.2d
 fmul v1.2d,v2.2d,v4.2d
 st1 {v5.d}[1], [x1]
-mov x1,x2
-add x1,x1,x7
+add x1,x2,x7
 st1 {v0.d}[0], [x8]
 st1 {v0.d}[1], [x1]
 add x8,x8,x6
@@ -484,51 +464,40 @@ st1 {v5.d}[0], [x0]
 mov x9,x0
 add x9,x9,x6, LSL #1
 fmul v0.2d,v3.2d,v4.2d
-mov x1,x9
-add x1,x1,x7
+add x1,x9,x7
 st1 {v1.d}[1], [x1]
 mov x10,x0
 add x10,x10,x6
 add x10,x10,x6, LSL #1
 add x8,x8,x6
-mov x1,x10
-add x1,x1,x7
+add x1,x10,x7
 st1 {v0.d}[0], [x8]
 st1 {v0.d}[1], [x1]
 b .ukr0_cases_end
 .ukr0_case8:
 mov x0,x3
 ld1 {v4.d}[0], [x0]
-mov x1,x0
-add x1,x1,x7
+add x1,x0,x7
 ld1 {v4.d}[1], [x1]
-mov x2,x0
-add x2,x2,x6
-mov x8,x0
-add x8,x8,x6
+add x2,x0,x6
+add x8,x0,x6
 ld1 {v5.d}[0], [x2]
-mov x1,x8
-add x1,x1,x7
+add x1,x8,x7
 ld1 {v5.d}[1], [x1]
 fadd v4.2d,v0.2d,v4.2d
-mov x9,x3
-add x9,x9,x7
-mov x10,x3
-add x10,x10,x6
+add x9,x3,x7
+add x10,x3,x6
 fadd v5.2d,v1.2d,v5.2d
 st1 {v4.d}[1], [x9]
-mov x11,x3
-add x11,x11,x6
+add x11,x3,x6
 st1 {v4.d}[0], [x3]
 add x2,x2,x6
 mov x12,x0
 add x12,x12,x6, LSL #1
 ld1 {v0.d}[0], [x2]
-mov x1,x12
-add x1,x1,x7
+add x1,x12,x7
 ld1 {v0.d}[1], [x1]
-mov x9,x10
-add x9,x9,x7
+add x9,x10,x7
 st1 {v5.d}[0], [x11]
 st1 {v5.d}[1], [x9]
 add x2,x2,x6
@@ -536,61 +505,49 @@ mov x13,x0
 add x13,x13,x6
 add x13,x13,x6, LSL #1
 ld1 {v1.d}[0], [x2]
-mov x1,x13
-add x1,x1,x7
+add x1,x13,x7
 ld1 {v1.d}[1], [x1]
 fadd v0.2d,v2.2d,v0.2d
 mov x14,x3
 add x14,x14,x6, LSL #1
 add x11,x11,x6
 fadd v1.2d,v3.2d,v1.2d
-mov x9,x14
-add x9,x9,x7
+add x9,x14,x7
 st1 {v0.d}[0], [x11]
 st1 {v0.d}[1], [x9]
 mov x15,x3
 add x15,x15,x6
 add x15,x15,x6, LSL #1
 add x11,x11,x6
-mov x9,x15
-add x9,x9,x7
+add x9,x15,x7
 st1 {v1.d}[0], [x11]
 st1 {v1.d}[1], [x9]
 b .ukr0_cases_end
 .ukr0_case9:
 mov x0,x3
 ld1 {v4.d}[0], [x0]
-mov x1,x0
-add x1,x1,x7
+add x1,x0,x7
 ld1 {v4.d}[1], [x1]
 ld1r {v5.2d}, [x4]
-mov x2,x0
-add x2,x2,x6
-mov x8,x0
-add x8,x8,x6
+add x2,x0,x6
+add x8,x0,x6
 ld1 {v6.d}[0], [x2]
-mov x1,x8
-add x1,x1,x7
+add x1,x8,x7
 ld1 {v6.d}[1], [x1]
 fmla v4.2d,v0.2d,v5.2d
-mov x9,x3
-add x9,x9,x7
-mov x10,x3
-add x10,x10,x6
+add x9,x3,x7
+add x10,x3,x6
 fmla v6.2d,v1.2d,v5.2d
 st1 {v4.d}[1], [x9]
-mov x11,x3
-add x11,x11,x6
+add x11,x3,x6
 st1 {v4.d}[0], [x3]
 add x2,x2,x6
 mov x12,x0
 add x12,x12,x6, LSL #1
 ld1 {v0.d}[0], [x2]
-mov x1,x12
-add x1,x1,x7
+add x1,x12,x7
 ld1 {v0.d}[1], [x1]
-mov x9,x10
-add x9,x9,x7
+add x9,x10,x7
 st1 {v6.d}[0], [x11]
 st1 {v6.d}[1], [x9]
 add x2,x2,x6
@@ -598,61 +555,49 @@ mov x13,x0
 add x13,x13,x6
 add x13,x13,x6, LSL #1
 ld1 {v1.d}[0], [x2]
-mov x1,x13
-add x1,x1,x7
+add x1,x13,x7
 ld1 {v1.d}[1], [x1]
 fmla v0.2d,v2.2d,v5.2d
 mov x14,x3
 add x14,x14,x6, LSL #1
 add x11,x11,x6
 fmla v1.2d,v3.2d,v5.2d
-mov x9,x14
-add x9,x9,x7
+add x9,x14,x7
 st1 {v0.d}[0], [x11]
 st1 {v0.d}[1], [x9]
 mov x15,x3
 add x15,x15,x6
 add x15,x15,x6, LSL #1
 add x11,x11,x6
-mov x9,x15
-add x9,x9,x7
+add x9,x15,x7
 st1 {v1.d}[0], [x11]
 st1 {v1.d}[1], [x9]
 b .ukr0_cases_end
 .ukr0_case10:
 mov x0,x3
 ld1 {v4.d}[0], [x0]
-mov x1,x0
-add x1,x1,x7
+add x1,x0,x7
 ld1 {v4.d}[1], [x1]
 ld1r {v5.2d}, [x5]
-mov x2,x0
-add x2,x2,x6
-mov x8,x0
-add x8,x8,x6
+add x2,x0,x6
+add x8,x0,x6
 ld1 {v6.d}[0], [x2]
-mov x1,x8
-add x1,x1,x7
+add x1,x8,x7
 ld1 {v6.d}[1], [x1]
 fmla v0.2d,v4.2d,v5.2d
-mov x9,x3
-add x9,x9,x7
-mov x10,x3
-add x10,x10,x6
+add x9,x3,x7
+add x10,x3,x6
 fmla v1.2d,v6.2d,v5.2d
 st1 {v0.d}[1], [x9]
-mov x11,x3
-add x11,x11,x6
+add x11,x3,x6
 st1 {v0.d}[0], [x3]
 add x2,x2,x6
 mov x12,x0
 add x12,x12,x6, LSL #1
 ld1 {v0.d}[0], [x2]
-mov x1,x12
-add x1,x1,x7
+add x1,x12,x7
 ld1 {v0.d}[1], [x1]
-mov x9,x10
-add x9,x9,x7
+add x9,x10,x7
 st1 {v1.d}[0], [x11]
 st1 {v1.d}[1], [x9]
 add x2,x2,x6
@@ -660,49 +605,40 @@ mov x13,x0
 add x13,x13,x6
 add x13,x13,x6, LSL #1
 ld1 {v1.d}[0], [x2]
-mov x1,x13
-add x1,x1,x7
+add x1,x13,x7
 ld1 {v1.d}[1], [x1]
 fmla v2.2d,v0.2d,v5.2d
 mov x14,x3
 add x14,x14,x6, LSL #1
 add x11,x11,x6
 fmla v3.2d,v1.2d,v5.2d
-mov x9,x14
-add x9,x9,x7
+add x9,x14,x7
 st1 {v2.d}[0], [x11]
 st1 {v2.d}[1], [x9]
 mov x15,x3
 add x15,x15,x6
 add x15,x15,x6, LSL #1
 add x11,x11,x6
-mov x9,x15
-add x9,x9,x7
+add x9,x15,x7
 st1 {v3.d}[0], [x11]
 st1 {v3.d}[1], [x9]
 b .ukr0_cases_end
 .ukr0_case11:
 mov x0,x3
 ld1 {v4.d}[0], [x0]
-mov x1,x0
-add x1,x1,x7
+add x1,x0,x7
 ld1 {v4.d}[1], [x1]
 ld1r {v5.2d}, [x5]
-mov x2,x0
-add x2,x2,x6
-mov x8,x0
-add x8,x8,x6
+add x2,x0,x6
+add x8,x0,x6
 ld1 {v6.d}[0], [x2]
-mov x1,x8
-add x1,x1,x7
+add x1,x8,x7
 ld1 {v6.d}[1], [x1]
 fmul v4.2d,v4.2d,v5.2d
 ld1r {v7.2d}, [x4]
-mov x9,x3
-add x9,x9,x7
+add x9,x3,x7
 fmul v6.2d,v6.2d,v5.2d
-mov x10,x3
-add x10,x10,x6
+add x10,x3,x6
 fmla v4.2d,v0.2d,v7.2d
 fmla v6.2d,v1.2d,v7.2d
 st1 {v4.d}[1], [x9]
@@ -711,13 +647,10 @@ add x2,x2,x6
 mov x11,x0
 add x11,x11,x6, LSL #1
 ld1 {v0.d}[0], [x2]
-mov x1,x11
-add x1,x1,x7
+add x1,x11,x7
 ld1 {v0.d}[1], [x1]
-mov x12,x3
-add x12,x12,x6
-mov x9,x12
-add x9,x9,x7
+add x12,x3,x6
+add x9,x12,x7
 st1 {v6.d}[0], [x10]
 fmul v0.2d,v0.2d,v5.2d
 st1 {v6.d}[1], [x9]
@@ -726,16 +659,14 @@ mov x13,x0
 add x13,x13,x6
 add x13,x13,x6, LSL #1
 ld1 {v1.d}[0], [x2]
-mov x1,x13
-add x1,x1,x7
+add x1,x13,x7
 ld1 {v1.d}[1], [x1]
 fmla v0.2d,v2.2d,v7.2d
 mov x14,x3
 add x14,x14,x6, LSL #1
 add x10,x10,x6
 fmul v1.2d,v1.2d,v5.2d
-mov x9,x14
-add x9,x9,x7
+add x9,x14,x7
 st1 {v0.d}[0], [x10]
 st1 {v0.d}[1], [x9]
 fmla v1.2d,v3.2d,v7.2d
@@ -743,8 +674,7 @@ mov x15,x3
 add x15,x15,x6
 add x15,x15,x6, LSL #1
 add x10,x10,x6
-mov x9,x15
-add x9,x9,x7
+add x9,x15,x7
 st1 {v1.d}[0], [x10]
 st1 {v1.d}[1], [x9]
 .ukr0_cases_end:

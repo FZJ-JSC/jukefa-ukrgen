@@ -1398,11 +1398,24 @@ class signature_emitter:
         dest = self.aregs[dest_key]
         amount = self.bytes_of(comp, op.delta)
         k = self.vector_multiple(amount, comp)
+        terms = dict(amount.terms)
+        once = None
+        if src_key != dest_key and k is None and 1 == len(terms):
+            (factors, coeff), = terms.items()
+            if 1 == len(factors) and factors[0].startswith("stride(") \
+                    and coeff == adt_size(self.ctx.component_dts[comp]):
+                once = factors[0]
         if src_key != dest_key and k is not None:
             # k vectors on from another pointer: one add, as the scheduler counts it
             dt = self.ctx.component_dts[comp]
             lines = [asmops.add(self.gen, dst=dest, reg1=self.aregs[src_key],
                                             reg2=self.vl_multiple(dt, k))]
+        elif once is not None and 1 == len([l for l in asmops.add(
+                self.gen, dst=dest, reg1=self.aregs[src_key], reg2=self.stride_reg(once)).splitlines() if l.strip()]):
+            # a stride on from another pointer (a k:s walk's leapfrog, a
+            # column pointer): one add of the stride's register, not a copy
+            # and an add - where an add takes three registers (not x86's)
+            lines = [asmops.add(self.gen, dst=dest, reg1=self.aregs[src_key], reg2=self.stride_reg(once))]
         else:
             lines = [] if src_key == dest_key else [asmops.mov(self.gen, src=self.aregs[src_key], dst=dest)]
             lines += self.add_bytes(dest, amount, comp)

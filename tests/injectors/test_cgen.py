@@ -1060,6 +1060,106 @@ int main( void )
                                          timeout=120).stdout
                     self.assertIn(f"{tile}: 81 runs, 0 wrong", out, k.symbol)
 
+    def strided_gemm(self, isa, dt, entry, strides, runners, cc):
+        """
+        Kernels on strided operands - gemmsup's: A, B and C unpacked, each at
+        its own strides - called directly against a reference: k of 1, 2, 7,
+        8, 9, 16, 17 (unrolled or not), beta 0 (C NaN: not to be read), 1 and
+        0.5. strides: per matrix its element strides along its two indices
+        (A: m, k; B: k, n; C: m, n) as C expressions of mr, nr and k
+        """
+        from ukrgen.injectors.blis.cgen import asm_symbol
+        fam = family.from_yaml("gemm", dict(entry, family="sup", dtypes=[dt]))
+        built, skipped = build_gemm(isa, f"ukrgen_{isa}", fam)
+        self.assertTrue(built, skipped)
+        ctype = "double" if "FP64" == dt else "float"
+        args = {"k": ("dim_t", "k"), "base(A)": ("const void*", "A"), "base(B)": ("const void*", "B"),
+                "base(C)": ("void*", "C"), "base(alpha)": ("const void*", "&alpha"),
+                "base(beta)": ("const void*", "&beta")}
+        for comp, (i, j) in {"A": ("m", "k"), "B": ("k", "n"), "C": ("m", "n")}.items():
+            for index in (i, j):
+                args[f"stride({comp},{index})"] = ("inc_t", f"s{comp}{index} * (inc_t)sizeof( T )")
+        outs = []
+        for k in built:
+            proto = ", ".join(args[p][0] for p in k.params)
+            call = ", ".join(args[p][1] for p in k.params)
+            src = "#include <math.h>\n#include <stdint.h>\n#include <stdio.h>\n#include <stdlib.h>\n" \
+                  "typedef int64_t dim_t;\ntypedef int64_t inc_t;\n" + \
+                  vl_helpers([k], make_generator(isa)) + f"""
+typedef {ctype} T;
+#define ABS( x ) ( ( x ) < 0 ? -( x ) : ( x ) )
+void {asm_symbol(k)}( {proto} );
+int main( void )
+{{
+    const dim_t mr = {c_expr(k.mr, ctype, k.vl_fn)}, nr = {c_expr(k.nr, ctype, k.vl_fn)};
+    static const dim_t ks[] = {{ 1, 2, 7, 8, 9, 16, 17 }};
+    static const T betas[] = {{ 0, 1, 0.5 }};
+    int runs = 0, bad = 0;
+    for ( int ik = 0; ik < 7; ik++ )
+    for ( int ib = 0; ib < 3; ib++ )
+    {{
+        const dim_t k = ks[ik];
+        const inc_t sAm = {strides["A"][0]}, sAk = {strides["A"][1]};
+        const inc_t sBk = {strides["B"][0]}, sBn = {strides["B"][1]};
+        const inc_t sCm = {strides["C"][0]}, sCn = {strides["C"][1]};
+        T* A = calloc( ( mr - 1 ) * sAm + ( k - 1 ) * sAk + 1, sizeof( T ) );
+        T* B = calloc( ( k - 1 ) * sBk + ( nr - 1 ) * sBn + 1, sizeof( T ) );
+        T* C = calloc( ( mr - 1 ) * sCm + ( nr - 1 ) * sCn + 1, sizeof( T ) );
+        T* R = calloc( mr * nr, sizeof( T ) );
+        const T alpha = 1.5, beta = betas[ib];
+        for ( dim_t i = 0; i < mr; i++ ) for ( dim_t p = 0; p < k; p++ )
+            A[i * sAm + p * sAk] = ( T )( ( i * 3 + p * 5 ) % 7 - 3 );
+        for ( dim_t p = 0; p < k; p++ ) for ( dim_t j = 0; j < nr; j++ )
+            B[p * sBk + j * sBn] = ( T )( ( p * 2 + j * 7 ) % 5 - 2 );
+        for ( dim_t i = 0; i < mr; i++ ) for ( dim_t j = 0; j < nr; j++ )
+        {{
+            T sum = 0, c0 = ( T )( ( i + 2 * j ) % 5 - 2 );
+            for ( dim_t p = 0; p < k; p++ ) sum += A[i * sAm + p * sAk] * B[p * sBk + j * sBn];
+            R[i + j * mr] = alpha * sum + ( beta != 0 ? beta * c0 : 0 );
+            C[i * sCm + j * sCn] = beta != 0 ? c0 : ( T )NAN;
+        }}
+        {asm_symbol(k)}( {call} );
+        for ( dim_t i = 0; i < mr; i++ ) for ( dim_t j = 0; j < nr; j++ )
+        {{
+            const T got = C[i * sCm + j * sCn], want = R[i + j * mr];
+            if ( !( ABS( got - want ) <= 1e-3 * ( 1 + ABS( want ) ) ) )
+            {{
+                if ( bad < 4 ) printf( "k %ld beta %g C[%ld,%ld]=%g want %g\\n", ( long )k, ( double )beta,
+                                       ( long )i, ( long )j, ( double )got, ( double )want );
+                bad++;
+            }}
+        }}
+        runs++;
+        free( A ); free( B ); free( C ); free( R );
+    }}
+    printf( "%d runs, %d wrong\\n", runs, bad );
+    return 0;
+}}
+"""
+            outs += [(k.symbol, out) for out in self.run_c(isa, src, [k], runners, [], cc=cc)]
+        return outs
+
+    def test_strided_operands(self):
+        # gemmsup's shape on RVV: A column-major at a column stride, B row-major
+        # at a row stride, C column-major at a column stride - A's and B's
+        # registers walked along k by the stride (two each, taken in turn or
+        # leapfrogging), not a column pointer per offset
+        cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
+        if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
+            self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
+        runners = [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"] for v in (128, 256)]
+        strides = {"A": ("1", "mr + 3"), "B": ("nr + 5", "1"), "C": ("1", "mr + 2")}
+        for dt in ("FP32", "FP64"):
+            for pattern_a, pattern_b in (("rotate", "rotate"), ("blocked:2", "blocked:12")):
+                with self.subTest(dt=dt, pattern=pattern_b):
+                    entry = {"preset": "gemm_fma_vf", "vectorize": "m", "m": [2], "n": [12], "unroll": 8,
+                             "max-addr-regs": {"A": 2, "B": 2},
+                             "addr-pattern": {"A": pattern_a, "B": pattern_b},
+                             "params": {"A-layout": ["m:c", "k:s"], "B-layout": ["k:s", "n:c"],
+                                        "C-layout": ["m:c", "n:s"]}}
+                    for symbol, out in self.strided_gemm("rvv", dt, entry, strides, runners, cc):
+                        self.assertIn("21 runs, 0 wrong", out, symbol)
+
     @needs_tools
     def test_split_family_epilogue_fits(self):
         # 2,4,4: the FMA part's 16 accumulators live through the ZA part's
