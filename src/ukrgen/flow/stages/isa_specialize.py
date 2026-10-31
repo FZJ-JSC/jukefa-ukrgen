@@ -41,11 +41,13 @@ class isa_specialize_stage(stage):
                             "found it - an engine it covers neither switched nor its switches' "
                             "clobbers claimed")
         self.params["max-offset-registers"] = stage_param(
-                value=None, default="4", required=False,
+                value=None, default="0", required=False,
                 description="General registers for offset polynomials an address move needs - a "
                             "strided walk's row change, rs - (n - R) cs - each computed once, an add "
                             "of it where the walk moves; the moves used most, saving the most "
-                            "instructions, first (0: none - every move spelled out)")
+                            "instructions, first (0, the default: none - every move spelled out, the general "
+                            "registers left to address registers and column pointers; auto: 4, 1 on "
+                            "x86's 16)")
         self.params["max-imm-offset"] = stage_param(
                 value=None, required=False,
                 description="Largest immediate offset in bytes, either sign, a load or store "
@@ -70,6 +72,16 @@ class isa_specialize_stage(stage):
         if value < 1:
             raise stage_error(f"--max-imm-offset {limit} is {value} bytes for this kernel")
         return value
+
+    def offset_budget(self, ctx) -> int:
+        """
+        --max-offset-registers: auto - 4 where the ISA has 31 general
+        registers, 1 on x86's 16
+        """
+        value = str(self.params["max-offset-registers"].value or "0")
+        if "auto" != value:
+            return int(value)
+        return 1 if ".avx." in type(ctx.gen).__module__ else 4
 
     def assumed_state(self) -> dict[str, str]:
         """
@@ -98,7 +110,7 @@ class isa_specialize_stage(stage):
                 sp = signature_specializer(self.context, program)
                 sp.max_imm_offset = self.imm_limit()
                 sp.assumed = self.assumed_state()
-                sp.program.offset_registers = int(self.params["max-offset-registers"].value or 0)
+                sp.program.offset_registers = self.offset_budget(self.context)
                 sp.specialize()
         except specialization_error as err:
             raise stage_error(f"specializing for the ISA: {err}") from err

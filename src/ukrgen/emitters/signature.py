@@ -687,7 +687,14 @@ class signature_emitter:
             del self.phys[key]
 
     def greg(self):
-        return self.gen.greg(self.rt.reserve_any_reg("greg"))
+        try:
+            return self.gen.greg(self.rt.reserve_any_reg("greg"))
+        except IndexError:
+            raise specialization_error(
+                "no general register left - the parameters, A's, B's and C's address registers, "
+                "their strides, a loop's counter and the offset registers (--max-offset-registers) "
+                "take them all: fewer address registers (max-addr-regs), a smaller microtile, or "
+                "a layout with fewer run-time strides fit") from None
 
     # --- addresses ---------------------------------------------------------
 
@@ -733,6 +740,12 @@ class signature_emitter:
         budget = self.program.offset_registers
         if not budget:
             return set()
+        deferred = set(self.deferred) | set(self.keep_params)
+        def canonical(name):
+            # C's storages' alias components take C's parameters: stride(Cr,m)
+            # is stride(C,m) (parameters())
+            comp = self.param_comp(name)
+            return name.replace(f"({comp}", "(C", 1) if comp in self.aliases else name
         found = {}
         def visit(ops, weight):
             for op in ops:
@@ -744,6 +757,13 @@ class signature_emitter:
                 comp = op.indices[0].component
                 amount = self.bytes_of(comp, op.delta)
                 if not all(1 == len(f) and f[0].startswith("stride(") for f, _ in amount.terms if f):
+                    continue
+                # a stride passed on the stack and deferred to the dispatch
+                # (AArch64's and RVV's ninth argument on: C's) isn't held in
+                # setup: computing one there would keep it from entry and move
+                # where the dispatch finds the parameters (NEON's general C
+                # stored transposed)
+                if any(canonical(f[0]) in deferred for f, _ in amount.terms if f):
                     continue
                 cost = self.offsets.offset_cost(amount, comp)
                 if cost > 1:

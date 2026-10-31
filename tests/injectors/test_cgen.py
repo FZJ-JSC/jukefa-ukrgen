@@ -1192,6 +1192,43 @@ int main( void )
                         for symbol, out in self.strided_gemm("rvv", dt, entry, strides, runners, cc):
                             self.assertIn("21 runs, 0 wrong", out, symbol)
 
+    def test_strided_operands_other_isas(self):
+        # the same on SVE (256 and 512 bits), NEON and AVX2 (natively): the
+        # vectors along m, unroll 4. NEON's lanes need B contiguous along n:
+        # its general B through broadcasts (gemm_fma_bc); its lane kernels fit
+        # at unroll 2. AVX2's general C waits: x86's 16 general registers
+        # don't hold its parameters, walks and C's two strides
+        sve = ["aarch64-linux-gnu-gcc", "-static", "-march=armv8.2-a+sve"]
+        neon = ["aarch64-linux-gnu-gcc", "-static"]
+        isas = {
+            "sve": (sve, [[QEMU, "-cpu", f"max,sve{v}=on"] for v in (256, 512)],
+                    {"row-major B": ("gemm_fma_bc_vindex", 4), "general B": ("gemm_fma_bc_vindex", 4),
+                     "general C": ("gemm_fma_bc_vindex", 4)}),
+            "neon": (neon, [[QEMU, "-cpu", "max"]],
+                     {"row-major B": ("gemm_fma_lane", 2), "general B": ("gemm_fma_bc", 4),
+                      "general C": ("gemm_fma_lane", 2)}),
+            "avx256": (["gcc", "-mavx2", "-mfma"], [[]],
+                       {"row-major B": ("gemm_fma_bc_blocks", 4), "general B": ("gemm_fma_bc_blocks", 4)}),
+        }
+        layouts = {
+            "row-major B": ({"B-layout": ["k:s", "n:c"]}, {"B": ("nr + 5", "1"), "C": ("1", "mr + 2")}),
+            "general B": ({"B-layout": ["k:s", "n:s"]}, {"B": ("2 * nr + 5", "2"), "C": ("1", "mr + 2")}),
+            "general C": ({"C-layout": ["m:s", "n:s"]}, {"B": ("nr + 5", "1"), "C": ("2", "2 * mr + 3")}),
+        }
+        for isa, (cc, runners, cases) in isas.items():
+            if not shutil.which(cc[0]) or (runners[0] and not shutil.which(runners[0][0])):
+                continue
+            for name, (preset, unroll) in cases.items():
+                layout, strides = layouts[name]
+                with self.subTest(isa=isa, layout=name):
+                    params = {"A-layout": ["m:c", "k:s"], "B-layout": ["k:s", "n:c"], "C-layout": ["m:c", "n:s"]}
+                    params.update(layout)
+                    entry = {"preset": preset, "vectorize": "m", "m": [2], "n": [4], "unroll": unroll,
+                             "schedule": ["RAW:data:vreg:::4"], "params": params}
+                    for symbol, out in self.strided_gemm(isa, "FP64", entry, dict(strides, A=("1", "mr + 3")),
+                                                         runners, cc):
+                        self.assertIn("21 runs, 0 wrong", out, symbol)
+
     @needs_tools
     def test_split_family_epilogue_fits(self):
         # 2,4,4: the FMA part's 16 accumulators live through the ZA part's
