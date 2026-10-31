@@ -65,6 +65,12 @@ class model_stage(stage):
                                 f"and R, its address registers: blocked:mn/R, blocked:2*n/R) "
                                 f"or phase (one register per STO and direction)",
                     required=False)
+            self.params[f"{comp}-column-pointers"] = stage_param(
+                    value=None, default=None, required=False,
+                    description=f"Pointers the specializer may add per {comp} address register "
+                                f"for accesses at run-time strides (C's columns): unset the "
+                                f"ISA's default (4, 2 on x86), 0 none - the pattern's registers "
+                                f"walk to them (phase+rotate's, in their place)")
 
         # Accumulators get one register per tile they accumulate, counted
         # automatically: fewer would mean spilling them, which needs memory
@@ -144,7 +150,11 @@ class model_stage(stage):
                                              kernel_values(self.context.dims, esize, count))
             except ValueError as err:
                 raise stage_error(f"--{comp}-addr-pattern: {err}") from err
-            addressing[comp] = addressing_plan(count, pattern)
+            pointers = self.params[f"{comp}-column-pointers"].value
+            if pointers is not None and not (str(pointers).isdigit()):
+                raise stage_error(f"--{comp}-column-pointers must be a number, 0 or more, got {pointers}")
+            addressing[comp] = addressing_plan(count, pattern,
+                                               None if pointers is None else int(pointers))
 
         data_regs = {}
         for comp in self.data_components:

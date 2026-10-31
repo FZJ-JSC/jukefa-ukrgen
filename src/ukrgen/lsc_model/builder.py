@@ -87,9 +87,14 @@ class addressing_plan:
 
     :param registers: number of address registers
     :param pattern: which register an access uses
+    :param column_pointers: pointers the specializer may add per register for
+        accesses at run-time strides (C's columns); None the ISA's default, 0
+        none - the pattern's registers walk to them (phase+rotate's in their
+        place)
     """
     registers : int = 1
     pattern : addr_pattern = field(default_factory=lambda: addr_pattern("rotate"))
+    column_pointers : int | None = None
 
 
 #: scratch registers a data movement may name (its steps' tags)
@@ -199,6 +204,10 @@ class program_builder:
         self.phases: dict[str, list] = {}
         #: how many (sto, direction) phases each component's accesses fall into
         self._phase_counts: dict[str, int] = {}
+        #: the STOs whose phases phase_count counts: a case's while it's built
+        #: (the cases are alternatives - only one case's phases share the
+        #: registers), else the part's
+        self._phase_scope: list[str] | None = None
         self.addr_setup: dict[tuple[str, int], int] = {}
 
     # --- registers ---------------------------------------------------------
@@ -525,7 +534,7 @@ class program_builder:
         if comp in self._phase_counts:
             return self._phase_counts[comp]
         n = 0
-        for sto in self.stos:
+        for sto in (self.stos if self._phase_scope is None else self._phase_scope):
             for (entry, touched), access in self.flow.items():
                 if entry != sto:
                     continue
@@ -1419,11 +1428,19 @@ class program_builder:
             for case in branch.cases:
                 self.holder = dict(holder)
                 self.phases = {c: list(p) for c, p in phases.items()}
+                # its own phases split the registers (phase+rotate): C's load
+                # and store in the general case, not every case's together
+                self._phase_scope = [s for b in case.blocks for s in b.stos]
+                self._phase_counts = {}
                 cases.append(ir_case(label=case.label, when=dict(case.when),
                                      blocks=[self.build_block(b) for b in case.blocks]))
+            self._phase_scope = None
+            self._phase_counts = {}
 
         return ir_program(blocks=blocks, offsets=self.db, strides=self.strides,
                           addr_setup=self.addr_setup, registers=dict(self.used),
+                          column_pointers={c: p.column_pointers for c, p in self.addressing.items()
+                                           if p.column_pointers is not None},
                           cases=cases, vector_indices=dict(self.vidx))
 
 @dataclass

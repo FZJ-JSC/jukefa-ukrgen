@@ -131,7 +131,11 @@ case of their own. `docs/BLISGEN_PLAN.md` has the details of each.
   cycles, and reports the cycles a block takes (`--print-schedule`).
 - Address registers by default: one each for A and B (`rotate`), two for C
   (`phase`: loads on one, stores on the other); the specializer keeps up to
-  four column pointers per base, one more walking the rest.
+  four column pointers per base, one more walking the rest - a multiplier on
+  the address registers. `column-pointers: {C: 0}` keeps none: the pattern's
+  registers walk to C's columns, from the one nearest - `phase+rotate` and
+  `phase+blocked:N` split a component's registers between its phases (C's
+  loads and stores, counted per case) and rotate within each share.
 - Strided A and B (gemmsup's shapes - `k:s`, a general stride `k:s, n:s`):
   their address registers walk forward along k by the stride, a register
   computed from whichever is fewest strides away (`blocked` registers, taken

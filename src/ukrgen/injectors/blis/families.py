@@ -105,7 +105,8 @@ KEYS = {"loop-order": "order", "resolve-order": "resolve-order",
         "vectorize": "tileop-vectorize", "max-tiles": "max-tiles"}
 #: per component: {component: value}
 PER_COMPONENT = {"max-data-regs": "{c}-max-data-regs", "max-preload": "{c}-max-preload",
-                 "max-addr-regs": "{c}-addr-regs", "addr-pattern": "{c}-addr-pattern"}
+                 "max-addr-regs": "{c}-addr-regs", "addr-pattern": "{c}-addr-pattern",
+                 "column-pointers": "{c}-column-pointers"}
 #: the loop a family's unroll is along
 UNROLL = {"gemm": "k", "packm": "n"}
 

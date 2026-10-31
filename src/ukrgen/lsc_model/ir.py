@@ -153,6 +153,9 @@ class ir_program:
     addr_setup : dict[tuple[str, int], int]
     registers : dict[str, tuple[rgt, int]]
     cases : list[ir_case] = field(default_factory=list)
+    #: column pointers the specializer may add per address register, by
+    #: component (--COMP-column-pointers); unset the ISA's default
+    column_pointers : dict[str, int] = field(default_factory=dict)
     #: the index each component's vector registers run along
     vector_indices : dict[str, str] = field(default_factory=dict)
     #: components whose registers are groups: how many registers, the method

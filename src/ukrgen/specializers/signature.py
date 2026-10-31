@@ -179,12 +179,46 @@ class signature_specializer:
                                   governing predicates of SVE and RVV
     """
 
-    def column_pointers(self) -> int:
+    def walk_to(self, comp: str, reg: int, strided: dict, inserted: list, tile) -> None:
         """
-        Column pointers kept per component and base: fewer where the ISA has
-        few general registers - x86's 16 hold A's and B's pointers, the
-        loop's counter and the parameters too
+        An access's address register walked to its offset at run-time strides
+        - from whichever of the component's registers is the fewest strides
+        away (registers taken in turn leapfrog: one add of a stride each) - not
+        a column pointer: along the loop's own index (k:s), or where the
+        component has none (--COMP-column-pointers 0)
         """
+        def single(f):
+            return 1 == len(f) and f[0].startswith(f"stride({comp},")
+        target = self.positions[(comp, reg)] + sym._make(strided)
+        def strides_away(r):
+            d = dict((target - self.positions[(comp, r)]).terms)
+            if not all(single(f) for f in d if f):
+                return float("inf")
+            return sum(abs(c) for f, c in d.items() if f)
+        bases = [r for (c, r) in self.program.addr_setup if c == comp and (c, r) in self.positions]
+        source = min(bases or [reg], key=strides_away)
+        move = target - self.positions[(comp, source)]
+        if dict(move.terms) or source != reg:
+            # (source first, then the register set: dest = src + delta)
+            inserted.append(lsc_addr_compute(comp, source, reg, move, tile))
+            walked = self.walked_by
+            walked[(comp, reg)] = walked.get((comp, reg), sym.const(0)) + \
+                (target - self.positions[(comp, reg)])
+            self.walked_by = walked
+            self.positions[(comp, reg)] = target
+            # column pointers computed from it were placed from where it was:
+            # computed again, from here, on their next use
+            self.pointers = {k for k in self.pointers if k[:2] != (comp, reg) or "walk" == k[2]}
+
+    def column_pointers(self, comp: str | None = None) -> int:
+        """
+        Column pointers kept per component and base: the component's own
+        (--COMP-column-pointers), else fewer where the ISA has few general
+        registers - x86's 16 hold A's and B's pointers, the loop's counter and
+        the parameters too
+        """
+        if comp in self.program.column_pointers:
+            return self.program.column_pointers[comp]
         if self._column_pointers is None:
             # the general registers the tracker allocates, reserved ones included
             gregs = self.ctx.gen.get_reg_tracker().available_reg_count("greg")
@@ -198,6 +232,9 @@ class signature_specializer:
         #: the state the caller guarantees (--assume-state)
         self.assumed = {}
         self._column_pointers = None
+        #: adapting a case's last block: its last section's registers are read
+        #: by nothing after it (the kernel returns; the next case starts afresh)
+        self.final_block = False
         #: the loop index of the block being adapted (None: straight-line)
         self.loop_index = None
         self.ctx = ctx
@@ -257,23 +294,16 @@ class signature_specializer:
         walking = along is not None and any(f and along == f[0] for f, _ in strides.get(self.loop_index, sym.const(0)).terms) \
             and strided and all(single(f) for f in strided) and "lane" not in op.properties
         if walking:
-            target = self.positions[(comp, reg)] + sym._make(strided)
-            def strides_away(r):
-                d = dict((target - self.positions[(comp, r)]).terms)
-                if not all(single(f) for f in d if f):
-                    return float("inf")
-                return sum(abs(c) for f, c in d.items() if f)
-            bases = [r for (c, r) in self.program.addr_setup if c == comp and (c, r) in self.positions]
-            source = min(bases or [reg], key=strides_away)
-            move = target - self.positions[(comp, source)]
-            if dict(move.terms) or source != reg:
-                # (source first, then the register set: dest = src + delta)
-                inserted.append(lsc_addr_compute(comp, source, reg, move, scalar_tile))
-                walked = self.walked_by
-                walked[(comp, reg)] = walked.get((comp, reg), sym.const(0)) + \
-                    (target - self.positions[(comp, reg)])
-                self.walked_by = walked
-                self.positions[(comp, reg)] = target
+            self.walk_to(comp, reg, strided, inserted, scalar_tile)
+            rel = {f: c for f, c in rel.items() if not f}
+            strided = {}
+        if strided and any(c < 0 for c in strided.values()) \
+                and all(single(f) for f in strided) and "lane" not in op.properties:
+            # the access behind its register - which walked past its column (a
+            # column's second vector after the last column's first), or which
+            # phase+rotate gave a later column first: walked there, from the
+            # register nearest it; column pointers only ever reach forward
+            self.walk_to(comp, reg, strided, inserted, scalar_tile)
             rel = {f: c for f, c in rel.items() if not f}
             strided = {}
         if strided:
@@ -320,9 +350,17 @@ class signature_specializer:
                 if 1 == len(factors) and count in scales and plain:
                     op.properties["scaled_index"] = (factors[0], count)
                     strided = {}
+            if strided and 0 == self.column_pointers(comp) and all(single(f) for f in strided) \
+                    and "lane" not in op.properties:
+                # no column pointers for this component (--COMP-column-pointers
+                # 0: its pattern's registers - phase+rotate's - in their place):
+                # its register walks there
+                self.walk_to(comp, reg, strided, inserted, scalar_tile)
+                rel = {f: c for f, c in rel.items() if not f}
+                strided = {}
             key = (comp, reg, tuple(sorted(strided.items())))
             columns = [k for k in self.pointer_regs if k[:2] == (comp, reg) and "walk" != k[2]]
-            if strided and key not in self.pointer_regs and len(columns) >= self.column_pointers():
+            if strided and key not in self.pointer_regs and len(columns) >= self.column_pointers(comp):
                 # more columns than pointers kept for them (general registers
                 # are few - RISC-V's C of 14 columns): one pointer walks
                 # between the rest, moved by the difference, computed from
@@ -579,6 +617,7 @@ class signature_specializer:
     def adapt_block(self, block: ir_block):
         self.loop_index = block.loop_index
         rebased = {}
+        filled = [s for s in ("prologue", "body", "epilogue", "tail", "subtail") if getattr(block, s)]
         for section in ("prologue", "body", "epilogue", "tail", "subtail"):
             ops = []
             for op in getattr(block, section):
@@ -589,6 +628,12 @@ class signature_specializer:
             # the next iteration: one add a register, placed by the schedulers
             walked = self.walked_by
             advances = self.loop_advances(block) if section in ("body", "epilogue") else {}
+            # a case's last section: moving its registers back is dead - the
+            # kernel returns after it (phase+rotate's walks, C's walked columns)
+            if self.final_block and filled and section == filled[-1] and not advances:
+                for key, moved in walked.items():
+                    self.positions[key] = self.positions[key] - moved
+                walked = {}
             for key in list(walked) + [k for k in advances if k not in walked]:
                 comp, reg = key
                 moved = walked.get(key, sym.const(0))
@@ -683,8 +728,11 @@ class signature_specializer:
         start = dict(self.positions)
         for case in self.program.cases:
             self.positions = dict(start)
-            for block in case.blocks:
+            for i, block in enumerate(case.blocks):
+                # the case's last block: nothing reads its registers after it
+                self.final_block = len(case.blocks) - 1 == i
                 self.adapt_block(block)
+            self.final_block = False
         # the state the ISA's setup leaves (for the narrowest element type, as
         # the emitter sets it up), lsc_states setting more: each access's
         # signatures those whose requirements hold where it is - decided here,
