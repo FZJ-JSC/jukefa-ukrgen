@@ -547,20 +547,35 @@ int main( void )
         for out in outs:
             self.assertIn("32 runs, 32 by generated cases, 0 wrong", out)
 
-    def test_packm_sme_configs(self):
+    # one build a method: a parallel runner spreads them (one method was 55 s)
+    def test_packm_sme_configs_sme_fp64(self):
+        self.check_packm_sme_configs("sme/fopa_bc_vindex", "FP64")
+
+    def test_packm_sme_configs_sme_fp32(self):
+        self.check_packm_sme_configs("sme/fopa_bc_vindex", "FP32")
+
+    def test_packm_sme_configs_smesve_fp64(self):
+        self.check_packm_sme_configs("smesve/fopa_fma_split", "FP64")
+
+    def test_packm_sme_configs_smesve_fp32(self):
+        self.check_packm_sme_configs("smesve/fopa_fma_split", "FP32")
+
+    def check_packm_sme_configs(self, only_cfg, only_dt):
         # the SME configs pack across the grain through ZA (ztrans, sizes in
         # tiles): the Apple-safe one (sme-FA64 off: no scatters in streaming
         # mode) with no scatter case left, LX2's (FA64 declared) with its
         # scatters for other row counts; their ztrans through BLIS's dispatch
         # against the reference under qemu
-        import copy
         from ukrgen.injectors.blis.families import configuration, build_packm
         from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
         root = os.path.join(HERE, "..", "..", "ukrconfig")
         for cfgdir, scatters in (("sme/fopa_bc_vindex", False), ("smesve/fopa_fma_split", True)):
             for dt, f in (("FP64", "dpackm"), ("FP32", "spackm")):
+                if (cfgdir, dt) != (only_cfg, only_dt):
+                    continue
                 cfg = configuration.from_files({("packm", dt): os.path.join(root, cfgdir, f + ".yaml")})
                 built, skipped = build_packm(cfg.isa, cfg.name, cfg.families[0])
+                full_built = built
                 names = {k.symbol.rsplit("_", 1)[1] for k in built}
                 with self.subTest(config=cfgdir, f=f):
                     self.assertTrue({"ztrans1v", "ztrans2v", "ztrans3v", "ztrans4v"} <= names)
@@ -573,10 +588,11 @@ int main( void )
                  "{ 3 * vl, 3 * vl, 5 * vl, 5 * vl, 1, 0 }, { 4 * vl, 4 * vl, vl + 2, 2 * vl, 1, 1 }, "
                  "{ 4 * vl, 4 * vl, 9 * vl, 9 * vl, 1, 0 }")
         for cfgdir, dt, f in (("sme/fopa_bc_vindex", "FP64", "dpackm"), ("smesve/fopa_fma_split", "FP32", "spackm")):
-            cfg = configuration.from_files({("packm", dt): os.path.join(root, cfgdir, f + ".yaml")})
-            fam = copy.deepcopy(cfg.families[0])
-            fam.cases = [c for c in fam.cases if "ztrans" == c[0]]
-            built, skipped = build_packm(cfg.isa, cfg.name, fam)
+            if (cfgdir, dt) != (only_cfg, only_dt):
+                continue
+            # the build's ztrans kernels - a case's kernels don't depend on the
+            # others (byte-identical built alone): no second build
+            built = [k for k in full_built if k.symbol.rsplit("_", 1)[1].startswith("ztrans")]
             ctype, ch = ("float", "s") if "FP32" == dt else ("double", "d")
             helper = vl_helpers(built, make_generator("sme")).replace('"smstart', '".arch_extension sme\\n\\tsmstart', 1)
             src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + helper + \
@@ -1281,7 +1297,14 @@ int main( void )
             self.assertIn("81 runs, 0 wrong", out, k.symbol)
 
     @needs_tools
-    def test_split_family_n(self):
+    def test_split_family_n_fp64(self):
+        self.check_split_family_n("FP64")
+
+    @needs_tools
+    def test_split_family_n_fp32(self):
+        self.check_split_family_n("FP32")
+
+    def check_split_family_n(self, only_dt):
         # the split mirrored (smesve/fopa_fma_split_n): outer products for NR's
         # first part (ZA tiles of columns), FMAs - vectors along m, C
         # column-major - for the rest; the configs' defaults, 4x2+2 doubles and
@@ -1289,6 +1312,8 @@ int main( void )
         cc = ["aarch64-linux-gnu-gcc", "-static", "-Wa,-march=armv9-a+sme+sme-f64f64"]
         root = os.path.join(HERE, "..", "..", "ukrconfig", "smesve", "fopa_fma_split_n")
         for dt, ctype, f, nr in (("FP64", "double", "dgemm", "2*VL + 2"), ("FP32", "float", "sgemm", "2*VL + 2")):
+            if dt != only_dt:
+                continue
             cfg = configuration.from_files({("gemm", dt): os.path.join(root, f + ".yaml")})
             fam = cfg.families[0]
             built, skipped = build_gemm(cfg.isa, cfg.name, fam)

@@ -4,6 +4,7 @@ Matching of mathematical operations
 from __future__ import annotations
 
 import logging
+import functools
 import itertools
 from copy import deepcopy,copy
 from typing import Optional,Iterator
@@ -539,6 +540,7 @@ TF_DEGENERACIES = {
     transformation.TRANSPOSE : {transformation.NONE},
 }
 
+@functools.lru_cache(maxsize=None)
 def is_transformation_weak(opd : operand_ref,
                            tf : transformation) -> bool:
     """
@@ -686,6 +688,37 @@ class req_solution_step:
     name_mapping : dict[str,str]
     index_mapping : dict[str,str]
 
+@functools.lru_cache(maxsize=None)
+def _hw_transforms(hw_ast: ast_node) -> tuple:
+    """
+    The transformations of an HW AST worth matching - none weak, the result
+    dimensionally valid - in the order transform_and_match tries them, each
+    with its simplified logical AST. A property of the HW operation alone:
+    computed once however many requirements it's matched against (it was
+    each time - 1.2M weak checks a family's build)
+
+    :return: ((operand name, transformation) pairs, simplified AST) per
+             transformation worth matching
+    """
+    tf_options = list(transformation)
+    all_operands = get_operands(hw_ast)
+    out = []
+    for perm in itertools.product(tf_options, repeat=len(all_operands)):
+        trans_dict = {op_name: [tf] for op_name, tf in zip(all_operands, perm)}
+
+        if has_weak_transformations(hw_ast, trans_dict):
+            continue
+
+        logical_hw = transform_ast(hw_ast, trans_dict)
+        simplified_hw = simplify_ast(logical_hw)
+
+        # 2. SHAPE VALIDATION: Reject impossible HW physics (Fake DOTA)
+        if not simplified_hw.is_dimensionally_valid():
+            continue
+        out.append((tuple(zip(all_operands, perm)), simplified_hw))
+    return tuple(out)
+
+
 def transform_and_match(req: ast_node, hw_ast: ast_node) -> Iterator[req_solution_step]:
     """
     Generator that transforms an HW AST and yields the transformed ast if
@@ -699,22 +732,9 @@ def transform_and_match(req: ast_node, hw_ast: ast_node) -> Iterator[req_solutio
         raise ValueError(
                 f"HW AST root op must be MOVE, instead it's {hw_ast.op.name}")
 
-    tf_options = list(transformation)
-    all_operands = get_operands(hw_ast)
-    
-
-    for perm in itertools.product(tf_options, repeat=len(all_operands)):
-        trans_dict = {op_name: [tf] for op_name, tf in zip(all_operands, perm)}
-
-        if has_weak_transformations(hw_ast, trans_dict):
-            continue
-
-        logical_hw = transform_ast(hw_ast, trans_dict)
-        simplified_hw = simplify_ast(logical_hw)
-        
-        # 2. SHAPE VALIDATION: Reject impossible HW physics (Fake DOTA)
-        if not simplified_hw.is_dimensionally_valid():
-            continue
+    for items, simplified_hw in _hw_transforms(hw_ast):
+        # each step its own dict: the cached transformations are shared
+        trans_dict = {op_name: [tf] for op_name, tf in items}
 
         seen = set()
         for name_mapping, index_mapping in iter_matches(req, simplified_hw, {}, {}):
