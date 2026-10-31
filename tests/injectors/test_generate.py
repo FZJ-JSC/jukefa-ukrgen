@@ -114,6 +114,37 @@ class test_generate(unittest.TestCase):
                                             ("packm", "FP32"): write("spackm.yaml", "{kc: 256}")})
             self.assertEqual(256, cfg.blocksizes["FP32"]["kc"])
 
+    def test_config_flags(self):
+        """make_defs.mk's flags: the ISA's default from the table, or the
+        generator's where the configuration turns an ISA parameter on"""
+        from ukrgen.injectors.blis.generate import config_flags
+
+        def cfg_for(isa, **params):
+            fam = family.from_yaml("gemm", {"family": "vm", "dtypes": ["FP64"],
+                                            "params": dict(VM, **params), "m": [1], "n": [2]})
+            return configuration(isa=isa, name=f"ukrgen_{isa}", families=[fam])
+        # nothing asked: the table's default, rvv071's -mepi included
+        self.assertEqual("-march=rv64gcv", config_flags(cfg_for("rvv")))
+        self.assertEqual("-mepi", config_flags(cfg_for("rvv071")))
+        # an extension on: the generator's own spelling of it
+        self.assertEqual("-march=rv64gcv_zba", config_flags(cfg_for("rvv", **{"rvv-ZBA": "on"})))
+        self.assertEqual("-march=rv64gcv", config_flags(cfg_for("rvv", **{"rvv-ZBA": "off"})))
+        # an encoding feature: off is the unprefixed forms (-mepi)
+        self.assertEqual("-mepi",
+                         config_flags(cfg_for("rvv071", **{"rvv071-XTheadVector": "off"})))
+        self.assertEqual("-march=rv64gc_xtheadvector",
+                         config_flags(cfg_for("rvv071", **{"rvv071-XTheadVector": "on"})))
+        # one family's spelling is every family's: a disagreement is refused
+        on = family.from_yaml("gemm", {"family": "vm", "dtypes": ["FP64"],
+                                       "params": dict(VM, **{"rvv071-XTheadVector": "on"}),
+                                       "m": [1], "n": [2]})
+        off = family.from_yaml("gemm", {"family": "vm", "dtypes": ["FP64"],
+                                        "params": dict(VM, **{"rvv071-XTheadVector": "off"}),
+                                        "m": [1], "n": [3]})
+        cfg = configuration(isa="rvv071", name="ukrgen_rvv071", families=[on, off])
+        with self.assertRaisesRegex(ValueError, "the families disagree"):
+            config_flags(cfg)
+
     def test_blocksizes_without_kernels(self):
         """a data type's blocksizes with no kernel of it: said, not dropped"""
         fam = family.from_yaml("gemm", {"family": "vm", "dtypes": ["FP64"], "params": VM,

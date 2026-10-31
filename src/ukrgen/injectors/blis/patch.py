@@ -106,8 +106,11 @@ def patch_blis(blis_dir: str, out_dir: str, cfg: configuration, author: str,
     name = cfg.name
     write(f"config/{name}/bli_kernel_defs_{name}.h",
           Template(T.files["config/${configname}/bli_kernel_defs_${configname}.h"]).render(**params))
+    # the flags the configuration's ISA parameters ask for, else the ISA's
+    # default: -march=rv64gcv where rvv-ZBA is on
+    defs = dict(params, archflags=made.get("archflags") or params["archflags"])
     write(f"config/{name}/make_defs.mk",
-          Template(T.files["config/${configname}/make_defs.mk"]).render(**params))
+          Template(T.files["config/${configname}/make_defs.mk"]).render(**defs))
     protos = "".join(f"GEMM_UKR_PROT( {'float' if 'FP32' == k.dtype else 'double'}, "
                      f"{'s' if 'FP32' == k.dtype else 'd'}, {k.symbol[5:]} )\n"
                      for k in made["kernels"])

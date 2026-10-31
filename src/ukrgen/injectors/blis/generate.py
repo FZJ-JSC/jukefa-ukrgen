@@ -10,10 +10,51 @@ from __future__ import annotations
 import os
 import sys
 
+from ...codegen.isa_compiler_support import isa_flags
 from ...flow.isa_map import make_generator
 from .families import configuration, build_gemm, build_packm, resolve_blocksizes, UNROLL
 from .cgen import (asm_source, gemm_wrapper, cntx_init, family_header, stack_buf_size,
                    vl_helpers, packm_dispatch)
+
+
+#: how a configuration's ISA parameters read as on: --<isa>-<FEATURE> on
+_ON = ("on", "true", "1", "yes")
+
+
+def config_flags(cfg: configuration) -> str:
+    """
+    The flags make_defs.mk's CMISCFLAGS and CVECFLAGS get: the ISA's default
+    from isa_flags - rvv071's -mepi, say - or, where the configuration turns
+    an ISA parameter on (--<isa>-<FEATURE> on), what the generator says with
+    it. A feature any family turns on is on for the config (extensions only
+    add instructions); an encoding feature, which spells them, must be the
+    same in every family
+    """
+    gen = make_generator(cfg.isa)
+    known = set(gen.get_parameters())
+    prefix = cfg.isa + "-"
+    enabled, encodings = [], {}
+    for fam in cfg.families:
+        for key, value in fam.params.items():
+            if not key.startswith(prefix) or key[len(prefix):] not in known:
+                continue
+            name = key[len(prefix):]
+            on = str(value).strip().lower() in _ON
+            if name in gen.FEATURES:
+                if on and name not in enabled:
+                    enabled.append(name)
+                continue
+            if name in encodings and encodings[name] != on:
+                raise ValueError(f"{key}: the families disagree ({encodings[name]} / {on}): "
+                                 f"an encoding feature spells every family's instructions")
+            encodings[name] = on
+    if not enabled and not encodings:
+        return isa_flags[cfg.isa]
+    for name in enabled:
+        gen.set_parameter(name, "on")
+    for name, on in encodings.items():
+        gen.set_parameter(name, "on" if on else "off")
+    return " ".join(gen.compiler_flags("gcc"))
 
 
 def generate(cfg: configuration, out_dir: str, stack_size: int | None = None,
@@ -91,4 +132,4 @@ def generate(cfg: configuration, out_dir: str, stack_size: int | None = None,
     report += [f"unroll {got} of {asked}: {fam} {symbol}" for fam, symbol, asked, got in reduced]
     write(f"config/{cfg.name}/blisgen_report.txt", "\n".join(report) + "\n")
     return {"kernels": kernels, "skipped": skipped, "reduced": reduced, "files": written,
-            "stack_buf_size": size}
+            "stack_buf_size": size, "archflags": config_flags(cfg)}
