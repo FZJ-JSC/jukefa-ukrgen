@@ -3,6 +3,7 @@ Choosing how each STO is implemented in hardware ("to"s)
 """
 
 from __future__ import annotations
+import os
 import re
 
 import difflib
@@ -44,6 +45,28 @@ def default_registry() -> resolution_registry:
     scalar_reduce_provider().register_resolutions(registry)
     strided_provider().register_resolutions(registry)
     return registry
+
+
+#: The candidates are a function of the hardware and the configuration, not of
+#: the size: blisgen asks them for every size of every family and again for every
+#: unroll a kernel doesn't build at - 228 times for 134 kernels, 16 times for a
+#: split family's 13 - and gets the same answer each time. One per question,
+#: asked once. Keyed by the question (solve_stage.candidates_key).
+_CANDIDATES: dict[tuple, dict] = {}
+#: answers kept: a configuration asks a handful (12 for rvv/k3-a100 - one per data
+#: type and storage of the gemm families, four per packm family's cases), a sweep
+#: across configurations some more
+_CANDIDATES_MAX = 64
+#: ask every time where the answer could differ - a hook that changes the
+#: generator between two runs of the flow in one process (UKRGEN_SOLVE_CACHE=0)
+_CANDIDATES_CACHED = os.environ.get("UKRGEN_SOLVE_CACHE", "1") != "0"
+
+
+def clear_candidates() -> None:
+    """
+    Forget the candidates kept - the next solve of each asks again
+    """
+    _CANDIDATES.clear()
 
 
 @dataclass(frozen=True)
@@ -445,12 +468,42 @@ class solve_stage(stage):
                 return False
         return True
 
+    def candidates_key(self) -> tuple:
+        """
+        What all_candidates' answer is a function of: the hardware and its
+        features, the composition the flow chose, the data types and layouts the
+        STOs see, the tile operations asked of them, the hooks - and not the
+        size, which the dimension stage decides after this one has run
+        """
+        ctx = self.context
+        def values(v):
+            if v is None:
+                return ()
+            return (v,) if isinstance(v, str) else tuple(map(str, v))
+        return (
+            str(ctx.params["isa"].value), str(ctx.params["ukr"].value),
+            tuple(values(ctx.params["C-storage"].value)),
+            tuple(values(ctx.params["hooks"].value)),
+            tuple(sorted((c, dt.name) for c, dt in ctx.component_dts.items())),
+            tuple(sorted(ctx.component_layouts.items())),
+            tuple(sorted((n, values(p.value)) for n, p in self.params.items()
+                         if n.endswith(("-tileop", "-subtail-tileop")))),
+            tuple(sorted(self.forced_options())),
+            tuple(sorted((n, str(ctx.gen.get_param_value(n)))
+                         for n in ctx.gen.get_parameters())),
+        )
+
     def all_candidates(self) -> dict[str, dict]:
         """
         Candidates of every STO of every case, in the order the kernel first
         runs them. Stores are offered for whatever any implementation before
-        them in any case could leave
+        them in any case could leave. One answer per configuration, kept: the
+        sizes of a family ask this same question
         """
+        key = self.candidates_key() if _CANDIDATES_CACHED else None
+        if key is not None and key in _CANDIDATES:
+            return _CANDIDATES[key]
+
         composition = self.context.composition
         registry = default_registry()
         order = composition.sto_order()
@@ -472,7 +525,13 @@ class solve_stage(stage):
             sto = composition.get_sto(name)
             if sto_kind.STORE == sto.kind:
                 candidates[name] = self.store_candidates(sto, registry, producible)
-        return {name: candidates[name] for name in order}
+        answer = {name: candidates[name] for name in order}
+
+        if key is not None:
+            if len(_CANDIDATES) >= _CANDIDATES_MAX:
+                _CANDIDATES.pop(next(iter(_CANDIDATES)))
+            _CANDIDATES[key] = answer
+        return answer
 
     def listing(self, candidates: dict[str, dict]) -> str:
         """
