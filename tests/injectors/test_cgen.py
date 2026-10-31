@@ -1096,6 +1096,34 @@ int main( void )
                 self.assertFalse([l for l in body if l.startswith("sub ")], built[0].symbol)
                 self.assertGreaterEqual(len(moved), 5, (built[0].symbol, sorted(moved)))
 
+    def test_lanes_without_column_pointers(self):
+        # NEON's vn kernels store C across vectors lane by lane: with no
+        # column pointers (column-pointers: {C: 0}) each lane's address is
+        # walked to from the register nearest it, the pattern's registers
+        # rotating through the lanes - no lane walker (it wasn't restarted
+        # where its base moved: "not a constant offset")
+        cc = ["aarch64-linux-gnu-gcc", "-static"]
+        if not (shutil.which(cc[0]) and shutil.which(QEMU)):
+            self.skipTest("needs aarch64-linux-gnu-gcc and qemu-aarch64-static")
+        for regs, pattern in ((2, "phase"), (4, "phase+rotate")):
+            with self.subTest(regs=regs, pattern=pattern):
+                entry = {"family": "vn", "dtypes": ["FP64"], "preset": "gemm_fma_lane", "vectorize": "n",
+                         "unroll": 2, "m": [4], "n": [1], "schedule": ["RAW:data:vreg:::4"],
+                         "params": {"A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"],
+                                    "C-layout": ["m:c", "n:s"]},
+                         "max-addr-regs": {"C": regs}, "addr-pattern": {"C": pattern},
+                         "column-pointers": {"C": 0}}
+                built, skipped = build_gemm("neon", "ukrgen_neon", family.from_yaml("gemm", entry))
+                self.assertTrue(built, skipped)
+                k = built[0]
+                src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator("neon")) + gemm_wrapper(k) + \
+                      f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, 'double', k.vl_fn)}; }}\n" \
+                      f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, 'double', k.vl_fn)}; }}\n" + \
+                      open(os.path.join(HERE, "wrapper_harness.c")).read()
+                for out in self.run_c("neon", src, [k], [[QEMU, "-cpu", "max"]],
+                                      [f"-DUKR={k.symbol}", "-DWT=double"], cc=cc):
+                    self.assertIn("81 runs, 0 wrong", out, k.symbol)
+
     def test_general_c_without_column_pointers(self):
         # C at a general stride (the any storage): a strided access's next
         # vector is VL*stride(C,m) on - with no column pointers (column-

@@ -135,7 +135,8 @@ case of their own. `docs/BLISGEN_PLAN.md` has the details of each.
   the address registers. `column-pointers: {C: 0}` keeps none: the pattern's
   registers walk to C's columns, from the one nearest - by the column stride,
   and by a strided access's next vector (C at a general stride: VL times its
-  row stride, an add of a register holding it) - `phase+rotate` and
+  row stride, an add of a register holding it), and lane by lane (NEON's vn
+  C, across vectors), the registers rotating through the lanes - `phase+rotate` and
   `phase+blocked:N` split a component's registers between its phases (C's
   loads and stores, counted per case) and rotate within each share;
   `phase+blocked:n` gives each of C's vectors its own register.

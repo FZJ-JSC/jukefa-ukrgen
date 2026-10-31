@@ -308,6 +308,15 @@ class signature_specializer:
             self.walk_to(comp, reg, strided, inserted, scalar_tile)
             rel = {f: c for f, c in rel.items() if not f}
             strided = {}
+        if strided and "lane" in op.properties and 0 == self.column_pointers(comp) \
+                and all(self.walkable(comp, f) for f in strided):
+            # lane by lane with no column pointers: each lane's address walked
+            # to like any other access's, from the register nearest it - the
+            # pattern's registers (phase+rotate) rotating through the lanes,
+            # no lane walker of their own (NEON's vn C, across vectors)
+            self.walk_to(comp, reg, strided, inserted, scalar_tile)
+            rel = {f: c for f, c in rel.items() if not f}
+            strided = {}
         if strided and any(c < 0 for c in strided.values()) \
                 and all(self.walkable(comp, f) for f in strided) and "lane" not in op.properties:
             # the access behind its register - which walked past its column (a
@@ -406,7 +415,10 @@ class signature_specializer:
                     self.walk_regs[wkey] = self.new_reg(comp)
                 walker = self.walk_regs[wkey]
                 state = self.walking.get(wkey)
-                if state is None or state[0] != ptr or lane_count < state[1]:
+                # restarted where its base is another register, or the same one
+                # moved since (a walking pointer's next row)
+                if state is None or state[0] != ptr or lane_count < state[1] \
+                        or state[2] != self.positions[(comp, ptr)]:
                     step = sym.factor(lane_factor, lane_count)
                     inserted.append(lsc_addr_compute(comp, ptr, walker, step, scalar_tile))
                     self.positions[(comp, walker)] = self.positions[(comp, ptr)] + step
@@ -414,7 +426,7 @@ class signature_specializer:
                     step = sym.factor(lane_factor, lane_count - state[1])
                     inserted.append(lsc_addr_compute(comp, walker, walker, step, scalar_tile))
                     self.positions[(comp, walker)] = self.positions[(comp, walker)] + step
-                self.walking[wkey] = (ptr, lane_count)
+                self.walking[wkey] = (ptr, lane_count, self.positions[(comp, ptr)])
                 reg = walker
 
         if reg != assigned:
