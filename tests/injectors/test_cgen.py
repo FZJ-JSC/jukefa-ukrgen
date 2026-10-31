@@ -1080,6 +1080,34 @@ int main( void )
                 self.assertFalse([l for l in body if l.startswith("sub ")], built[0].symbol)
                 self.assertGreaterEqual(len(moved), 5, (built[0].symbol, sorted(moved)))
 
+    def test_general_c_without_column_pointers(self):
+        # C at a general stride (the any storage): a strided access's next
+        # vector is VL*stride(C,m) on - with no column pointers (column-
+        # pointers: {C: 0}) the pattern's registers walk by it, an add of
+        # the vl_stride setup value, and by the column stride: the K3's vm
+        # family builds (it was "not specialized yet") and is right
+        cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
+        if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
+            self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
+        runners = [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"] for v in (128, 256)]
+        for regs, pattern in ((4, "phase+rotate"), (2, "phase"), (4, "phase+blocked:n")):
+            with self.subTest(regs=regs, pattern=pattern):
+                entry = {"family": "vm", "dtypes": ["FP32"], "preset": "gemm_fma_vf", "vectorize": "m",
+                         "unroll": 2, "m": [2], "n": [4], "c-storage": ["col", "any"],
+                         "params": {"A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"]},
+                         "max-addr-regs": {"A": 2, "B": 1, "C": regs},
+                         "addr-pattern": {"A": "rotate", "B": "rotate", "C": pattern},
+                         "column-pointers": {"C": 0}}
+                built, skipped = build_gemm("rvv", "ukrgen_rvv", family.from_yaml("gemm", entry))
+                self.assertTrue(built, skipped)
+                k = built[0]
+                src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator("rvv")) + gemm_wrapper(k) + \
+                      f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, 'float', k.vl_fn)}; }}\n" \
+                      f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, 'float', k.vl_fn)}; }}\n" + \
+                      open(os.path.join(HERE, "wrapper_harness.c")).read()
+                for out in self.run_c("rvv", src, [k], runners, [f"-DUKR={k.symbol}", "-DWT=float"], cc=cc):
+                    self.assertIn("81 runs, 0 wrong", out, k.symbol)
+
     def strided_gemm(self, isa, dt, entry, strides, runners, cc):
         """
         Kernels on strided operands - gemmsup's: A, B and C unpacked, each at

@@ -187,12 +187,12 @@ class signature_specializer:
         a column pointer: along the loop's own index (k:s), or where the
         component has none (--COMP-column-pointers 0)
         """
-        def single(f):
-            return 1 == len(f) and f[0].startswith(f"stride({comp},")
         target = self.positions[(comp, reg)] + sym._make(strided)
         def strides_away(r):
+            # a stride, or a vector length of one (a strided access's next
+            # vector: VL*stride(C,m), the vl_stride setup value) - an add each
             d = dict((target - self.positions[(comp, r)]).terms)
-            if not all(single(f) for f in d if f):
+            if not all(self.walkable(comp, f) for f in d if f):
                 return float("inf")
             return sum(abs(c) for f, c in d.items() if f)
         bases = [r for (c, r) in self.program.addr_setup if c == comp and (c, r) in self.positions]
@@ -209,6 +209,17 @@ class signature_specializer:
             # column pointers computed from it were placed from where it was:
             # computed again, from here, on their next use
             self.pointers = {k for k in self.pointers if k[:2] != (comp, reg) or "walk" == k[2]}
+
+    @staticmethod
+    def walkable(comp: str, factors: tuple) -> bool:
+        """
+        A term an address register walks by, an add of a register each: one of
+        the component's strides, or the vector length times one (a strided
+        access's next vector - C's rows at a run-time stride)
+        """
+        if 1 == len(factors):
+            return factors[0].startswith(f"stride({comp},")
+        return 2 == len(factors) and "VL" == factors[0] and factors[1].startswith(f"stride({comp},")
 
     def column_pointers(self, comp: str | None = None) -> int:
         """
@@ -298,7 +309,7 @@ class signature_specializer:
             rel = {f: c for f, c in rel.items() if not f}
             strided = {}
         if strided and any(c < 0 for c in strided.values()) \
-                and all(single(f) for f in strided) and "lane" not in op.properties:
+                and all(self.walkable(comp, f) for f in strided) and "lane" not in op.properties:
             # the access behind its register - which walked past its column (a
             # column's second vector after the last column's first), or which
             # phase+rotate gave a later column first: walked there, from the
@@ -350,7 +361,7 @@ class signature_specializer:
                 if 1 == len(factors) and count in scales and plain:
                     op.properties["scaled_index"] = (factors[0], count)
                     strided = {}
-            if strided and 0 == self.column_pointers(comp) and all(single(f) for f in strided) \
+            if strided and 0 == self.column_pointers(comp) and all(self.walkable(comp, f) for f in strided) \
                     and "lane" not in op.properties:
                 # no column pointers for this component (--COMP-column-pointers
                 # 0: its pattern's registers - phase+rotate's - in their place):
