@@ -114,6 +114,16 @@ class test_generate(unittest.TestCase):
                                             ("packm", "FP32"): write("spackm.yaml", "{kc: 256}")})
             self.assertEqual(256, cfg.blocksizes["FP32"]["kc"])
 
+    def test_config_flags_from_cases(self):
+        # an ISA feature turned on per case (the tuner's K3 packm files: rvv-
+        # ZBA on in each case's params) - BLIS still builds with it
+        import os
+        from ukrgen.injectors.blis.generate import config_flags
+        root = os.path.join(os.path.dirname(__file__), "..", "..", "ukrconfig", "rvv", "k3-x100")
+        cfg = configuration.from_files({("packm", "FP32"): os.path.join(root, "spackm.yaml")})
+        self.assertFalse(any("rvv-ZBA" in f.params for f in cfg.families))
+        self.assertEqual("-march=rv64gcv_zba", config_flags(cfg))
+
     def test_config_flags(self):
         """make_defs.mk's flags: the ISA's default from the table, or the
         generator's where the configuration turns an ISA parameter on"""

@@ -792,7 +792,8 @@ int main( void )
         available = bool(shutil.which(cc[0]) and shutil.which("qemu-riscv64-static"))
         cfg = configuration.from_files({("packm", "FP64"): os.path.join(HERE, "..", "..", "ukrconfig", "rvv", "k1",
                                                                         "dpackm.yaml")})
-        base = cfg.families[0]
+        # the family with the trans case (the K1's: pktrans, beside pk's vec cases)
+        base = next(f for f in cfg.families if any("trans" == f.case_kinds.get(c[0], c[0]) for c in f.cases))
         name, _, params = next(c for c in base.cases if "trans" == base.case_kinds.get(c[0], c[0]))
         fam = copy.deepcopy(base)
         # fields 0, whatever the config's tuning: 12 = 8 + 4
@@ -813,7 +814,8 @@ int main( void )
         available = bool(shutil.which(cc[0]) and shutil.which("qemu-riscv64-static"))
         cfg = configuration.from_files({("packm", "FP64"): os.path.join(HERE, "..", "..", "ukrconfig", "rvv", "k1",
                                                                         "dpackm.yaml")})
-        base = cfg.families[0]
+        # the family with the trans case (the K1's: pktrans, beside pk's vec cases)
+        base = next(f for f in cfg.families if any("trans" == f.case_kinds.get(c[0], c[0]) for c in f.cases))
         name, _, params = next(c for c in base.cases if "trans" == base.case_kinds.get(c[0], c[0]))
         runners = [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"] for v in (128, 256)]
         for split, expect in (("12=4+8", ("vssseg4e64.v", "vssseg8e64.v")), ("12=3+3+3+3", ("vssseg3e64.v",))):
@@ -1082,13 +1084,7 @@ int main( void )
         # core overlaps - not one register walked row by row and rewound by
         # subs (a strided walk is for a run-time stride along the loop's
         # index, k:s); the K3's trans14 lost 1.5 % of sgemm so
-        import yaml
-        raw = yaml.safe_load(open(os.path.join(HERE, "..", "..", "ukrconfig", "rvv", "k3-x100", "spackm.yaml")))
-        raw["cases"] = [dict(c, m=[14]) for c in raw["cases"] if "trans" == c["kind"]]
-        fam = family.from_yaml("packm", dict({k: v for k, v in raw.items() if k != "isa"}, dtypes=["FP32"]))
-        from ukrgen.injectors.blis.families import build_packm
-        built, skipped = build_packm("rvv", "ukrgen_rvv", fam)
-        self.assertTrue(built, skipped)
+        built = [self.k3_trans14({})]
         for _, _, blocks in built[0].program.cases:
             for blk in blocks:
                 body = [l.strip() for l in blk.sections.get("body", [])]
@@ -1102,10 +1098,13 @@ int main( void )
         import yaml
         from ukrgen.injectors.blis.families import build_packm
         raw = yaml.safe_load(open(os.path.join(HERE, "..", "..", "ukrconfig", "rvv", "k3-x100", "spackm.yaml")))
-        case = dict(next(c for c in raw["cases"] if "trans" == c["kind"]), m=[14])
+        entry = next(f for f in raw.get("families", [raw]) if any("trans" == c["kind"] for c in f["cases"]))
+        case = dict(next(c for c in entry["cases"] if "trans" == c["kind"]), m=[14])
         case["params"] = dict(case.get("params", {}), **extra)
-        raw["cases"] = [case]
-        fam = family.from_yaml("packm", dict({k: v for k, v in raw.items() if k != "isa"}, dtypes=["FP32"]))
+        entry = dict(entry, cases=[case])
+        if "isa-params" in raw and "isa-params" not in entry:
+            entry["isa-params"] = raw["isa-params"]
+        fam = family.from_yaml("packm", dict({k: v for k, v in entry.items() if k != "isa"}, dtypes=["FP32"]))
         built, skipped = build_packm("rvv", "ukrgen_rvv", fam)
         self.assertTrue(built, skipped)
         return built[0]
@@ -1117,9 +1116,10 @@ int main( void )
 
     def run_k3_trans14(self, k):
         # panels of 14 rows, n a multiple of the vector length: every one
-        # through the kernel, none through the reference
+        # through the kernel, none through the reference. The K3's have Zba
+        # (rvv-ZBA on): compiled with it, as BLIS's make_defs.mk does
         from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
-        cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
+        cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv_zba"]
         if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
             self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
         cases = ("{ 14, 14, 4 * vl, 4 * vl + 1, 1, 0 }, { 14, 14, 2 * vl, 2 * vl + 5, 1, 0 }, "
@@ -1148,9 +1148,9 @@ int main( void )
         # (the planner takes the vector length's term too) one add. Four: the
         # copy's and the kappa case's rewinds, and the kappa case's walk back
         # three rows mid-body
-        spelled = self.k3_trans14({"X-column-pointers": "0"})
+        spelled = self.k3_trans14({"X-column-pointers": "0", "max-offset-registers": "0", "X-addr-regs": "1", "X-addr-pattern": "rotate"})
         self.assertTrue(any(l.startswith("sub ") for b in self.loop_bodies(spelled) for l in b))
-        k = self.k3_trans14({"X-column-pointers": "0", "max-offset-registers": "4"})
+        k = self.k3_trans14({"X-column-pointers": "0", "max-offset-registers": "4", "X-addr-regs": "1", "X-addr-pattern": "rotate"})
         for body in self.loop_bodies(k):
             self.assertFalse([l for l in body if l.startswith("sub ")], k.symbol)
         self.run_k3_trans14(k)

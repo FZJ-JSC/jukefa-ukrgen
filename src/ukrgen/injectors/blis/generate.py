@@ -34,8 +34,10 @@ def config_flags(cfg: configuration) -> str:
     known = set(gen.get_parameters())
     prefix = cfg.isa + "-"
     enabled, encodings = [], {}
-    for fam in cfg.families:
-        for key, value in fam.params.items():
+    # a family's params and its cases' (the K3's packm: rvv-ZBA on per case)
+    every = [p for fam in cfg.families for p in [fam.params] + [c[2] for c in (fam.cases or [])]]
+    for params in every:
+        for key, value in params.items():
             if not key.startswith(prefix) or key[len(prefix):] not in known:
                 continue
             name = key[len(prefix):]
