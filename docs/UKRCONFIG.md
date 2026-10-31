@@ -143,7 +143,10 @@ case of their own. `docs/BLISGEN_PLAN.md` has the details of each.
   used, saving the most instructions, first - but none from a stride passed on the stack and loaded
   where the cases first need it (C's), which setup would have to load early.
 - A family's `unroll` is a ceiling: a size that doesn't build at it is built
-  at half of it, down to 1. A kernel records the unroll it got (`unroll`).
+  at half of it, down to 1. A kernel records the unroll it got (`unroll`), and
+  blisgen lists the kernels built below their family's (`unroll 2 of 4: vm
+  bli_dgemm_..._4x4`, on the console and in `blisgen_report.txt`) - often a
+  loop's register rings, which aren't renamed (NEON's lane kernels).
 - AVX2 and AVX-512 packm: `kind: gather` cases - A row-major (lda 1), its
   rows gathered into vectors along cdim - beside the vec cases.
 

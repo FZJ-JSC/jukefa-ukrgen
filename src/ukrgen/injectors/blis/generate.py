@@ -11,7 +11,7 @@ import os
 import sys
 
 from ...flow.isa_map import make_generator
-from .families import configuration, build_gemm, build_packm, resolve_blocksizes
+from .families import configuration, build_gemm, build_packm, resolve_blocksizes, UNROLL
 from .cgen import (asm_source, gemm_wrapper, cntx_init, family_header, stack_buf_size,
                    vl_helpers, packm_dispatch)
 
@@ -26,6 +26,10 @@ def generate(cfg: configuration, out_dir: str, stack_size: int | None = None,
     """
     gen = make_generator(cfg.isa)
     kernels, skipped = [], []
+    # kernels built at a smaller unroll than their family asks: a family's is
+    # a ceiling, halved where a kernel doesn't build (registers - a loop's
+    # rings aren't renamed): (family, symbol, asked, got)
+    reduced = []
     defaults = {}
     for fam in cfg.families:
         build = {"gemm": build_gemm, "packm": build_packm}.get(fam.kind)
@@ -35,8 +39,11 @@ def generate(cfg: configuration, out_dir: str, stack_size: int | None = None,
             fam.params["loop-align"] = loop_align
         built, missed = build(cfg.isa, cfg.name, fam, jobs)
         # where each kernel's code starts: its family's, else the default
+        asked = fam.params.get(UNROLL.get(fam.kind, ""))
         for k in built:
             k.align = fam.align or align
+            if asked and k.unroll is not None and k.unroll < int(asked):
+                reduced.append((fam.name, k.symbol, int(asked), k.unroll))
         kernels += built
         skipped += [(fam.name,) + s for s in missed]
         for dt, size in fam.default.items():
@@ -78,5 +85,9 @@ def generate(cfg: configuration, out_dir: str, stack_size: int | None = None,
     write(f"config/{cfg.name}/bli_family_{cfg.name}.h", family_header(cfg.name, size))
     report = [f"{len(kernels)} kernels, {len(skipped)} sizes skipped, stack temporary {size} bytes"]
     report += [f"skipped {fam} {dt} {m}x{n}: {why}" for fam, dt, (m, n), why in skipped]
+    if reduced:
+        report.append(f"{len(reduced)} kernel{'s' if len(reduced) > 1 else ''} at a smaller unroll than asked")
+    report += [f"unroll {got} of {asked}: {fam} {symbol}" for fam, symbol, asked, got in reduced]
     write(f"config/{cfg.name}/blisgen_report.txt", "\n".join(report) + "\n")
-    return {"kernels": kernels, "skipped": skipped, "files": written, "stack_buf_size": size}
+    return {"kernels": kernels, "skipped": skipped, "reduced": reduced, "files": written,
+            "stack_buf_size": size}

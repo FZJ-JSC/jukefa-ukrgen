@@ -103,6 +103,13 @@ def main():
         reasons.setdefault((dt, fam, str(why)), []).append(f"{m}x{n}")
     for (dt, fam, why), sizes in sorted(reasons.items()):
         print(f"  skipped {dt} {fam} {', '.join(sizes)}: {why[:240]}")
+    # built, but at a smaller unroll than the family asks (a ceiling, halved
+    # where a kernel doesn't build): once per family and unroll
+    lowered = {}
+    for fam, symbol, asked, got in made["reduced"]:
+        lowered.setdefault((fam, asked, got), []).append(symbol)
+    for (fam, asked, got), symbols in sorted(lowered.items()):
+        print(f"  unroll {got} of {asked}: {fam} {', '.join(symbols)}")
     return 0
 
 

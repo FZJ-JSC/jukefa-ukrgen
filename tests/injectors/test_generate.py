@@ -33,11 +33,33 @@ class test_generate(unittest.TestCase):
             with open(os.path.join(d, "config/ukrgen_neon/blisgen_report.txt")) as f:
                 report = f.read()
             self.assertIn("skipped vm FP64 16x2", report)
+            self.assertEqual([], made["reduced"])
             self.assertEqual(2048, made["stack_buf_size"])
             # given: the configuration's, then the caller's
             cfg.stack_buf_size = 4096
             self.assertEqual(4096, generate(cfg, d)["stack_buf_size"])
             self.assertEqual(8192, generate(cfg, d, stack_size=8192)["stack_buf_size"])
+
+    def test_reduced_unroll_reported(self):
+        # an unroll the registers can't hold: built at half of it (or less),
+        # and the report says so - not silently another kernel than asked.
+        # NEON's lane FMA, 2 vectors by 4, unroll 4: the k loop's rings (B's
+        # double-buffered for preloading) aren't renamed and take more than 32
+        fam = family.from_yaml("gemm", {"family": "vm", "dtypes": ["FP64"], "preset": "gemm_fma_lane",
+                                        "vectorize": "m", "unroll": 4, "m": [2], "n": [4],
+                                        "params": {"A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"],
+                                                   "C-layout": ["m:c", "n:s"]},
+                                        "schedule": ["RAW:data:vreg:::4"], "default": {"FP64": "4x4"}})
+        cfg = configuration(isa="neon", name="ukrgen_neon", families=[fam])
+        with tempfile.TemporaryDirectory() as d:
+            made = generate(cfg, d)
+            self.assertEqual(1, len(made["kernels"]))
+            (name, symbol, asked, got), = made["reduced"]
+            self.assertEqual((4, made["kernels"][0].unroll), (asked, got))
+            self.assertLess(got, asked)
+            with open(os.path.join(d, "config/ukrgen_neon/blisgen_report.txt")) as f:
+                report = f.read()
+            self.assertIn(f"unroll {got} of 4: vm {symbol}", report)
 
     def test_from_files(self):
         with tempfile.TemporaryDirectory() as d:
