@@ -1060,6 +1060,26 @@ int main( void )
                                          timeout=120).stdout
                     self.assertIn(f"{tile}: 81 runs, 0 wrong", out, k.symbol)
 
+    def test_packm_trans_keeps_column_chains(self):
+        # packm's trans X is contiguous along the loop's index (n:c, m:s):
+        # its rows through column pointers - independent chains a dual-issue
+        # core overlaps - not one register walked row by row and rewound by
+        # subs (a strided walk is for a run-time stride along the loop's
+        # index, k:s); the K3's trans14 lost 1.5 % of sgemm so
+        import yaml
+        raw = yaml.safe_load(open(os.path.join(HERE, "..", "..", "ukrconfig", "rvv", "k3-x100", "spackm.yaml")))
+        raw["cases"] = [dict(c, m=[14]) for c in raw["cases"] if "trans" == c["kind"]]
+        fam = family.from_yaml("packm", dict({k: v for k, v in raw.items() if k != "isa"}, dtypes=["FP32"]))
+        from ukrgen.injectors.blis.families import build_packm
+        built, skipped = build_packm("rvv", "ukrgen_rvv", fam)
+        self.assertTrue(built, skipped)
+        for _, _, blocks in built[0].program.cases:
+            for blk in blocks:
+                body = [l.strip() for l in blk.sections.get("body", [])]
+                moved = {l.split()[1].rstrip(",") for l in body if l.startswith("add ")}
+                self.assertFalse([l for l in body if l.startswith("sub ")], built[0].symbol)
+                self.assertGreaterEqual(len(moved), 5, (built[0].symbol, sorted(moved)))
+
     def strided_gemm(self, isa, dt, entry, strides, runners, cc):
         """
         Kernels on strided operands - gemmsup's: A, B and C unpacked, each at

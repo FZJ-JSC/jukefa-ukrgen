@@ -250,7 +250,11 @@ class signature_specializer:
         # would leave behind
         def single(f):
             return 1 == len(f) and f[0].startswith(f"stride({comp},")
-        walking = self.loop_index is not None and self.loop_index in strides \
+        # only where the loop's own index is strided at run time (k:s): a
+        # component contiguous along it (packm's trans X - n:c, m:s) keeps its
+        # column pointers - independent chains, not one serial walk
+        along = f"stride({comp},{self.loop_index})" if self.loop_index is not None else None
+        walking = along is not None and any(f and along == f[0] for f, _ in strides.get(self.loop_index, sym.const(0)).terms) \
             and strided and all(single(f) for f in strided) and "lane" not in op.properties
         if walking:
             target = self.positions[(comp, reg)] + sym._make(strided)
