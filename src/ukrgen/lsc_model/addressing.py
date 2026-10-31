@@ -254,6 +254,12 @@ class addr_pattern:
                    blocked:mnk/R, blocked:2*n/R - rounded up
         phase      one register per phase, e.g. C's loads and C's stores, so
                    the stores need no rewinding
+        phase+rotate     the registers split equally between the component's
+                         phases, each of them rotating within its share: 4
+                         registers over 2 phases give 2 each, a load using
+                         0,1,0,1 and a store 2,3,2,3 - the independence of
+                         several pointers without a pointer per column
+        phase+blocked:N  as phase+rotate, blocked:N within the phase's share
     """
 
     def __init__(self, kind: str, block: int = 1):
@@ -271,22 +277,41 @@ class addr_pattern:
             return addr_pattern("rotate")
         if "phase" == name and not arg:
             return addr_pattern("phase")
+        if "phase+rotate" == name and not arg:
+            return addr_pattern("phase+rotate")
+        if "phase+blocked" == name and arg:
+            block = arg_value(arg, values or {})
+            if block > 0:
+                return addr_pattern("phase+blocked", block)
         if "blocked" == name and arg:
             block = arg_value(arg, values or {})
             if block > 0:
                 return addr_pattern("blocked", block)
         raise ValueError(f"not an address register pattern: {spec} "
-                         f"(rotate, blocked:<n or an expression of m, n, k, R> or phase)")
+                         f"(rotate, blocked:<n or an expression of m, n, k, R>, phase, "
+                         f"phase+rotate or phase+blocked:<n>)")
 
-    def select(self, access: int, phase: int, registers: int) -> int:
+    def select(self, access: int, phase: int, registers: int, phases: int = 1) -> int:
         """
         :param access: position of the access among the component's accesses
         :param phase: index of the access's phase
         :param registers: number of address registers
+        :param phases: how many phases the component has - what phase+... splits
+            the registers among
         """
         if "phase" == self.kind:
             return phase % registers
+        if self.kind.startswith("phase+"):
+            # the registers split equally among the phases, each phase's share
+            # rotating (or blocking) on its own: no pointer per column, and a
+            # phase's walk never rewinds another's
+            per = max(1, registers // max(1, phases))
+            slots = max(1, registers // per)
+            share = (phase % slots) * per
+            return (share + (access // self.block) % per) % registers
         return (access // self.block) % registers
 
     def __str__(self):
+        if self.kind.startswith("phase+"):
+            return self.kind if "phase+blocked" != self.kind else f"phase+blocked:{self.block}"
         return f"blocked:{self.block}" if "blocked" == self.kind else self.kind

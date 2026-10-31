@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from asmgen.asmblocks.op import operand_modifier as omod
 from asmgen.registers import adt_size
 
-from ..flow.stages.ukr.ukr import read_access, sto_kind, block_description
+from ..flow.stages.ukr.ukr import read_access, write_access, sto_kind, block_description
 from ..matching.math import get_operand_io
 from ..support.data_move import resident_ref
 from ..support.domains import operand_values
@@ -197,6 +197,8 @@ class program_builder:
         self.last_access: dict[vreg, int] = {}
         self.used: dict[str, tuple] = {}
         self.phases: dict[str, list] = {}
+        #: how many (sto, direction) phases each component's accesses fall into
+        self._phase_counts: dict[str, int] = {}
         self.addr_setup: dict[tuple[str, int], int] = {}
 
     # --- registers ---------------------------------------------------------
@@ -512,6 +514,29 @@ class program_builder:
                 out[idx] = out[idx] + offset
         return out
 
+    def phase_count(self, comp: str) -> int:
+        """
+        How many phases a component's accesses fall into - (sto, direction)
+        pairs over the part's STOs, as ``address`` numbers them - which
+        ``phase+...`` splits the component's address registers among. Known
+        before the first access, where the phases are not yet seen: the flow
+        says which STOs load the component and which write its memory
+        """
+        if comp in self._phase_counts:
+            return self._phase_counts[comp]
+        n = 0
+        for sto in self.stos:
+            for (entry, touched), access in self.flow.items():
+                if entry != sto:
+                    continue
+                if touched == comp and access.read in (read_access.LOAD, read_access.STREAM):
+                    n += 1
+                if access.write in (write_access.MEMORY, write_access.MEMORY_STREAM) and \
+                        self.comp.get_sto(sto).memory_of(touched) == comp:
+                    n += 1
+        self._phase_counts[comp] = max(1, n)
+        return self._phase_counts[comp]
+
     def address(self, sto: str, comp: str, direction: str, coord: tuple,
                 elements: dict[str, sym]) -> addr_ref:
         """
@@ -525,7 +550,7 @@ class program_builder:
         if key not in phases:
             phases.append(key)
         reg = plan.pattern.select(self.coords[comp].index(coord), phases.index(key),
-                                  plan.registers)
+                                  plan.registers, self.phase_count(comp))
         oid = self.db.add(comp, elements)
         self.addr_setup.setdefault((comp, reg), oid)
         return addr_ref(component=comp, reg=reg, offset=oid)
@@ -1161,6 +1186,7 @@ class program_builder:
         for sto, ops, tiling, impl, *which in parts:
             if which:
                 self.part, self.stos = self.parts[which[0]]
+                self._phase_counts = {}
             items += self.emit_sto(sto, ops, tiling, impl)
         self.part, self.stos = self.parts[0]
         return items

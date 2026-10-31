@@ -60,10 +60,42 @@ class test_patterns(unittest.TestCase):
         self.assertEqual([0] * 8, self.seq("phase", registers=2, phase=2))
 
     def test_invalid(self):
-        for spec in ("blocked", "blocked:0", "spiral", "rotate:2"):
+        for spec in ("blocked", "blocked:0", "spiral", "rotate:2",
+                     "phase+blocked", "phase+spiral", "phase+"):
             with self.subTest(spec=spec):
                 with self.assertRaises(ValueError):
                     addr_pattern.parse(spec)
+
+    def split(self, spec, registers, phases, phase, n=8):
+        p = addr_pattern.parse(spec)
+        return [p.select(i, phase, registers, phases) for i in range(n)]
+
+    def test_phase_plus_rotate(self):
+        # 4 registers over 2 phases: 2 each, a load rotating 0,1 and a store 2,3
+        self.assertEqual([0, 1, 0, 1, 0, 1, 0, 1], self.split("phase+rotate", 4, 2, 0))
+        self.assertEqual([2, 3, 2, 3, 2, 3, 2, 3], self.split("phase+rotate", 4, 2, 1))
+        # C-addr-regs: 6 over 2 phases: 3 each
+        self.assertEqual([0, 1, 2, 0, 1, 2, 0, 1], self.split("phase+rotate", 6, 2, 0))
+        self.assertEqual([3, 4, 5, 3, 4, 5, 3, 4], self.split("phase+rotate", 6, 2, 1))
+        # one register a phase: what phase gives
+        self.assertEqual([0] * 8, self.split("phase+rotate", 2, 2, 0))
+        self.assertEqual([1] * 8, self.split("phase+rotate", 2, 2, 1))
+        # one phase: the whole file rotates, as rotate does
+        self.assertEqual([0, 1, 2, 3, 0, 1, 2, 3], self.split("phase+rotate", 4, 1, 0))
+
+    def test_phase_plus_blocked(self):
+        # 4 registers over 2 phases, 2 accesses a register: 0,0,1,1 and 2,2,3,3
+        self.assertEqual([0, 0, 1, 1, 0, 0, 1, 1], self.split("phase+blocked:2", 4, 2, 0))
+        self.assertEqual([2, 2, 3, 3, 2, 2, 3, 3], self.split("phase+blocked:2", 4, 2, 1))
+        # an expression: blocked:n/R at n 8, R 4
+        self.assertEqual(2, addr_pattern.parse("phase+blocked:n/R", dict(n=8, R=4)).block)
+
+    def test_phase_plus_split_is_shared_out(self):
+        # 3 registers over 2 phases: one each, the third to the first phase's
+        # count and only reached when a third phase appears
+        self.assertEqual([0] * 8, self.split("phase+rotate", 3, 2, 0))
+        self.assertEqual([1] * 8, self.split("phase+rotate", 3, 2, 1))
+        self.assertEqual([2] * 8, self.split("phase+rotate", 3, 2, 2))
 
 
     def test_blocked_expressions(self):
