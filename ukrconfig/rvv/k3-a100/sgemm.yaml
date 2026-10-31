@@ -5,8 +5,26 @@
 # unroll 6: the loop's adds and branch amortise over six k steps; buckets vf/sl help here, unlike the K1.
 # max-imm-offset min(ne+e, 16e-1): one k step of B's walk plus an element of slack (n+1 floats,
 # 60 B) - the bump lands between steps, and the 16-element window's top is stated in the expression
+#
+# blistune results:
+# ==================================================
+# BEST GFLOPs: 337.95  (trial 266, 64x14)
+# BEST CONFIGURATION:
+#   BLIS_MR_S=64
+#   BLIS_NR_S=14
+#   BLIS_JC_NT=1
+#   BLIS_IC_NT=1
+#   BLIS_JR_NT=8
+#   BLIS_IR_NT=1
+#   BLIS_KC_S=768
+#   BLIS_MR_IN_MC_S=4
+#   BLIS_NR_IN_NC_S=600
+#   BLIS_KC_MAX_S=800
+#   BLIS_MR_IN_MC_MAX_S=4
+#   BLIS_NR_IN_NC_MAX_S=800
+# ==================================================
 isa: rvv
-blocksizes: {mr-in-mc: 16, nr-in-nc: 64, kc: 256}
+blocksizes: {mr-in-mc: 4, nr-in-nc: 600, nr-in-nc-max: 800, kc: 768, kc-max: 800}
 families:
 - family: vn
   preset: gemm_fma_vf

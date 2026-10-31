@@ -21,8 +21,26 @@
 # kernels from the tree (2m-2 is 0 at m=1, 2n-2 at n=1) without failing the build.
 # max-imm-offset stays, though it is not doing the K1's job here: large immediates cost nothing on
 # this core (no limit and 127 tie), but at vn 8x3v the expression is worth 0.45 cycles against none.
+
+# blistune results:
+# ==================================================
+# BEST GFLOPs: 238.16  (trial 47, 16x14)
+# BEST CONFIGURATION:
+#   BLIS_MR_S=16
+#   BLIS_NR_S=14
+#   BLIS_JC_NT=2
+#   BLIS_IC_NT=4
+#   BLIS_JR_NT=1
+#   BLIS_IR_NT=1
+#   BLIS_KC_S=480
+#   BLIS_MR_IN_MC_S=16
+#   BLIS_NR_IN_NC_S=480
+#   BLIS_KC_MAX_S=640
+#   BLIS_MR_IN_MC_MAX_S=16
+#   BLIS_NR_IN_NC_MAX_S=720
+# ==================================================
 isa: rvv
-blocksizes: {mr-in-mc: 16, nr-in-nc: 72, kc: 256}
+blocksizes: {mr-in-mc: 16, nr-in-nc: 480, nr-in-nc-max: 720, kc: 480, kc-max: 640}
 families:
 - family: vn
   preset: gemm_fma_vf
@@ -40,7 +58,6 @@ families:
   max-addr-regs: {A: "m/4", B: "max(1, 2n-2)"}
   addr-pattern: {A: "blocked:mnk/R", B: rotate}
   c-storage: [row, any]
-  default: 8x3
 - family: vm
   preset: gemm_fma_vf
   vectorize: m
@@ -56,4 +73,5 @@ families:
   schedule: ['RAW:data:freg:::8', 'RAW:data:vreg:::13', 'WAR:data::::8', 'RAW:address:greg:::12']
   max-addr-regs: {A: "max(1, 2m-2)", B: "n/4"}
   c-storage: [col, any]
+  default: 2x14
   addr-pattern: {A: rotate, B: rotate}
