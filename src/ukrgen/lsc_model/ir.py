@@ -171,6 +171,10 @@ class ir_program:
     #: the engine on around the kernel by the caller (--assume-state): no
     #: switch, the setup's own left out too, its clobbers not the kernel's
     engine_assumed : bool = False
+    #: general registers the emitter may give offset polynomials an address
+    #: move needs (a strided walk's row change: rs - (n - R) cs), computed once
+    #: - the moves used most, saving the most instructions, first
+    offset_registers : int = 0
 
     def render(self) -> str:
         db = self.offsets

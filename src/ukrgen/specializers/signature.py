@@ -240,17 +240,25 @@ class signature_specializer:
         inserted = []
 
         strided = {f: c for f, c in rel.items() if f}
-        # an offset along the loop's own index at its stride (k:s - a
-        # gemmsup's unpacked A, B): the access's register walked there, from
-        # whichever of the component's registers is the fewest strides away -
-        # rotating ones leapfrog, one add of the stride's register each - not
-        # a column pointer per offset and register
-        along = (f"stride({comp},{self.loop_index})",) if self.loop_index is not None else None
-        if along is not None and set(strided) == {along} and "lane" not in op.properties:
+        # a component strided along the loop's own index (k:s - a gemmsup's
+        # unpacked A, B): its registers walk - every strided offset of it (a
+        # general stride's columns too), the access's register moved there from
+        # whichever of the component's registers is the fewest strides away:
+        # forward a stride (registers taken in turn leapfrog: one add of its
+        # register), or a row on (a general stride: rs - (n - R) cs) - not a
+        # column pointer per offset and register, which the walking bases
+        # would leave behind
+        def single(f):
+            return 1 == len(f) and f[0].startswith(f"stride({comp},")
+        walking = self.loop_index is not None and self.loop_index in strides \
+            and strided and all(single(f) for f in strided) and "lane" not in op.properties
+        if walking:
             target = self.positions[(comp, reg)] + sym._make(strided)
             def strides_away(r):
                 d = dict((target - self.positions[(comp, r)]).terms)
-                return abs(d.get(along, 0)) if set(d) <= {along} else float("inf")
+                if not all(single(f) for f in d if f):
+                    return float("inf")
+                return sum(abs(c) for f, c in d.items() if f)
             bases = [r for (c, r) in self.program.addr_setup if c == comp and (c, r) in self.positions]
             source = min(bases or [reg], key=strides_away)
             move = target - self.positions[(comp, source)]

@@ -132,6 +132,15 @@ case of their own. `docs/BLISGEN_PLAN.md` has the details of each.
 - Address registers by default: one each for A and B (`rotate`), two for C
   (`phase`: loads on one, stores on the other); the specializer keeps up to
   four column pointers per base, one more walking the rest.
+- Strided A and B (gemmsup's shapes - `k:s`, a general stride `k:s, n:s`):
+  their address registers walk forward along k by the stride, a register
+  computed from whichever is fewest strides away (`blocked` registers, taken
+  by k step, leapfrog: one add each); a general stride's row change one move,
+  rs - (n - R) cs. Moves taking more than one instruction spelled out get a
+  register of their own, computed once (`max-offset-registers`, default 4):
+  the most used, saving the most instructions, first.
+- A family's `unroll` is a ceiling: a size that doesn't build at it is built
+  at half of it, down to 1. A kernel records the unroll it got (`unroll`).
 - AVX2 and AVX-512 packm: `kind: gather` cases - A row-major (lda 1), its
   rows gathered into vectors along cdim - beside the vec cases.
 

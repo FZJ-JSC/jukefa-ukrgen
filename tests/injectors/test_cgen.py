@@ -1072,6 +1072,10 @@ int main( void )
         fam = family.from_yaml("gemm", dict(entry, family="sup", dtypes=[dt]))
         built, skipped = build_gemm(isa, f"ukrgen_{isa}", fam)
         self.assertTrue(built, skipped)
+        # the unroll asked, not one a failure fell back to (a family's unroll
+        # is a ceiling: halved where a kernel doesn't build)
+        for k in built:
+            self.assertEqual(entry.get("unroll"), k.unroll, k.symbol)
         ctype = "double" if "FP64" == dt else "float"
         args = {"k": ("dim_t", "k"), "base(A)": ("const void*", "A"), "base(B)": ("const void*", "B"),
                 "base(C)": ("void*", "C"), "base(alpha)": ("const void*", "&alpha"),
@@ -1148,17 +1152,25 @@ int main( void )
         if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
             self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
         runners = [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"] for v in (128, 256)]
-        strides = {"A": ("1", "mr + 3"), "B": ("nr + 5", "1"), "C": ("1", "mr + 2")}
-        for dt in ("FP32", "FP64"):
-            for pattern_a, pattern_b in (("rotate", "rotate"), ("blocked:2", "blocked:12")):
-                with self.subTest(dt=dt, pattern=pattern_b):
-                    entry = {"preset": "gemm_fma_vf", "vectorize": "m", "m": [2], "n": [12], "unroll": 8,
-                             "max-addr-regs": {"A": 2, "B": 2},
-                             "addr-pattern": {"A": pattern_a, "B": pattern_b},
-                             "params": {"A-layout": ["m:c", "k:s"], "B-layout": ["k:s", "n:c"],
-                                        "C-layout": ["m:c", "n:s"]}}
-                    for symbol, out in self.strided_gemm("rvv", dt, entry, strides, runners, cc):
-                        self.assertIn("21 runs, 0 wrong", out, symbol)
+        # B row-major and general (a row and a column stride), C column-major
+        # and general: the walk's row change one move (rs - (n - R) cs)
+        layouts = {
+            "row-major B": ({"B-layout": ["k:s", "n:c"]}, {"B": ("nr + 5", "1"), "C": ("1", "mr + 2")}),
+            "general B": ({"B-layout": ["k:s", "n:s"]}, {"B": ("2 * nr + 5", "2"), "C": ("1", "mr + 2")}),
+            "general C": ({"C-layout": ["m:s", "n:s"]}, {"B": ("nr + 5", "1"), "C": ("2", "2 * mr + 3")}),
+        }
+        for name, (layout, strides) in layouts.items():
+            strides = dict(strides, A=("1", "mr + 3"))
+            for dt in ("FP32", "FP64"):
+                for pattern_a, pattern_b in (("rotate", "rotate"), ("blocked:2", "blocked:12")):
+                    with self.subTest(layout=name, dt=dt, pattern=pattern_b):
+                        params = {"A-layout": ["m:c", "k:s"], "B-layout": ["k:s", "n:c"], "C-layout": ["m:c", "n:s"]}
+                        params.update(layout)
+                        entry = {"preset": "gemm_fma_vf", "vectorize": "m", "m": [2], "n": [12], "unroll": 8,
+                                 "max-addr-regs": {"A": 2, "B": 2},
+                                 "addr-pattern": {"A": pattern_a, "B": pattern_b}, "params": params}
+                        for symbol, out in self.strided_gemm("rvv", dt, entry, strides, runners, cc):
+                            self.assertIn("21 runs, 0 wrong", out, symbol)
 
     @needs_tools
     def test_split_family_epilogue_fits(self):

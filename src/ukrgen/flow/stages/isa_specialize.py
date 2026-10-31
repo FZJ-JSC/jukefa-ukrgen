@@ -40,6 +40,12 @@ class isa_specialize_stage(stage):
                             "them around its loops): the kernel checked from it, leaving it as it "
                             "found it - an engine it covers neither switched nor its switches' "
                             "clobbers claimed")
+        self.params["max-offset-registers"] = stage_param(
+                value=None, default="4", required=False,
+                description="General registers for offset polynomials an address move needs - a "
+                            "strided walk's row change, rs - (n - R) cs - each computed once, an add "
+                            "of it where the walk moves; the moves used most, saving the most "
+                            "instructions, first (0: none - every move spelled out)")
         self.params["max-imm-offset"] = stage_param(
                 value=None, required=False,
                 description="Largest immediate offset in bytes, either sign, a load or store "
@@ -92,6 +98,7 @@ class isa_specialize_stage(stage):
                 sp = signature_specializer(self.context, program)
                 sp.max_imm_offset = self.imm_limit()
                 sp.assumed = self.assumed_state()
+                sp.program.offset_registers = int(self.params["max-offset-registers"].value or 0)
                 sp.specialize()
         except specialization_error as err:
             raise stage_error(f"specializing for the ISA: {err}") from err

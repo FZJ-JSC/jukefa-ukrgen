@@ -266,6 +266,46 @@ class offset_planner:
             self.e.strides_in[key] = reg
         return self.e.strides_in[key]
 
+    def offset_cost(self, amount: sym, comp: str) -> int:
+        """
+        The instructions moving an address by amount takes spelled out: an
+        immediate's add, add_scaled's per stride - an add per set bit where
+        the ISA shifts the operand, else as many as the bit is worth
+        """
+        esize = adt_size(self.e.ctx.component_dts[comp])
+        cost = 0
+        for factors, coeff in amount.terms:
+            if not factors:
+                cost += 1 if coeff else 0
+                continue
+            n, bit, op = abs(coeff // esize), 0, "sub" if coeff < 0 else "add"
+            while n:
+                if n & 1:
+                    cost += 1 if not bit or self.e.shifted_available(op, bit) else 1 << bit
+                n >>= 1
+                bit += 1
+        return cost
+
+    def offset_value(self, amount: sym, comp: str):
+        """
+        A register holding an offset polynomial in bytes - constants and
+        strides: a strided walk's row change, rs - (n - R) cs - computed once
+        in setup, the planner's choice (max-offset-registers): an add of it
+        where the walk moves
+        """
+        key = f"offset {amount}"
+        if key not in self.e.strides_in:
+            self.e.recipes.append(("offset_value", (amount, comp), self.e.regions_started))
+            reg = self.e.greg()
+            self.e.strides_in[key] = reg
+            esize = adt_size(self.e.ctx.component_dts[comp])
+            lines = [asmops.set_imm(self.e.gen, reg=reg, imm=dict(amount.terms).get((), 0))]
+            for factors, coeff in amount.terms:
+                if factors:
+                    lines += self.add_scaled(reg, self.stride_reg(factors[0], setup=True), coeff // esize)
+            self.e.late_setup += lines
+        return self.e.strides_in[key]
+
     def vl_stride(self, factor: str, dt):
         """
         A register holding the vector length in elements times a stride in
@@ -393,6 +433,8 @@ class signature_emitter:
         self.vlm: dict[tuple, object] = {}
         #: how address offsets are formed
         self.offsets = offset_planner(self)
+        #: offset polynomials with a register of their own (plan_offsets)
+        self.offset_plan = set()
         self.masks: dict = {}
         self.indexes: dict = {}
         # setup-time values a previous emission found it needed: allocated
@@ -676,6 +718,42 @@ class signature_emitter:
 
     def add_bytes(self, *args, **kwargs):
         return self.offsets.add_bytes(*args, **kwargs)
+
+    def offset_value(self, *args, **kwargs):
+        return self.offsets.offset_value(*args, **kwargs)
+
+    def plan_offsets(self) -> set:
+        """
+        The offset polynomials address moves need that get a register of their
+        own (max-offset-registers): every move of constants and strides that
+        takes more than one instruction spelled out (a strided walk's row
+        change), its uses weighted - a loop's body tenfold - times the
+        instructions a register saves; the most first
+        """
+        budget = self.program.offset_registers
+        if not budget:
+            return set()
+        found = {}
+        def visit(ops, weight):
+            for op in ops:
+                if isinstance(op, lsc_loop):
+                    visit(op.block, weight)
+                    continue
+                if not isinstance(op, lsc_addr_compute):
+                    continue
+                comp = op.indices[0].component
+                amount = self.bytes_of(comp, op.delta)
+                if not all(1 == len(f) and f[0].startswith("stride(") for f, _ in amount.terms if f):
+                    continue
+                cost = self.offsets.offset_cost(amount, comp)
+                if cost > 1:
+                    entry = found.setdefault((str(amount), comp), [0, cost])
+                    entry[0] += weight
+        for block in self.program.blocks + [b for case in self.program.cases for b in case.blocks]:
+            for section in ("prologue", "body", "epilogue", "tail", "subtail"):
+                visit(getattr(block, section) or [], 10 if "body" == section else 1)
+        ranked = sorted(found.items(), key=lambda kv: -kv[1][0] * (kv[1][1] - 1))
+        return {key for key, _ in ranked[:budget]}
 
     def slices(self, op) -> list[str]:
         """
@@ -1399,13 +1477,22 @@ class signature_emitter:
         amount = self.bytes_of(comp, op.delta)
         k = self.vector_multiple(amount, comp)
         terms = dict(amount.terms)
+        planned = None
+        if (str(amount), comp) in self.offset_plan:
+            try:
+                planned = self.offset_value(amount, comp)
+            except IndexError:
+                planned = None          # no general register left: spelled out
         once = None
         if src_key != dest_key and k is None and 1 == len(terms):
             (factors, coeff), = terms.items()
             if 1 == len(factors) and factors[0].startswith("stride(") \
                     and coeff == adt_size(self.ctx.component_dts[comp]):
                 once = factors[0]
-        if src_key != dest_key and k is not None:
+        if planned is not None:
+            # a planned offset polynomial (a strided walk's row change): one add
+            lines = [asmops.add(self.gen, dst=dest, reg1=self.aregs[src_key], reg2=planned)]
+        elif src_key != dest_key and k is not None:
             # k vectors on from another pointer: one add, as the scheduler counts it
             dt = self.ctx.component_dts[comp]
             lines = [asmops.add(self.gen, dst=dest, reg1=self.aregs[src_key],
@@ -1799,6 +1886,7 @@ class signature_emitter:
         # here, before any region, so every region knows their registers
         for name, args in self.preallocate:
             getattr(self, name)(*args)
+        self.offset_plan = self.plan_offsets()
         self.regions_started = True
         # regions - each block, the dispatch, each case - set up what they
         # need at their start and release, at their end, what no later region

@@ -533,6 +533,9 @@ class kernel:
     c_storages: list = field(default_factory=list)
     #: the kernel's alignment in bytes, where its family asks one
     align: int | None = None
+    #: the unroll built (along k; packm: along the panel) - a family's is a
+    #: ceiling, halved where a kernel doesn't build at it
+    unroll: int | None = None
 
 
 def part_extent(ctx, part: int, idx: str) -> sym:
@@ -634,7 +637,7 @@ def gemm_one(isa: str, config_name: str, fam: family, dt: str, m: int, n: int,
         params[f"{comp}-data-type"] = dt
     params.update({"m": str(m), "n": str(n)})
     try:
-        ctx, result, _ = run_unrolled(params, "k")
+        ctx, result, unroll = run_unrolled(params, "k")
     except Exception as err:
         return _skip(dt, (m, n), err)
     if not result.completed or not ctx.emitted:
@@ -645,7 +648,7 @@ def gemm_one(isa: str, config_name: str, fam: family, dt: str, m: int, n: int,
     symbol = f"bli_{DT_CHAR[dt]}gemm_{config_name}_{fam.name}_{size_name(mr)}x{size_name(nr)}"
     program = ctx.emitted[0]
     storages = params.get("C-storage") or []
-    return _done(kernel(family=fam.name, dtype=dt, size=(m, n), mr=mr, nr=nr, symbol=symbol,
+    return _done(kernel(unroll=unroll, family=fam.name, dtype=dt, size=(m, n), mr=mr, nr=nr, symbol=symbol,
                         params=list(program.params), c_layout=c_layout, program=program,
                         simd_size_c=ctx.gen.c_simd_size_function,
                         c_storages=list(storages) if len(storages) > 1 else []), detach)
@@ -710,7 +713,7 @@ def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: in
             # m vectors, registers: m / lmul groups of them
             params["m"] = str(m // lmul)
     try:
-        ctx, result, _ = run_unrolled(params, "n")
+        ctx, result, unroll = run_unrolled(params, "n")
     except Exception as err:
         # X's ring by default a register for each of a step's rows, Y's too:
         # where the vector registers run out (trans16 - 16 rows of each,
@@ -721,7 +724,7 @@ def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: in
             return _skip(dt, (case, m), err)
         params["X-data-regs"] = str(max(1, -(-m // 2)))
         try:
-            ctx, result, _ = run_unrolled(params, "n")
+            ctx, result, unroll = run_unrolled(params, "n")
         except Exception as again:
             return _skip(dt, (case, m), again)
     if not result.completed or not ctx.emitted:
@@ -745,7 +748,7 @@ def packm_one(isa: str, config_name: str, fam: family, dt: str, case: str, m: in
     unit = "VL" if any(("VL",) in dict(b.step.terms) or b.loop_index in along
                        for p in ctx.programs for b in all_blocks(p)
                        if b.step is not None) else ""
-    return _done(kernel(family=fam.name, dtype=dt, size=(m, 1), mr=cdim, nr="1", symbol=symbol,
+    return _done(kernel(unroll=unroll, family=fam.name, dtype=dt, size=(m, 1), mr=cdim, nr="1", symbol=symbol,
                         params=list(program.params), c_layout="col", program=program, case=case, kind=fam.case_kinds.get(case, case),
                         loop_unit=unit, simd_size_c=ctx.gen.c_simd_size_function, lmul=grouped,
                         tail=masked),
@@ -785,7 +788,7 @@ def split_one(isa: str, config_name: str, fam: family, dt: str, combo: tuple, o:
     params[other] = str(o)
     size = combo + (o,) if "m" == split else (o,) + combo
     try:
-        ctx, result, _ = run_unrolled(params, "k")
+        ctx, result, unroll = run_unrolled(params, "k")
     except Exception as err:
         return _skip(dt, size, err)
     if not result.completed or not ctx.emitted:
@@ -795,7 +798,7 @@ def split_one(isa: str, config_name: str, fam: family, dt: str, combo: tuple, o:
     names = "_".join(f"{size_name(part_extent(ctx, p, 'm'))}x{size_name(part_extent(ctx, p, 'n'))}"
                      for p in range(len(ctx.stos)))
     program = ctx.emitted[0]
-    return _done(kernel(family=fam.name, dtype=dt, size=size, mr=mr, nr=nr,
+    return _done(kernel(unroll=unroll, family=fam.name, dtype=dt, size=size, mr=mr, nr=nr,
                         symbol=f"bli_{DT_CHAR[dt]}gemm_{config_name}_{fam.name}_{names}",
                         params=list(program.params),
                         c_layout=c_storage(layout),
