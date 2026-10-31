@@ -1096,6 +1096,77 @@ int main( void )
                 self.assertFalse([l for l in body if l.startswith("sub ")], built[0].symbol)
                 self.assertGreaterEqual(len(moved), 5, (built[0].symbol, sorted(moved)))
 
+    def k3_trans14(self, extra):
+        # the K3's spackm trans case at 14 rows (ukrconfig/rvv/k3-x100), its
+        # params overridden
+        import yaml
+        from ukrgen.injectors.blis.families import build_packm
+        raw = yaml.safe_load(open(os.path.join(HERE, "..", "..", "ukrconfig", "rvv", "k3-x100", "spackm.yaml")))
+        case = dict(next(c for c in raw["cases"] if "trans" == c["kind"]), m=[14])
+        case["params"] = dict(case.get("params", {}), **extra)
+        raw["cases"] = [case]
+        fam = family.from_yaml("packm", dict({k: v for k, v in raw.items() if k != "isa"}, dtypes=["FP32"]))
+        built, skipped = build_packm("rvv", "ukrgen_rvv", fam)
+        self.assertTrue(built, skipped)
+        return built[0]
+
+    @staticmethod
+    def loop_bodies(k):
+        return [[l.strip() for l in blk.sections.get("body", [])]
+                for _, _, blocks in k.program.cases for blk in blocks]
+
+    def run_k3_trans14(self, k):
+        # panels of 14 rows, n a multiple of the vector length: every one
+        # through the kernel, none through the reference
+        from ukrgen.injectors.blis.cgen import packm_dispatch, vl_helpers
+        cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
+        if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
+            self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
+        cases = ("{ 14, 14, 4 * vl, 4 * vl + 1, 1, 0 }, { 14, 14, 2 * vl, 2 * vl + 5, 1, 0 }, "
+                 "{ 14, 14, 8 * vl, 8 * vl + 3, 1, 0 }, { 14, 14, vl, vl + 7, 1, 0 }")
+        src = "#include <stdio.h>\n#include <stdlib.h>\n#include \"blis_stub.h\"\n" + \
+              vl_helpers([k], make_generator("rvv")) + \
+              "\n#define bli_sspackm_ukrgen_rvv_ref REF\ntypedef int conj_t;\ntypedef int pack_t;\n" + \
+              "void REF( conj_t, pack_t, dim_t, dim_t, dim_t, dim_t, dim_t, const void*, const void*, " \
+              "inc_t, inc_t, void*, inc_t, const void*, const cntx_t* );\n" + \
+              packm_dispatch("ukrgen_rvv", "FP32", [k]) + \
+              "\ndim_t VL_OF( void ) { return ukrgen_vl( sizeof( float ) ); }\n"
+        harness = open(os.path.join(HERE, "packm_harness.c")).read() \
+            .replace("typedef int conj_t;\ntypedef int pack_t;\n", "").replace("#include KERNEL_C\n", "")
+        outs = self.run_c("rvv", src + harness, [k],
+                          [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"] for v in (128, 256)],
+                          ["-DPACKM=bli_spackm_ukrgen_rvv", f"-DCASES={cases}", "-DWT=float"], cc=cc)
+        # two vector lengths, each with kappa 1 (the copy) and not (the multiply)
+        self.assertEqual(4, len(outs))
+        for out in outs:
+            self.assertIn("4 runs, 4 by generated cases, 0 wrong", out, k.symbol)
+
+    def test_trans_rewind_folds(self):
+        # X on one register, no column pointers: its rows walked, and the
+        # iteration's end - the advance less the walk, VL - 12 rs - one move;
+        # spelled out it's an add and twelve subs, with an offset register
+        # (the planner takes the vector length's term too) one add. Four: the
+        # copy's and the kappa case's rewinds, and the kappa case's walk back
+        # three rows mid-body
+        spelled = self.k3_trans14({"X-column-pointers": "0"})
+        self.assertTrue(any(l.startswith("sub ") for b in self.loop_bodies(spelled) for l in b))
+        k = self.k3_trans14({"X-column-pointers": "0", "max-offset-registers": "4"})
+        for body in self.loop_bodies(k):
+            self.assertFalse([l for l in body if l.startswith("sub ")], k.symbol)
+        self.run_k3_trans14(k)
+
+    def test_trans_rotates_without_pointers(self):
+        # X on five registers taken in turn, no column pointers: independent
+        # chains like the column pointers' (a dual-issue core overlaps them),
+        # each register's rewind folded into an offset register's add
+        k = self.k3_trans14({"X-column-pointers": "0", "X-addr-regs": "5", "X-addr-pattern": "rotate",
+                             "max-offset-registers": "4"})
+        for body in self.loop_bodies(k):
+            self.assertFalse([l for l in body if l.startswith("sub ")], k.symbol)
+            moved = {l.split()[1].rstrip(",") for l in body if l.startswith("add ")}
+            self.assertGreaterEqual(len(moved), 5, sorted(moved))
+        self.run_k3_trans14(k)
+
     def test_lanes_without_column_pointers(self):
         # NEON's vn kernels store C across vectors lane by lane: with no
         # column pointers (column-pointers: {C: 0}) each lane's address is

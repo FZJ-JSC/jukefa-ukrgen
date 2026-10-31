@@ -149,7 +149,9 @@ case of their own. `docs/BLISGEN_PLAN.md` has the details of each.
   parameter - under `params:`: off by
   default - each takes a general register from address registers and column
   pointers, large microtiles then don't build; `auto` 4, 1 on x86): the most
-  used, saving the most instructions, first - but none from a stride passed on the stack and loaded
+  used, saving the most instructions, first - vector lengths in them too (a
+  walked register's rewind with the loop's advance, VL - 12 rs: one add, not
+  an add and twelve subs) - but none from a stride passed on the stack and loaded
   where the cases first need it (C's), which setup would have to load early.
 - A family's `unroll` is a ceiling: a size that doesn't build at it is built
   at half of it, down to 1. A kernel records the unroll it got (`unroll`), and

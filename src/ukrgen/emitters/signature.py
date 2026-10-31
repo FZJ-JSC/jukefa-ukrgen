@@ -157,6 +157,17 @@ class emitted_program:
         return "\n".join(lines)
 
 
+def _plannable(factors: tuple) -> bool:
+    """
+    A term of an address move offset_value computes once: a stride, the
+    vector length, a vector length of a stride, the vector length squared -
+    what add_bytes moves by (a loop's advance less its walk: VL - 12 rs)
+    """
+    if 1 == len(factors):
+        return factors[0].startswith("stride(") or "VL" == factors[0]
+    return 2 == len(factors) and "VL" == factors[0] and (factors[1].startswith("stride(") or "VL" == factors[1])
+
+
 class offset_planner:
     """
     How an address offset is formed - every decision in one place: a
@@ -278,6 +289,10 @@ class offset_planner:
             if not factors:
                 cost += 1 if coeff else 0
                 continue
+            if ("VL",) == factors:
+                # a vector length's multiple: one add (incb, a register holding it)
+                cost += 1
+                continue
             n, bit, op = abs(coeff // esize), 0, "sub" if coeff < 0 else "add"
             while n:
                 if n & 1:
@@ -301,8 +316,13 @@ class offset_planner:
             esize = adt_size(self.e.ctx.component_dts[comp])
             lines = [asmops.set_imm(self.e.gen, reg=reg, imm=dict(amount.terms).get((), 0))]
             for factors, coeff in amount.terms:
-                if factors:
+                if 1 == len(factors) and factors[0].startswith("stride("):
                     lines += self.add_scaled(reg, self.stride_reg(factors[0], setup=True), coeff // esize)
+            # vector lengths (of strides) as add_bytes moves by them: setup values
+            # of their own (vl_bytes, vl_multiple, vl_stride), incb on SVE
+            others = {f: c for f, c in amount.terms if f and not (1 == len(f) and f[0].startswith("stride("))}
+            if others:
+                lines += self.add_bytes(reg, sym._make(others), comp)
             self.e.late_setup += lines
         return self.e.strides_in[key]
 
@@ -756,14 +776,14 @@ class signature_emitter:
                     continue
                 comp = op.indices[0].component
                 amount = self.bytes_of(comp, op.delta)
-                if not all(1 == len(f) and f[0].startswith("stride(") for f, _ in amount.terms if f):
+                if not all(_plannable(f) for f, _ in amount.terms if f):
                     continue
                 # a stride passed on the stack and deferred to the dispatch
                 # (AArch64's and RVV's ninth argument on: C's) isn't held in
                 # setup: computing one there would keep it from entry and move
                 # where the dispatch finds the parameters (NEON's general C
                 # stored transposed)
-                if any(canonical(f[0]) in deferred for f, _ in amount.terms if f):
+                if any(canonical(f[-1]) in deferred for f, _ in amount.terms if f and f[-1].startswith("stride(")):
                     continue
                 cost = self.offsets.offset_cost(amount, comp)
                 if cost > 1:
