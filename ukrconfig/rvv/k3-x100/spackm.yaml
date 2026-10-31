@@ -51,38 +51,48 @@
 # dpackm stays at 13 (14.56 against 14.53, flat). Every issue model was swept too and is flat here
 # (9.91-9.95), so the tree keeps 2:vl|vs,vf,sl,i (the GEMM winner).
 isa: rvv
-family: pk
-min-inflight: 16
-cases:
-- kind: vec
-  m: 1..8
-  preset: packm_vf
-  vectorize: m
-  params:
-    X-layout: ['m:c', 'n:s']
-    Y-layout: ['m:c', 'n:s']
-    sched-cycle-slots: "2:vl|vs,vf,sl,i"
-  schedule: ['RAW:data::::4', 'WAW:data::::4', 'WAR:data::::4', 'RAW:address:greg:::3']
-- kind: vec
-  name: vtail
-  mask: true
-  m: 0..7
-  preset: packm_vf
-  vectorize: m
-  params:
-    X-layout: ['m:c', 'n:s']
-    Y-layout: ['m:c', 'n:s']
-    sched-cycle-slots: "2:vl|vs,vf,sl,i"
-  schedule: ['RAW:data::::4', 'WAW:data::::4', 'WAR:data::::4', 'RAW:address:greg:::3']
-- kind: trans
-  m: 1..32
-  preset: packm_vf
-  vectorize: n
-  params:
-    pre-specialize-irmods: ['+structfuse']
-    structfuse-fields: 4
-    X-data-regs: 4
-    X-layout: ['n:c', 'm:s']
-    Y-layout: ['m:c', 'n:p']
-    sched-cycle-slots: "2:vl|vs,vf,sl,i"
-  schedule: ['RAW:data::::4', 'WAW:data::::4', 'WAR:data::::4', 'RAW:address:greg:::3']
+families:
+- family: pk
+  min-inflight: 16
+  cases:
+  - kind: vec
+    m: 1..8
+    preset: packm_vf
+    vectorize: m
+    params:
+      rvv-ZBA: on
+      X-layout: ['m:c', 'n:s']
+      Y-layout: ['m:c', 'n:s']
+      sched-cycle-slots: "2:vl|vs,vf,sl,i"
+    schedule: ['RAW:data::::4', 'WAW:data::::4', 'WAR:data::::4', 'RAW:address:greg:::3']
+  - kind: vec
+    name: vtail
+    mask: true
+    m: 0..7
+    preset: packm_vf
+    vectorize: m
+    params:
+      rvv-ZBA: on
+      X-layout: ['m:c', 'n:s']
+      Y-layout: ['m:c', 'n:s']
+      sched-cycle-slots: "2:vl|vs,vf,sl,i"
+    schedule: ['RAW:data::::4', 'WAW:data::::4', 'WAR:data::::4', 'RAW:address:greg:::3']
+- family: pktrans
+  min-inflight: 16
+  max-addr-regs: {X: 2, Y: 1}
+  addr-pattern: {X: 'blocked:m/R', Y: 'blocked:n/R'}
+  cases:
+  - kind: trans
+    m: 1..32
+    preset: packm_vf
+    vectorize: n
+    params:
+      max-offset-registers: 4
+      rvv-ZBA: on
+      pre-specialize-irmods: ['+structfuse']
+      structfuse-fields: 4
+      X-data-regs: 4
+      X-layout: ['n:c', 'm:s']
+      Y-layout: ['m:c', 'n:p']
+      sched-cycle-slots: "2:vl|vs,vf,sl,i"
+    schedule: ['RAW:data::::4', 'WAW:data::::4', 'WAR:data::::4', 'RAW:address:greg:::3']
