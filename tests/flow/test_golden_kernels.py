@@ -61,5 +61,48 @@ class test_no_mergeable_adds(unittest.TestCase):
                         break
 
 
+
+class test_spelled_addresses(unittest.TestCase):
+    """
+    Address moves spelled as one-instruction steps in the IR before emitting
+    (docs/ADDRESSING_PLAN.md step 1): every golden kernel the same text with
+    the steps as without - the emitter's spelling moved, not changed - and
+    the moves really steps
+    """
+
+    def test_same_kernels(self):
+        from ukrgen.emitters import signature as sg
+        from tests.flow.golden_kernels import kernels, build
+        for label, path, family, m, n in kernels():
+            with self.subTest(kernel=label):
+                saved = sg.SPELL_ADDRESSES
+                try:
+                    sg.SPELL_ADDRESSES = False
+                    whole = build(path, family, m, n)
+                    sg.SPELL_ADDRESSES = True
+                    spelled = build(path, family, m, n)
+                finally:
+                    sg.SPELL_ADDRESSES = saved
+                self.assertEqual(whole, spelled)
+
+    def test_steps(self):
+        from tests.specializers.gemm_helper import gemm
+        from ukrgen.models.load_store_operations import lsc_addr_compute, lsc_loop
+        ctx, res = gemm("rvv", **{"rvv-LMUL": "1"})
+        self.assertTrue(res.completed, res.output)
+        kinds = set()
+        def walk(ops):
+            for op in ops:
+                if isinstance(op, lsc_loop):
+                    walk(op.block)
+                elif isinstance(op, lsc_addr_compute) and dict(op.delta.terms):
+                    kinds.add((op.properties or {}).get("step", ("whole",))[0])
+        prog = ctx.programs[0]
+        for b in prog.blocks + [b for c in prog.cases for b in c.blocks]:
+            for sec in ("prologue", "body", "epilogue", "tail", "subtail"):
+                walk(getattr(b, sec) or [])
+        self.assertNotIn("whole", kinds)
+        self.assertTrue({"reg", "imm"} <= kinds, kinds)
+
 if __name__ == "__main__":
     unittest.main()

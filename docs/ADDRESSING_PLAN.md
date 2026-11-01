@@ -45,7 +45,14 @@ in the IR, in order.
 
 ## Steps
 
-1. **Spelling in the specializer.** A last specialization pass
+1. **Spelling in the IR** - done (ukrgen 0265): emitters/signature.py
+   `spell_addresses` turns every move into its steps before the emission
+   (after scheduling: the steps sit where the move did, the kernels the
+   same byte for byte - the golden kernels compared with and without,
+   test_spelled_addresses), `address()` emits a step as its instruction;
+   `add_bytes` is `move_steps` and `emit_step` too. Moving the pass before
+   scheduling, where the scheduler sees each step, is step 3's: the kernels
+   change there. Planned to be: a last specialization pass
    (`spell_addresses`) turns each move into its single-instruction steps by
    today's rules (`address`, `add_bytes`, `add_scaled`), each step's form a
    property of its `lsc_addr_compute`; the emitter emits a step as one

@@ -17,7 +17,6 @@ and offsets all come from the program and the composition metadata.
 
 from __future__ import annotations
 
-import functools
 
 from dataclasses import dataclass, field
 
@@ -188,56 +187,44 @@ class offset_planner:
         """
         return self.e.params[factor]
 
-    def add_scaled(self, areg, source, n: int) -> list[str]:
+    def scaled_steps(self, value: tuple, n: int) -> list[tuple]:
         """
-        areg moved by n times a register's amount, n negative backwards: an
-        add or sub per set bit of n - shifted where the ISA shifts the operand
-        (AArch64 add x, x, y, LSL #s; x86 lea): 2*VL*VL one instruction off a
-        register holding VL*VL - plain adds or subs repeated where it doesn't
+        A register's amount n times, n negative backwards, as steps of one
+        instruction: an add or sub per set bit of n - shifted where the ISA
+        shifts the operand (AArch64 add x, x, y, LSL #s; x86 lea; Zba's
+        shNadd), plain adds or subs repeated where it doesn't. A run longer
+        than three: the count times the register in a scratch register, one
+        step of three instructions (load, multiply, add) carrying its run for
+        where no general register is free
         """
         op = "sub" if n < 0 else "add"
-        plain = functools.partial(asmops.arith, self.e.gen, op)
-        shifted = functools.partial(asmops.shifted, self.e.gen, op)
         out, k, bit = [], abs(n), 0
         while k:
             if k & 1:
-                if not bit:
-                    out.append(plain(dst=areg, reg1=areg, reg2=source))
-                elif self.e.shifted_available(op, bit):
-                    out.append(shifted(dst=areg, reg1=areg, reg2=source, shift=bit))
+                if not bit or self.e.shifted_available(op, bit):
+                    out.append(("reg", value, op, bit))
                 else:
-                    out += [plain(dst=areg, reg1=areg, reg2=source)] * (1 << bit)
+                    out += [("reg", value, op, 0)] * (1 << bit)
             k >>= 1
             bit += 1
         if len(out) > 3:
-            # a long run (twelve subs of a stride, no shifted sub): the count
-            # times the register in a scratch register - three instructions
-            # whatever the count - where one is free
-            try:
-                scratch = self.e.greg()
-            except specialization_error:
-                return out
-            mul = [asmops.set_imm(self.e.gen, reg=scratch, imm=abs(n)),
-                   asmops.mul(self.e.gen, dst=scratch, reg1=source, reg2=scratch),
-                   plain(dst=areg, reg1=areg, reg2=scratch)]
-            self.e.rt.unuse_reg("greg", scratch.idx)
-            return mul
+            return [("mul", value, op, abs(n), tuple(out))]
         return out
 
-    def add_bytes(self, areg, amount: sym, comp: str) -> list[str]:
+    def move_steps(self, amount: sym, comp: str) -> list[tuple]:
         """
-        Move an address register on by a number of bytes: constants as an
-        immediate; whole vectors with incb/decb where the ISA counts them so;
-        multiples of a register's amount - strides, the vector length (RVV),
-        vector lengths of strides or of vectors, each held in bytes - as
-        shifted or repeated adds and subs of it (add_scaled)
+        Steps of one instruction moving an address register by a number of
+        bytes: constants as an immediate; whole vectors with incb/decb where
+        the ISA counts them so; multiples of a register's amount - strides, the
+        vector length (RVV), vector lengths of strides or of vectors, each held
+        in bytes - as shifted or repeated adds and subs of it (scaled_steps)
         """
         dt = self.e.ctx.component_dts[comp]
         esize = adt_size(dt)
-        lines = []
+        steps = []
         for factors, coeff in amount.terms:
             if not factors:
-                lines.append(asmops.add_imm(self.e.gen, reg=areg, imm=coeff))
+                steps.append(("imm", coeff))
                 continue
             if 0 != coeff % esize:
                 raise specialization_error(
@@ -245,29 +232,110 @@ class offset_planner:
             n = coeff // esize
             if ("VL",) == factors and not self.e.vector_length_kept:
                 # whole vectors, forward or back: incb or decb
-                lines.append(asmops.add_vectors(self.e.gen, reg=areg, offset=n))
+                steps.append(("vectors", n))
                 continue
             if ("VL",) == factors and n > 1:
                 # RVV: k vector lengths in a register of their own - one add
-                lines.append(asmops.add(self.e.gen, dst=areg, reg1=areg, reg2=self.vl_multiple(dt, n)))
+                steps.append(("reg", ("vl_multiple", dt, n), "add", 0))
                 continue
             if ("VL",) == factors:
-                # RVV: the vector length in a register, in bytes
-                source = self.vl_bytes(dt)
+                value = ("vl_bytes", dt)        # RVV: the vector length in bytes
             elif 1 == len(factors) and factors[0].startswith("stride("):
-                source = self.stride_reg(factors[0])
+                value = ("stride", factors[0])
             elif 2 == len(factors) and "VL" == factors[0] and factors[1].startswith("stride("):
-                # a vector length of strided elements, multiplied once
-                source = self.vl_stride(factors[1], dt)
+                value = ("vl_stride", factors[1], dt)   # a vector length of strided elements
             elif ("VL", "VL") == factors:
-                # vector lengths of vectors: a packed layout's next tile
-                source = self.vl_squared(dt)
+                value = ("vl_squared", dt)      # vector lengths of vectors: a packed layout's next tile
             else:
                 raise specialization_error(
                     f"moving {comp}'s address by {amount} bytes needs run-time arithmetic "
                     f"(vector length), which is not specialized yet")
-            lines += self.add_scaled(areg, source, n)
-        return lines
+            steps += self.scaled_steps(value, n)
+        return steps
+
+    def value_reg(self, value: tuple):
+        """
+        The register holding a step's value - a setup value, by name and
+        element size: a stride parameter, the vector length in bytes, k of
+        them, a vector length of a stride, the vector length squared
+        """
+        kind = value[0]
+        if "stride" == kind:
+            return self.stride_reg(value[1])
+        if "vl_bytes" == kind:
+            return self.vl_bytes(value[1])
+        if "vl_multiple" == kind:
+            return self.vl_multiple(value[1], value[2])
+        if "vl_stride" == kind:
+            return self.vl_stride(value[1], value[2])
+        if "vl_squared" == kind:
+            return self.vl_squared(value[1])
+        raise specialization_error(f"no register holds {value}")
+
+    def emit_step(self, areg, step: tuple) -> list[str]:
+        """
+        One step moving areg: one instruction - the scratch multiply three,
+        or its run where no general register is free
+        """
+        kind = step[0]
+        if "imm" == kind:
+            return [asmops.add_imm(self.e.gen, reg=areg, imm=step[1])]
+        if "vectors" == kind:
+            return [asmops.add_vectors(self.e.gen, reg=areg, offset=step[1])]
+        if "reg" == kind:
+            _, value, op, bit = step
+            source = self.value_reg(value)
+            if not bit:
+                return [asmops.arith(self.e.gen, op, dst=areg, reg1=areg, reg2=source)]
+            return [asmops.shifted(self.e.gen, op, dst=areg, reg1=areg, reg2=source, shift=bit)]
+        if "mul" == kind:
+            _, value, op, count, run = step
+            source = self.value_reg(value)
+            try:
+                scratch = self.e.greg()
+            except specialization_error:
+                return [line for sub in run for line in self.emit_step(areg, sub)]
+            out = [asmops.set_imm(self.e.gen, reg=scratch, imm=count),
+                   asmops.mul(self.e.gen, dst=scratch, reg1=source, reg2=scratch),
+                   asmops.arith(self.e.gen, op, dst=areg, reg1=areg, reg2=scratch)]
+            self.e.rt.unuse_reg("greg", scratch.idx)
+            return out
+        raise specialization_error(f"no instruction for the step {step}")
+
+    def add_scaled(self, areg, source, n: int) -> list[str]:
+        """
+        areg moved by n times a register's amount (scaled_steps), the register
+        given - setup's own computations (offset_value)
+        """
+        out = []
+        for step in self.scaled_steps(("given",), n):
+            if "mul" == step[0]:
+                _, _, op, count, run = step
+                try:
+                    scratch = self.e.greg()
+                except specialization_error:
+                    out += [line for sub in run for line in self._given(areg, source, sub)]
+                    continue
+                out += [asmops.set_imm(self.e.gen, reg=scratch, imm=count),
+                        asmops.mul(self.e.gen, dst=scratch, reg1=source, reg2=scratch),
+                        asmops.arith(self.e.gen, op, dst=areg, reg1=areg, reg2=scratch)]
+                self.e.rt.unuse_reg("greg", scratch.idx)
+            else:
+                out += self._given(areg, source, step)
+        return out
+
+    def _given(self, areg, source, step) -> list[str]:
+        _, _, op, bit = step
+        if not bit:
+            return [asmops.arith(self.e.gen, op, dst=areg, reg1=areg, reg2=source)]
+        return [asmops.shifted(self.e.gen, op, dst=areg, reg1=areg, reg2=source, shift=bit)]
+
+    def add_bytes(self, areg, amount: sym, comp: str) -> list[str]:
+        """
+        Move an address register on by a number of bytes: its steps
+        (move_steps), each emitted (emit_step)
+        """
+        return [line for step in self.move_steps(amount, comp) for line in self.emit_step(areg, step)]
 
     # --- operations ----------------------------------------------------------
 
@@ -453,7 +521,7 @@ class signature_emitter:
     #: shifted operands' forms asked of the operations, by (op, shift)
     shifted_known: dict | None = None
 
-    def __init__(self, ctx, program: ir_program, preallocate=(), keep_params=()):
+    def __init__(self, ctx, program: ir_program, preallocate=(), keep_params=(), spell=False):
         self.ctx = ctx
         self.gen = ctx.gen
         self.program = program
@@ -473,6 +541,10 @@ class signature_emitter:
         self.vlm: dict[tuple, object] = {}
         #: how address offsets are formed
         self.offsets = offset_planner(self)
+        #: the program's address moves spelled as steps of one instruction
+        #: before emitting (spell_addresses) - not where offset registers are
+        #: planned: the planner takes a move's whole polynomial
+        self.spell = spell
         #: the fewest general registers free at any reservation (greg)
         self.min_free_gregs = None
         #: offset polynomials with a register of their own (plan_offsets)
@@ -1531,6 +1603,98 @@ class signature_emitter:
     def vector_multiple(self, *args, **kwargs):
         return self.offsets.vector_multiple(*args, **kwargs)
 
+    def step_delta(self, step: tuple, comp: str) -> sym:
+        """
+        A step's move in the component's elements - the steps of a move adding
+        up to its delta
+        """
+        esize = adt_size(self.ctx.component_dts[comp])
+        kind = step[0]
+        if "copy" == kind:
+            return sym.const(0)
+        if "imm" == kind:
+            return sym.const(step[1] // esize)
+        if "vectors" == kind:
+            return sym._make({("VL",): step[1]})
+        if "from_vectors" == kind:
+            return sym._make({("VL",): step[2]})
+        if "from_stride" == kind:
+            return sym._make({(step[1],): 1})
+        value = step[1]
+        sign = -1 if "sub" == step[2] else 1
+        times = step[3] if "mul" == kind else 1 << step[3]
+        factors = {"stride": (value[1],) if "stride" == value[0] else None, "vl_bytes": ("VL",),
+                   "vl_multiple": ("VL",), "vl_squared": ("VL", "VL"),
+                   "vl_stride": ("VL", value[1]) if "vl_stride" == value[0] else None}[value[0]]
+        if "vl_multiple" == value[0]:
+            times *= value[2]
+        return sym._make({factors: sign * times})
+
+    def spelled(self, op: lsc_addr_compute) -> list:
+        """
+        An address move as steps of one instruction each, as address() spells
+        it: from another register one add where it can (k vector lengths, one
+        stride), else a copy and the move's steps (move_steps); a loop's
+        advance on the last
+        """
+        comp = op.indices[0].component
+        src, dst = op.indices[0].indices[0], op.indices[1].indices[0]
+        dt = self.ctx.component_dts[comp]
+        amount = self.bytes_of(comp, op.delta)
+        k = self.vector_multiple(amount, comp)
+        terms = dict(amount.terms)
+        props = dict(op.properties or {})
+        advance = props.pop("advance", None)
+        one = next(iter(terms)) if 1 == len(terms) else None
+        three = 1 == len([l for l in asmops.add(self.gen, dst=self.gen.greg(0), reg1=self.gen.greg(1),
+                                                reg2=self.gen.greg(2)).splitlines() if l.strip()])
+        if src != dst and k is not None:
+            steps = [(src, ("from_vectors", dt, k))]
+        elif src != dst and one is not None and 1 == len(one) and one[0].startswith("stride(") \
+                and terms[one] == adt_size(dt) and three:
+            steps = [(src, ("from_stride", one[0]))]
+        else:
+            steps = ([(src, ("copy",))] if src != dst else []) + \
+                [(dst, st) for st in self.offsets.move_steps(amount, comp)]
+        if not steps:
+            return [op]      # a move of nothing: as it was
+        out = []
+        for n, (s_src, step) in enumerate(steps):
+            o = lsc_addr_compute(comp, s_src, dst, self.step_delta(step, comp), scalar_tile)
+            o.properties = dict(props, step=step)
+            if advance is not None and len(steps) - 1 == n:
+                o.properties["advance"] = advance
+            out.append(o)
+        total = sym.const(0)
+        for o in out:
+            total = total + o.delta
+        if dict(total.terms) != dict(op.delta.terms):
+            raise specialization_error(f"spelling {comp}'s move by {op.delta}: steps add up to {total}")
+        return out
+
+    def spell_addresses(self):
+        """
+        Every address move of the program as steps of one instruction each
+        (spelled): the IR says what a move costs. Done once - a step isn't
+        spelled again
+        """
+        def spell(ops):
+            out = []
+            for op in ops:
+                if isinstance(op, lsc_loop):
+                    op.block = spell(list(op.block))
+                    op.refresh()
+                elif isinstance(op, lsc_addr_compute) and "step" not in (op.properties or {}):
+                    out += self.spelled(op)
+                    continue
+                out.append(op)
+            return out
+        for block in self.program.blocks + [b for case in self.program.cases for b in case.blocks]:
+            for section in ("prologue", "body", "epilogue", "tail", "subtail"):
+                ops = getattr(block, section)
+                if ops:
+                    setattr(block, section, spell(list(ops)))
+
     def address(self, op: lsc_addr_compute) -> list[str]:
         """
         An address register set from another plus an offset
@@ -1541,6 +1705,21 @@ class signature_emitter:
         if dest_key not in self.aregs:
             self.aregs[dest_key] = self.greg()
         dest = self.aregs[dest_key]
+        step = (op.properties or {}).get("step")
+        if step is not None:
+            # one step of a spelled move (spell_addresses): its instruction
+            if "copy" == step[0]:
+                lines = [asmops.mov(self.gen, src=self.aregs[src_key], dst=dest)]
+            elif "from_vectors" == step[0]:
+                lines = [asmops.add(self.gen, dst=dest, reg1=self.aregs[src_key],
+                                    reg2=self.vl_multiple(step[1], step[2]))]
+            elif "from_stride" == step[0]:
+                lines = [asmops.add(self.gen, dst=dest, reg1=self.aregs[src_key], reg2=self.stride_reg(step[1]))]
+            else:
+                lines = self.offsets.emit_step(dest, step)
+            advance = (op.properties or {}).get("advance")
+            self.positions[dest_key] = self.positions[src_key] + op.delta - (advance or sym.const(0))
+            return lines
         amount = self.bytes_of(comp, op.delta)
         k = self.vector_multiple(amount, comp)
         terms = dict(amount.terms)
@@ -1907,6 +2086,8 @@ class signature_emitter:
         return [l.strip() for l in lines]
 
     def emit(self) -> emitted_program:
+        if self.spell:
+            self.spell_addresses()
         import copy
         # what the ISA needs set up: SVE's all-true predicate, SME's smstart,
         # RVV's vsetvli - for the narrowest element type, so a predicate covers
@@ -2416,6 +2597,11 @@ class signature_emitter:
 
 
 
+#: address moves spelled as one-instruction steps in the IR before emitting
+#: (spell_addresses; docs/ADDRESSING_PLAN.md step 1) - the kernels byte for
+#: byte the same either way, off for comparing
+SPELL_ADDRESSES = True
+
 #: the most offset registers max-offset-registers auto takes
 AUTO_OFFSET_REGISTERS = 8
 
@@ -2430,12 +2616,15 @@ def emit_program(ctx, program: ir_program) -> emitted_program:
     value allocated before the regions
     """
     keep: set[str] = set()
+    # address moves as one-instruction steps where no offset register is
+    # planned (docs/ADDRESSING_PLAN.md, step 1)
+    spell = SPELL_ADDRESSES and 0 == (program.offset_registers or 0)
 
     def emit_once(preallocate=()):
         # a stack parameter deferred to the dispatch but needed earlier (a
         # stride setup computes with): emitted again, that one from entry
         while True:
-            emitter = signature_emitter(ctx, program, preallocate=preallocate, keep_params=keep)
+            emitter = signature_emitter(ctx, program, preallocate=preallocate, keep_params=keep, spell=spell)
             try:
                 return emitter, emitter.emit()
             except KeyError as err:
