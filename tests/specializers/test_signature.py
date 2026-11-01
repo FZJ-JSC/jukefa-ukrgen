@@ -32,7 +32,10 @@ def mm(isa="neon", **extra):
               "C-layout": ["m:c", "n:s"],
               "mm-tileop": ["fma(A.VEC:direct, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"],
               "store-tileop": ["C.VEC:direct"], "m": "2", "n": "2", "k": "1",
-              "A-data-regs": "2", "B-data-regs": "2"}
+              "A-data-regs": "2", "B-data-regs": "2",
+              # column pointers asked for (none is the default since 0278):
+              # these tests are the mechanism's
+              "C-column-pointers": "4"}
     params.update(extra)
     def prolog(s):
         for p in s.get_parameter_names():

@@ -496,6 +496,12 @@ class _register_state:
         self.live: set[tuple] = set()
         self.tag: dict[tuple, str] = {}
         self.ahead: set[tuple] = set()
+        #: per data value the ops reading it, in order; the ops placed
+        self.readers: dict[tuple, list[int]] = {}
+        self.placed: set[int] = set()
+        for i, op in enumerate(ops):
+            for k in self._data(i, op.reads):
+                self.readers.setdefault(k, []).append(i)
         written = set()
         for op in ops:
             for p in op.reads:
@@ -531,9 +537,38 @@ class _register_state:
         after = (self.live | defs) - frees
         return max([self.count(after, t) - n for t, n in self.budget.registers.items()] + [0])
 
+    def waiting(self, j, after: set) -> set:
+        """
+        What a value op j defines ahead of its use still waits for: its
+        first unplaced reader's other data values, neither alive nor defined
+        by j (beta's broadcast an fma of a loaded C tile needs, the vector a
+        loaded lane is inserted into) - they need registers when it's read
+        """
+        defs, _ = self.change(j)
+        need, seen = set(), set()
+        for k in defs:
+            # along the chain the value starts - each value's first unplaced
+            # reader, then what it defines: beta's scaling, then alpha's
+            chain = {k}
+            for _ in range(8):
+                reader = min((r for v in chain for r in self.readers.get(v, ())
+                              if r not in self.placed and r != j and r not in seen), default=None)
+                if reader is None:
+                    break
+                seen.add(reader)
+                need |= {x for x in self._data(reader, self.ops[reader].reads) if x not in after and x not in chain}
+                chain = self._data(reader, self.ops[reader].writes) or chain
+        return need
+
     def fits(self, j) -> bool:
         defs, frees = self.change(j)
         if self.excess(j) > 0:
+            return False
+        # a value loaded ahead leaves registers for what its reader waits on:
+        # four C tiles loaded before beta's broadcast took the one beta needed
+        after = (self.live | defs) - frees
+        waiting = self.waiting(j, after)
+        if waiting and any(self.count(after | waiting, t) > n for t, n in self.budget.registers.items()):
             return False
         reads = self._data(j, self.ops[j].reads)
         ahead = (self.ahead - reads) | {k for k in defs if self.uses.get(k, 0) > 0}
@@ -553,6 +588,7 @@ class _register_state:
         return len(frees) - len(defs)
 
     def place(self, j):
+        self.placed.add(j)
         defs, frees = self.change(j)
         reads = self._data(j, self.ops[j].reads)
         for k in reads:

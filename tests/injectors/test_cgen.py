@@ -1259,21 +1259,20 @@ int main( void )
             for storages in (["row", "any"], ["col", "any"]):
                 with self.subTest(isa=isa, storages=storages):
                     sizes = {}
-                    for cp in (None, "0"):
-                        params = {"A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"]}
-                        if cp is not None:
-                            params["C-column-pointers"] = cp
+                    for cp in ("2", "0"):        # x86's old count of column pointers, none
+                        params = {"A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"],
+                                  "C-column-pointers": cp}
                         fam = family.from_yaml("gemm", {"family": "vn", "dtypes": ["FP64"], "m": m, "n": n,
                                                         "preset": "gemm_fma_bc_blocks", "vectorize": "n", "unroll": 4,
                                                         "c-storage": storages, "params": params})
                         built, skipped = build_gemm(isa, "ukrgen_x86", fam)
                         # with column pointers these sizes may not fit x86's 16
                         # general registers at all; without, they must
-                        if cp is not None:
+                        if "0" == cp:
                             self.assertTrue(built, skipped)
                         sizes[cp] = count(asm_source(built[0])) if built else None
-                    if sizes[None] is not None:
-                        self.assertLess(sizes["0"], sizes[None], (isa, storages, sizes))
+                    if sizes["2"] is not None:
+                        self.assertLess(sizes["0"], sizes["2"], (isa, storages, sizes))
                     for out in self.run_storage_kernel(isa, built[0], ["gcc"] + flags, [[]]):
                         self.assertIn("81 runs, 0 wrong", out, built[0].symbol)
 
@@ -1342,7 +1341,10 @@ int main( void )
             self.assertEqual(2, len(outs))
             for out in outs:
                 self.assertIn("81 runs, 0 wrong", out, (budget, k.symbol))
-        self.assertLess(count["auto"], count["0"])
+        # never longer than without offsets: under walks (no column pointers,
+        # 0278) the epilogue holds every general register, auto plans none -
+        # a fixed cap computes offsets the epilogue then evicts (longer)
+        self.assertLessEqual(count["auto"], count["0"])
 
     def test_lanes_without_column_pointers(self):
         # NEON's vn kernels store C across vectors lane by lane: with no
