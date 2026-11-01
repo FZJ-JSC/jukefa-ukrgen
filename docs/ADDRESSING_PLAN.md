@@ -65,19 +65,26 @@ in the IR, in order.
       NEON's transposed general C and AVX-512's storage branches. Each
       value's computation in order where it's placed (a scratch register
       freed for the next value: 0263's lesson).
-   2. *The planner in the speller.* Its ranking (uses, a loop's body
+   2. *Offsets a cache, the budget a cap* - done (ukrgen 0268). A needed
+      value finding no general register takes the least valuable offset's
+      instead, in that region only (a case starts from the dispatch's
+      offsets): its moves spelled out from there. max-offset-registers
+      limits the offsets rather than claiming registers - AVX-512's storage
+      branches at 2, the K3's sgemm vm 3x6, 3x8, 4x6 at 4 build (they ran
+      out).
+   3. *The planner in the speller.* Its ranking (uses, a loop's body
       tenfold, times the instructions a register saves) over the IR's own
       moves; a chosen offset a named value (`("offset", component,
       polynomial)`), a move it covers one step adding it - from another
       register in one add where the ISA takes three operands. Every move
       spelled, under any budget; the emitter's planner, its cost and
       `address()`'s whole-move paths go.
-   3. *`auto` in the emit stage.* Spelled and emitted without offset
+   4. *`auto` in the emit stage.* Spelled and emitted without offset
       registers, the spare general registers counted - before the dispatch
       and after it apart (C's offsets live only in the cases) - then
       planned again from the program as it was before spelling (a copy) and
       emitted.
-   4. *Tests on the old failures*: NEON's general-stride C, AVX-512's
+   5. *Tests on the old failures*: NEON's general-stride C, AVX-512's
       storage branches, the K3's vm 4x6, each under a budget; the mixed-
       precision variants (test_widen).
 3. **`addrmerge` on steps, the scheduler seeing them.**
@@ -95,7 +102,10 @@ in the IR, in order.
    2. x86's lane walks no costlier than its lane walker.
    3. The mechanism removed: walks over the pattern's registers
       (`phase+rotate`, `phase+blocked:N`) everywhere.
-5. **The emitter's other decisions** (later): `slices` (slice loops: the
+5. **Spilling** (later): a general register saved to the stack in non-loop
+   code and reloaded where needed - a user parameter, for x86's 16
+   (fngen's frame its slots).
+6. **The emitter's other decisions** (later): `slices` (slice loops: the
    register sets rotated across unrolled copies, preloads, the slices'
    walks, temporaries freed) - a pass's duties; setup values as an IR setup
    block.

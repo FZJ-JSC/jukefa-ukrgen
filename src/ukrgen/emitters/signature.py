@@ -333,6 +333,10 @@ class offset_planner:
             self.e.recipes.append(("offset_value", (amount, comp), self.e.regions_started))
             reg = self.e.greg()
             self.e.strides_in[key] = reg
+            # a cache of a value its moves can spell instead: given up where a
+            # needed value finds no general register (greg) - the budget a cap
+            plan_key = (str(amount), comp)
+            self.e.evictable[key] = (reg, plan_key, self.e.offset_rank.get(plan_key, 0))
             esize = adt_size(self.e.ctx.component_dts[comp])
             # each piece in setup as it's made: a scratch register add_scaled
             # frees is free again for the next setup value (vl_stride), whose
@@ -481,6 +485,10 @@ class signature_emitter:
         self.speller = address_speller(ctx)
         #: the fewest general registers free at any reservation (greg)
         self.min_free_gregs = None
+        #: offset registers a needed value may take (greg): cache key ->
+        #: (register, plan key, rank); the planner's ranks
+        self.evictable: dict = {}
+        self.offset_rank: dict = {}
         #: offset polynomials with a register of their own (plan_offsets)
         self.offset_plan = set()
         self.masks: dict = {}
@@ -757,6 +765,14 @@ class signature_emitter:
             self.min_free_gregs = free if self.min_free_gregs is None else min(self.min_free_gregs, free)
             return reg
         except IndexError:
+            if self.evictable:
+                # an offset register given up - the least valuable - its moves
+                # spelled out from here: max-offset-registers a cap, not a claim
+                key = min(self.evictable, key=lambda k: self.evictable[k][2])
+                reg, plan_key, _ = self.evictable.pop(key)
+                self.strides_in.pop(key, None)
+                self.offset_plan.discard(plan_key)
+                return reg
             raise specialization_error(
                 "no general register left - the parameters, A's, B's and C's address registers, "
                 "their strides, a loop's counter and the offset registers (--max-offset-registers) "
@@ -818,6 +834,7 @@ class signature_emitter:
             for section in ("prologue", "body", "epilogue", "tail", "subtail"):
                 visit(getattr(block, section) or [], 10 if "body" == section else 1)
         ranked = sorted(found.items(), key=lambda kv: -kv[1][0] * (kv[1][1] - 1))
+        self.offset_rank = {key: uses * (cost - 1) for key, (uses, cost) in ranked[:budget]}
         return {key for key, _ in ranked[:budget]}
 
     def slices(self, op) -> list[str]:
@@ -2035,7 +2052,10 @@ class signature_emitter:
         # tail's mask - each case's own: its tracker starts without them
         start = (dict(self.positions), dict(self.phys), dict(self.numbers),
                  copy.deepcopy(self.rt), dict(self.aregs), set(self.live_params), self.vtype,
-                 dict(self.indexes), dict(self.masks), dict(self.tails))
+                 dict(self.indexes), dict(self.masks), dict(self.tails),
+                 # the offsets as the dispatch leaves them: a case giving one's
+                 # register up (greg) spells it out itself, the others keep it
+                 dict(self.evictable), set(self.offset_plan), dict(self.strides_in))
         main_rt = self.rt
         cases = []
         for j, c in enumerate(self.program.cases):
@@ -2043,6 +2063,7 @@ class signature_emitter:
             self.rt, self.aregs, self.live_params = copy.deepcopy(start[3]), dict(start[4]), set(start[5])
             self.vtype = start[6]
             self.indexes = dict(start[7])
+            self.evictable, self.offset_plan, self.strides_in = dict(start[10]), set(start[11]), dict(start[12])
             self.masks, self.tails = dict(start[8]), dict(start[9])
             self.region_loads = self.start_addresses(case_comps[j], set())
             self.start_indexes(c.blocks)
