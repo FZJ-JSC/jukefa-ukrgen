@@ -1186,6 +1186,36 @@ int main( void )
             self.assertGreaterEqual(len(moved), 5, sorted(moved))
         self.run_k3_trans14(k)
 
+    def test_offset_registers_deferred_strides(self):
+        # offsets of C's strides - stack parameters the emitter loads at the
+        # dispatch - planned like any, computed right after the dispatch's
+        # loads (placed_at_dispatch): nothing loaded early. NEON's general-
+        # stride C under a budget (it was stored transposed, then excluded);
+        # AVX-512's storage branches under auto (x86's few general registers)
+        cc = ["aarch64-linux-gnu-gcc", "-static"]
+        if shutil.which(cc[0]) and shutil.which(QEMU):
+            entry = {"preset": "gemm_fma_lane", "vectorize": "m", "m": [2], "n": [4], "unroll": 2,
+                     "schedule": ["RAW:data:vreg:::4"],
+                     "params": {"A-layout": ["m:c", "k:s"], "B-layout": ["k:s", "n:c"], "C-layout": ["m:s", "n:s"],
+                                "max-offset-registers": "4"}}
+            for symbol, out in self.strided_gemm("neon", "FP64", entry,
+                                                 {"A": ("1", "mr + 3"), "B": ("nr + 5", "1"), "C": ("2", "2 * mr + 3")},
+                                                 [[QEMU, "-cpu", "max"]], cc):
+                self.assertIn("21 runs, 0 wrong", out, symbol)
+        if "avx512f" not in open("/proc/cpuinfo").read():
+            return
+        for storages in (["row", "any"], ["row", "col"]):
+            with self.subTest(storages=storages):
+                fam = family.from_yaml("gemm", {"family": "vn", "dtypes": ["FP64"], "m": [8], "n": [3],
+                                                "preset": "gemm_fma_bc_vindex", "vectorize": "n", "unroll": 4,
+                                                "c-storage": storages,
+                                                "params": {"A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"],
+                                                           "max-offset-registers": "auto"}})
+                built, skipped = build_gemm("avx512", "ukrgen_avx512", fam)
+                self.assertTrue(built, skipped)
+                for out in self.run_storage_kernel("avx512", built[0], ["gcc", "-mavx512f", "-mavx512dq", "-mfma"], [[]]):
+                    self.assertIn("81 runs, 0 wrong", out, built[0].symbol)
+
     def test_offset_registers_auto(self):
         # max-offset-registers auto: emitted without offset registers, the
         # general registers it never needed counted, then again with them -

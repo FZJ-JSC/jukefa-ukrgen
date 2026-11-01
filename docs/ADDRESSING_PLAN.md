@@ -45,41 +45,60 @@ in the IR, in order.
 
 ## Steps
 
-1. **Spelling in the IR** - done (ukrgen 0265, 0266): specializers/
-   addresses.py (`address_speller`: what the ISA does in one instruction -
-   shifted adds, vector lengths counted, three operands - and every move's
-   steps; the emit stage runs it on each program, the emitter only emits a
-   step's instruction, its value register resolved by name) turns every move
-   into its steps before the emission
-   (after scheduling: the steps sit where the move did, the kernels the
-   same byte for byte - the golden kernels compared with and without,
-   test_spelled_addresses), `address()` emits a step as its instruction;
-   `add_bytes` is `move_steps` and `emit_step` too. Moving the pass before
-   scheduling, where the scheduler sees each step, is step 3's: the kernels
-   change there. Planned to be: a last specialization pass
-   (`spell_addresses`) turns each move into its single-instruction steps by
-   today's rules (`address`, `add_bytes`, `add_scaled`), each step's form a
-   property of its `lsc_addr_compute`; the emitter emits a step as one
-   instruction, resolving its value registers. The planner stays in the
-   emitter for now: a move it would take keeps its polynomial (the pass
-   leaves moves alone where `max-offset-registers` isn't 0). The kernels
-   stay byte for byte as they are - the golden kernels the check.
-2. **The offset registry in the specializer.** The ranking (uses, a loop's
-   body tenfold, times the instructions a register saves) over the IR's own
-   moves; a registered offset a named value register, computed once. The
-   budget a number from the family, or `auto`: the registers free in a
-   first emission, the specialization run again with them.
-3. **`addrmerge` on steps.** Consecutive steps of one register merged where
-   that's shorter: stride moves (never worse), a doubled add into a shifted
-   one, a copy and an operation on the copy into one operation with the
-   source (`slli t3,t0,2`), cancelling pairs; offset values seeded with their
-   first term (`sh2add t1,a4,a4` for 5 strides). The setup values' own
-   computations (`vl_multiple`'s k - 1 adds) through the same spelling.
-4. **Column pointers gone.** Walks over the pattern's registers
-   (`phase+rotate`, `phase+blocked:N`) in their place everywhere - once
-   x86's lane walks cost no more than its lane walker, and configurations
-   like the K1's have moved (`column-pointers: {C: 0}`: 2161 -> 2047
-   instructions for its sgemm vm 2x14).
+1. **Spelling in the IR** - done.
+   1. Steps in the IR, emitted one instruction each; the kernels byte for
+      byte the same (ukrgen 0265; test_spelled_addresses compares the golden
+      kernels with and without).
+   2. The decisions out of the emitter: specializers/addresses.py
+      (`address_speller` - the ISA's capabilities, `move_steps`,
+      `scaled_steps`, the steps' deltas, the rewrite); the emit stage spells
+      each program, the emitter emits a step's instruction (ukrgen 0266).
+2. **The offset registry in the specializer.**
+   1. *Values placed where their inputs are* - done (ukrgen 0267). A setup value - an offset,
+      `vl_stride` - computed where its inputs first all exist: at entry
+      when they come in registers, right after the dispatch's loads when one
+      is a stack parameter the emitter defers there (C's strides, x86's
+      beta), its register allocated there too (none held through the k
+      loop). Deferral makes it safe: a deferred parameter's component is
+      used only in the cases. The planner's exclusions go (a deferred stride,
+      C's storage aliases' names), and nothing loads early - the root of
+      NEON's transposed general C and AVX-512's storage branches. Each
+      value's computation in order where it's placed (a scratch register
+      freed for the next value: 0263's lesson).
+   2. *The planner in the speller.* Its ranking (uses, a loop's body
+      tenfold, times the instructions a register saves) over the IR's own
+      moves; a chosen offset a named value (`("offset", component,
+      polynomial)`), a move it covers one step adding it - from another
+      register in one add where the ISA takes three operands. Every move
+      spelled, under any budget; the emitter's planner, its cost and
+      `address()`'s whole-move paths go.
+   3. *`auto` in the emit stage.* Spelled and emitted without offset
+      registers, the spare general registers counted - before the dispatch
+      and after it apart (C's offsets live only in the cases) - then
+      planned again from the program as it was before spelling (a copy) and
+      emitted.
+   4. *Tests on the old failures*: NEON's general-stride C, AVX-512's
+      storage branches, the K3's vm 4x6, each under a budget; the mixed-
+      precision variants (test_widen).
+3. **`addrmerge` on steps, the scheduler seeing them.**
+   1. Spelling before scheduling: the scheduler places each step (the
+      kernels change - compared and measured).
+   2. Merges where shorter: consecutive stride moves (never worse); a
+      doubled add into a shifted one; a copy and an operation on it into one
+      with the source (`slli t3,t0,2`); cancelling pairs.
+   3. Setup values through the same spelling: `vl_multiple`'s k - 1 adds,
+      offset values seeded with their first term (`sh2add t1,a4,a4`).
+   4. Scratch registers in the IR: the scratch multiply three steps.
+4. **Column pointers gone.**
+   1. Configurations on walks (`column-pointers: {C: 0}`; the K1's sgemm vm
+      2x14 2161 -> 2047 instructions).
+   2. x86's lane walks no costlier than its lane walker.
+   3. The mechanism removed: walks over the pattern's registers
+      (`phase+rotate`, `phase+blocked:N`) everywhere.
+5. **The emitter's other decisions** (later): `slices` (slice loops: the
+   register sets rotated across unrolled copies, preloads, the slices'
+   walks, temporaries freed) - a pass's duties; setup values as an IR setup
+   block.
 
 ## Mixed precision
 

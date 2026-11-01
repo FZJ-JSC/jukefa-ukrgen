@@ -338,15 +338,19 @@ class offset_planner:
             # frees is free again for the next setup value (vl_stride), whose
             # computation goes in at once - collected and placed after it, the
             # scratch's uses would overwrite that value (VL*rs - 5 cs came out 0)
-            self.e.late_setup.append(asmops.set_imm(self.e.gen, reg=reg, imm=dict(amount.terms).get((), 0)))
+            # where its inputs are: right after the dispatch's loads where one
+            # is a stack parameter deferred there (C's strides), else setup
+            sink = self.e.dispatch_setup if self.e.placed_at_dispatch("offset_value", (amount, comp)) \
+                else self.e.late_setup
+            sink.append(asmops.set_imm(self.e.gen, reg=reg, imm=dict(amount.terms).get((), 0)))
             for factors, coeff in amount.terms:
                 if 1 == len(factors) and factors[0].startswith("stride("):
-                    self.e.late_setup += self.add_scaled(reg, self.stride_reg(factors[0], setup=True), coeff // esize)
+                    sink += self.add_scaled(reg, self.stride_reg(factors[0], setup=True), coeff // esize)
             # vector lengths (of strides) as add_bytes moves by them: setup values
             # of their own (vl_bytes, vl_multiple, vl_stride), incb on SVE
             others = {f: c for f, c in amount.terms if f and not (1 == len(f) and f[0].startswith("stride("))}
             if others:
-                self.e.late_setup += self.add_bytes(reg, sym._make(others), comp)
+                sink += self.add_bytes(reg, sym._make(others), comp)
         return self.e.strides_in[key]
 
     def vl_stride(self, factor: str, dt):
@@ -360,8 +364,9 @@ class offset_planner:
             vlreg = self.vl_elements(dt)
             reg = self.e.greg()
             self.e.strides_in[key] = reg
-            self.e.late_setup.append(asmops.mul(self.e.gen, 
-                dst=reg, reg1=vlreg, reg2=self.stride_reg(factor, setup=True)))
+            sink = self.e.dispatch_setup if self.e.placed_at_dispatch("vl_stride", (factor, dt)) \
+                else self.e.late_setup
+            sink.append(asmops.mul(self.e.gen, dst=reg, reg1=vlreg, reg2=self.stride_reg(factor, setup=True)))
         return self.e.strides_in[key]
 
     def constant_stride(self, nbytes: int):
@@ -462,6 +467,9 @@ class signature_emitter:
         # setup instructions found while emitting: vector length in bytes,
         # constant strides
         self.late_setup: list[str] = []
+        #: setup values placed after the dispatch's loads (placed_at_dispatch):
+        #: one of their inputs a stack parameter deferred there
+        self.dispatch_setup: list[str] = []
         self.vlb: dict[int, object] = {}
         #: (element size, k) -> a register holding k vector lengths in bytes
         self.vlm: dict[tuple, object] = {}
@@ -726,6 +734,20 @@ class signature_emitter:
             self.rt.unuse_reg(tag, number)
             del self.phys[key]
 
+    def placed_at_dispatch(self, name: str, args: tuple) -> bool:
+        """
+        Whether a setup value's computation goes right after the dispatch's
+        loads: one of its strides a stack parameter deferred there (C's) -
+        used only in the cases, by the deferral's own rule
+        """
+        if "vl_stride" == name:
+            factors = [args[0]]
+        elif "offset_value" == name:
+            factors = [f[-1] for f, _ in args[0].terms if f and f[-1].startswith("stride(")]
+        else:
+            return False
+        return any(f == n or f in named for f in factors for n, (_, named) in self.deferred.items())
+
     def greg(self):
         try:
             reg = self.gen.greg(self.rt.reserve_any_reg("greg"))
@@ -776,12 +798,6 @@ class signature_emitter:
         budget = self.program.offset_registers
         if not budget:
             return set()
-        deferred = set(self.deferred) | set(self.keep_params)
-        def canonical(name):
-            # C's storages' alias components take C's parameters: stride(Cr,m)
-            # is stride(C,m) (parameters())
-            comp = self.param_comp(name)
-            return name.replace(f"({comp}", "(C", 1) if comp in self.aliases else name
         found = {}
         def visit(ops, weight):
             for op in ops:
@@ -793,13 +809,6 @@ class signature_emitter:
                 comp = op.indices[0].component
                 amount = self.bytes_of(comp, op.delta)
                 if not all(_plannable(f) for f, _ in amount.terms if f):
-                    continue
-                # a stride passed on the stack and deferred to the dispatch
-                # (AArch64's and RVV's ninth argument on: C's) isn't held in
-                # setup: computing one there would keep it from entry and move
-                # where the dispatch finds the parameters (NEON's general C
-                # stored transposed)
-                if any(canonical(f[-1]) in deferred for f, _ in amount.terms if f and f[-1].startswith("stride(")):
                     continue
                 cost = self.offsets.offset_cost(amount, comp)
                 if cost > 1:
@@ -1552,7 +1561,7 @@ class signature_emitter:
         if (str(amount), comp) in self.offset_plan:
             try:
                 planned = self.offset_value(amount, comp)
-            except IndexError:
+            except (IndexError, specialization_error):
                 planned = None          # no general register left: spelled out
         once = None
         if src_key != dest_key and k is None and 1 == len(terms):
@@ -1956,7 +1965,8 @@ class signature_emitter:
         # setup-time values found needed by a previous emission: allocated
         # here, before any region, so every region knows their registers
         for name, args in self.preallocate:
-            getattr(self, name)(*args)
+            if not self.placed_at_dispatch(name, args):
+                getattr(self, name)(*args)
         self.offset_plan = self.plan_offsets()
         self.regions_started = True
         # regions - each block, the dispatch, each case - set up what they
@@ -2008,7 +2018,16 @@ class signature_emitter:
             self.live_params.add(name)
             self.deferred_regs[name] = (off, reg)
             loads.append(f"@@loadparam {name}@@")
-        self.dispatch_code = loads + (self.dispatch() if self.program.cases else [])
+        # setup values whose inputs are those parameters: allocated and
+        # computed here, in order - no register held through the k loop for
+        # them, nothing loaded early
+        # (before every case's region: recorded as such, the emissions settle)
+        started, self.regions_started = self.regions_started, False
+        for name, args in self.preallocate:
+            if self.placed_at_dispatch(name, args):
+                getattr(self, name)(*args)
+        self.regions_started = started
+        self.dispatch_code = loads + (["@@dispatchsetup@@"] + self.dispatch() if self.program.cases else [])
         # every case starts with the registers where the dispatch leaves them;
         # the cases exclude each other, so they share the registers left, and
         # a parameter's register can become an address register in each
@@ -2061,6 +2080,8 @@ class signature_emitter:
                       areg=self.gen.greg(self.cc.spreg), offset=off + shift, dst=reg).splitlines()
                       if l.strip()]
                   for name, (off, reg) in self.deferred_regs.items()}
+        loaded["@@dispatchsetup@@"] = [l.strip() for chunk in self.dispatch_setup
+                                       for l in chunk.splitlines() if l.strip()]
         # what emission found it needs: right after the ISA's setup
         late = [l.strip() for chunk in self.late_setup for l in chunk.splitlines() if l.strip()]
         setup = setup[:self.isa_setup_lines] + late + setup[self.isa_setup_lines:]
