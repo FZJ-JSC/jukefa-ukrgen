@@ -63,6 +63,8 @@ class address_speller:
         self._shifted: dict[tuple[str, int], bool] = {}
         #: the offsets planned for the program being spelled
         self.planned: set = set()
+        #: a scratch multiply's three steps' group, numbered
+        self.next_scratch = 0
         reg = self.gen.greg(0)
         #: an add of three registers one instruction (not x86's: a copy too)
         self.three_operands = 1 == len([l for l in asmops.add(self.gen, dst=reg, reg1=self.gen.greg(1),
@@ -99,7 +101,7 @@ class address_speller:
         coeff, esize = terms[0][1], self.esize(comp)
         return coeff // esize if coeff > 0 and 0 == coeff % esize else None
 
-    def scaled_steps(self, value: tuple, n: int) -> list[tuple]:
+    def scaled_steps(self, value: tuple, n: int, split: bool = False) -> list[tuple]:
         """
         A value n times, n negative backwards: an add or sub per set bit of n,
         shifted where the ISA shifts the operand (AArch64 LSL, x86 lea, Zba's
@@ -117,10 +119,17 @@ class address_speller:
             k >>= 1
             bit += 1
         if len(out) > 3:
+            if split:
+                # three steps the scheduler can spread: the count in a scratch
+                # register, the multiply, the add - its run where none is free
+                self.next_scratch += 1
+                gid = self.next_scratch
+                return [("scratch_set", gid, abs(n)), ("scratch_mul", gid, value),
+                        ("scratch_add", gid, op, value, abs(n), tuple(out))]
             return [("mul", value, op, abs(n), tuple(out))]
         return out
 
-    def move_steps(self, amount: sym, comp: str) -> list[tuple]:
+    def move_steps(self, amount: sym, comp: str, split: bool = False) -> list[tuple]:
         """
         The steps moving an address register by a number of bytes: constants
         as an immediate; whole vectors with incb/decb where the ISA counts them
@@ -156,7 +165,7 @@ class address_speller:
                 raise specialization_error(
                     f"moving {comp}'s address by {amount} bytes needs run-time arithmetic "
                     f"(vector length), which is not specialized yet")
-            steps += self.scaled_steps(value, n)
+            steps += self.scaled_steps(value, n, split)
         return steps
 
     def offset_cost(self, amount: sym, comp: str) -> int:
@@ -239,6 +248,10 @@ class address_speller:
             return self.elements_of(step[1], step[2])
         if "from" == kind:
             return self.step_delta(step[1], comp)
+        if kind in ("scratch_set", "scratch_mul"):
+            return sym.const(0)
+        if "scratch_add" == kind:
+            return self.step_delta(("mul", step[3], step[2], step[4], ()), comp)
         value, sign = step[1], -1 if "sub" == step[2] else 1
         times = step[3] if "mul" == kind else 1 << step[3]
         if "stride" == value[0]:
@@ -291,7 +304,8 @@ class address_speller:
                 and terms[one] == adt_size(dt) and self.three_operands:
             steps = [(src, ("from_stride", one[0]))]
         else:
-            steps = ([(src, ("copy",))] if src != dst else []) + [(dst, s) for s in self.move_steps(amount, comp)]
+            steps = ([(src, ("copy",))] if src != dst else []) + \
+                [(dst, s) for s in self.move_steps(amount, comp, split=True)]
         if not steps:
             return [op]
         props = dict(op.properties or {})

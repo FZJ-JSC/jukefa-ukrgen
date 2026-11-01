@@ -478,6 +478,9 @@ class signature_emitter:
         self.speller = address_speller(ctx)
         #: the fewest general registers free at any reservation (greg)
         self.min_free_gregs = None
+        #: scratch multiplies' registers between their steps: group -> register
+        #: (None: none was free, its last step spells the run)
+        self.scratches: dict = {}
         #: offset registers a needed value may take (greg): cache key ->
         #: (register, plan key, rank); the planner's ranks
         self.evictable: dict = {}
@@ -1516,6 +1519,29 @@ class signature_emitter:
             return [asmops.add(self.gen, dst=dest, reg1=src, reg2=self.vl_multiple(step[1], step[2]))]
         if "from_stride" == step[0]:
             return [asmops.add(self.gen, dst=dest, reg1=src, reg2=self.stride_reg(step[1]))]
+        if "scratch_set" == step[0]:
+            # a scratch multiply's first step: its register - none free, the
+            # group's last step spells its run instead
+            try:
+                reg = self.greg()
+            except specialization_error:
+                self.scratches[step[1]] = None
+                return []
+            self.scratches[step[1]] = reg
+            return [asmops.set_imm(self.gen, reg=reg, imm=step[2])]
+        if "scratch_mul" == step[0]:
+            reg = self.scratches.get(step[1])
+            if reg is None:
+                return []
+            return [asmops.mul(self.gen, dst=reg, reg1=self.offsets.value_reg(step[2]), reg2=reg)]
+        if "scratch_add" == step[0]:
+            _, gid, op, _, _, run = step
+            reg = self.scratches.pop(gid, None)
+            if reg is None:
+                return [l for sub in run for l in self.offsets.emit_step(dest, sub)]
+            line = asmops.arith(self.gen, op, dst=dest, reg1=dest, reg2=reg)
+            self.rt.unuse_reg("greg", reg.idx)
+            return [line]
         if "from" == step[0]:
             # a copy and a step merged: dest = src op (value << shift), one
             # instruction of three operands

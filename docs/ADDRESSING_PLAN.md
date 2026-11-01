@@ -90,7 +90,7 @@ in the IR, in order.
       strides, test_offset_registers_auto, test_widen's address variants): NEON's general-stride C, AVX-512's
       storage branches, the K3's vm 4x6, each under a budget; the mixed-
       precision variants (test_widen).
-3. **`addrmerge` on steps, the scheduler seeing them.**
+3. **`addrmerge` on steps, the scheduler seeing them** - done.
    1. Spelling before scheduling - done (ukrgen 0271): the post-specialize
       stage spells (after addrmerge and ldinc), the scheduler places each
       step; the golden kernels as many instructions, k loops included, in
@@ -109,7 +109,11 @@ in the IR, in order.
       vector length in bytes one shift from its register, offset values
       seeded with their first term; the K3's trans14 setup 39 -> 24
       instructions, the K1's 50 -> 28.
-   4. Scratch registers in the IR: the scratch multiply three steps.
+   4. Scratch multiplies three steps - done (ukrgen 0273): the count in a
+      scratch register, the multiply, the add (a group, in order - moves of
+      one register - the scheduler free to place other work between them);
+      no register free at the first, the last spells the run. Setup's own
+      multiplies stay one step (emitted where made).
 4. **Column pointers gone.**
    1. Configurations on walks (`column-pointers: {C: 0}`; the K1's sgemm vm
       2x14 2161 -> 2047 instructions).
