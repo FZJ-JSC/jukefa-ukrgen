@@ -23,6 +23,7 @@ from ...flow.stages.model import model_stage
 from ...flow.stages.irmods import pre_specialize_irmod_stage, post_specialize_irmod_stage
 from ...flow.stages.isa_specialize import isa_specialize_stage
 from ...flow.stages.scheduling import schedule_stage
+from ...emitters.signature import AUTO_OFFSET_REGISTERS
 from ...flow.stages.emit import emit_stage
 from ...lsc_model.addressing import sym
 
@@ -47,6 +48,17 @@ def run_flow(params: dict) -> tuple[ukr_context, object]:
                 taken.add(name)
     ctx = ukr_context()
     result = stage_engine(PIPELINE, ctx, prolog=prolog).run()
+    if result.completed and "auto" == str(params.get("max-offset-registers", "")):
+        # max-offset-registers auto: run again with the general registers the
+        # first run never needed, less one (at most AUTO_OFFSET_REGISTERS) -
+        # the offsets planned before scheduling; a run that fails keeps the first
+        spare = (ctx.min_free_gregs or 0) - 1
+        if spare > 0:
+            again = ukr_context()
+            again.auto_offset_budget = min(spare, AUTO_OFFSET_REGISTERS)
+            second = stage_engine(PIPELINE, again, prolog=prolog).run()
+            if second.completed:
+                ctx, result = again, second
     if result.completed:
         # a parameter no stage took - a key misnamed - does nothing: say so
         ignored = sorted(set(params) - taken)

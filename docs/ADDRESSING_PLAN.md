@@ -91,8 +91,12 @@ in the IR, in order.
       storage branches, the K3's vm 4x6, each under a budget; the mixed-
       precision variants (test_widen).
 3. **`addrmerge` on steps, the scheduler seeing them.**
-   1. Spelling before scheduling: the scheduler places each step (the
-      kernels change - compared and measured).
+   1. Spelling before scheduling - done (ukrgen 0271): the post-specialize
+      stage spells (after addrmerge and ldinc), the scheduler places each
+      step; the golden kernels as many instructions, k loops included, in
+      another order (recorded anew). `auto` the flow driver's: a first run
+      without offsets measures, a second runs with the spare registers
+      (families' run_flow; the command line runs once - no offsets).
    2. Merges where shorter: consecutive stride moves (never worse); a
       doubled add into a shifted one; a copy and an operation on it into one
       with the source (`slli t3,t0,2`); cancelling pairs.

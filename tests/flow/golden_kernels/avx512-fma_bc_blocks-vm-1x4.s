@@ -216,10 +216,10 @@ vaddpd %zmm0,%zmm4,%zmm4
 vaddpd %zmm1,%zmm5,%zmm5
 vaddpd %zmm2,%zmm6,%zmm6
 vaddpd %zmm3,%zmm7,%zmm7
+vmovupd %zmm4, (%rcx)
 movq %rcx, %rdx
 addq %r10,%rdx
 leaq (%rdx,%r10,2),%rdx
-vmovupd %zmm4, (%rcx)
 vmovupd %zmm5, (%rcx,%r10,1)
 vmovupd %zmm6, (%rcx,%r10,2)
 vmovupd %zmm7, (%rdx)
@@ -228,8 +228,8 @@ jmp .ukr0_cases_end
 movq %rcx, %r11
 movq %r11, %rax
 addq %r10,%rax
-leaq (%rax,%r10,2),%rax
 vmovupd (%r11), %zmm4
+leaq (%rax,%r10,2),%rax
 vbroadcastsd (%r8), %zmm5
 vmovupd (%r11,%r10,1), %zmm6
 vmovupd (%r11,%r10,2), %zmm7
@@ -238,10 +238,10 @@ vfmadd231pd %zmm0,%zmm5,%zmm4
 vfmadd231pd %zmm1,%zmm5,%zmm6
 vfmadd231pd %zmm2,%zmm5,%zmm7
 vfmadd231pd %zmm3,%zmm5,%zmm8
+vmovupd %zmm4, (%rcx)
 movq %rcx, %rdx
 addq %r10,%rdx
 leaq (%rdx,%r10,2),%rdx
-vmovupd %zmm4, (%rcx)
 vmovupd %zmm6, (%rcx,%r10,1)
 vmovupd %zmm7, (%rcx,%r10,2)
 vmovupd %zmm8, (%rdx)
@@ -250,8 +250,8 @@ jmp .ukr0_cases_end
 movq %rcx, %r11
 movq %r11, %rax
 addq %r10,%rax
-leaq (%rax,%r10,2),%rax
 vmovupd (%r11), %zmm4
+leaq (%rax,%r10,2),%rax
 vbroadcastsd (%r9), %zmm5
 vmovupd (%r11,%r10,1), %zmm6
 vmovupd (%r11,%r10,2), %zmm7
@@ -260,10 +260,10 @@ vfmadd231pd %zmm4,%zmm5,%zmm0
 vfmadd231pd %zmm6,%zmm5,%zmm1
 vfmadd231pd %zmm7,%zmm5,%zmm2
 vfmadd231pd %zmm8,%zmm5,%zmm3
+vmovupd %zmm0, (%rcx)
 movq %rcx, %rdx
 addq %r10,%rdx
 leaq (%rdx,%r10,2),%rdx
-vmovupd %zmm0, (%rcx)
 vmovupd %zmm1, (%rcx,%r10,1)
 vmovupd %zmm2, (%rcx,%r10,2)
 vmovupd %zmm3, (%rdx)
@@ -278,22 +278,22 @@ vbroadcastsd (%r8), %zmm8
 vmulpd %zmm4,%zmm5,%zmm4
 movq %r11, %rax
 addq %r10,%rax
-leaq (%rax,%r10,2),%rax
-vmovupd (%rax), %zmm9
 vmulpd %zmm6,%zmm5,%zmm6
 vmulpd %zmm7,%zmm5,%zmm7
 vfmadd231pd %zmm0,%zmm8,%zmm4
-vmulpd %zmm9,%zmm5,%zmm9
+leaq (%rax,%r10,2),%rax
 vfmadd231pd %zmm1,%zmm8,%zmm6
 vfmadd231pd %zmm2,%zmm8,%zmm7
 vmovupd %zmm4, (%rcx)
-vfmadd231pd %zmm3,%zmm8,%zmm9
+vmovupd (%rax), %zmm0
 movq %rcx, %rdx
-addq %r10,%rdx
-leaq (%rdx,%r10,2),%rdx
 vmovupd %zmm6, (%rcx,%r10,1)
+addq %r10,%rdx
+vmulpd %zmm0,%zmm5,%zmm0
+leaq (%rdx,%r10,2),%rdx
 vmovupd %zmm7, (%rcx,%r10,2)
-vmovupd %zmm9, (%rdx)
+vfmadd231pd %zmm3,%zmm8,%zmm0
+vmovupd %zmm0, (%rdx)
 .ukr0_cases_end:
 ret
 .cfi_endproc

@@ -64,10 +64,10 @@ class test_no_mergeable_adds(unittest.TestCase):
 
 class test_spelled_addresses(unittest.TestCase):
     """
-    Address moves spelled as one-instruction steps in the IR before emitting
-    (docs/ADDRESSING_PLAN.md step 1): every golden kernel the same text with
-    the steps as without - the emitter's spelling moved, not changed - and
-    the moves really steps
+    Address moves spelled as one-instruction steps in the IR before
+    scheduling (docs/ADDRESSING_PLAN.md 1, 3.1): every golden kernel as many
+    instructions with the steps as without, its k loop too - the scheduler
+    places the steps, it adds none - and the moves really steps
     """
 
     def test_same_kernels(self):
@@ -83,12 +83,24 @@ class test_spelled_addresses(unittest.TestCase):
                     spelled = build(path, family, m, n)
                 finally:
                     sg.SPELL_ADDRESSES = saved
-                self.assertEqual(whole, spelled)
+                count = lambda t: sum(1 for l in t.splitlines() if l.strip() and not l.strip().endswith(":")
+                                      and not l.strip().startswith((".", "#", "//")))
+                self.assertEqual(count(whole), count(spelled))
 
     def test_steps(self):
         from tests.specializers.gemm_helper import gemm
+        import tests.specializers.test_signature as t
+        from ukrgen.flow.stages.irmods import post_specialize_irmod_stage
         from ukrgen.models.load_store_operations import lsc_addr_compute, lsc_loop
-        ctx, res = gemm("rvv", **{"rvv-LMUL": "1"})
+        # the spelling is the post-specialize stage's (before scheduling): the
+        # helper's pipeline with it, after the specialization
+        stages = list(t.STAGES)
+        i = [x.__name__ for x in stages].index("isa_specialize_stage") + 1
+        saved, t.STAGES = t.STAGES, stages[:i] + [post_specialize_irmod_stage] + stages[i:]
+        try:
+            ctx, res = gemm("rvv", **{"rvv-LMUL": "1"})
+        finally:
+            t.STAGES = saved
         self.assertTrue(res.completed, res.output)
         kinds = set()
         def walk(ops):

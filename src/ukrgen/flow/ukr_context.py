@@ -48,6 +48,11 @@ class ukr_context:
         self.to_candidates   : dict[str,dict] = dict()
         self.rt              : reg_tracker = None
         self.params          : dict[str,stage_param] = dict()
+        #: max-offset-registers auto: the budget a first run measured (the
+        #: flow's driver runs again with it); None a first run - no offsets
+        self.auto_offset_budget : int | None = None
+        #: the fewest general registers left free in the emission (emit stage)
+        self.min_free_gregs  : int | None = None
 
         self.model           : load_store_cpu = None
         self.specializer     : lsc_specializer = None

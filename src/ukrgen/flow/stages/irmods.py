@@ -4,6 +4,7 @@ IR modifications before and after specialization for the ISA
 
 import logging
 
+from ...specializers.addresses import address_speller, spells
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
@@ -138,5 +139,16 @@ class post_specialize_irmod_stage(irmod_stage_base):
                 description="Print the IR after the IR modifications and exit")
 
     def finish(self):
+        # address moves as one-instruction steps, the offsets planned with them
+        # (specializers/addresses.py) - before scheduling: the scheduler places
+        # each step. max-offset-registers auto: the budget a first run measured
+        for p in self.context.programs:
+            if spells(p):
+                auto = p.offset_registers is not None and p.offset_registers < 0
+                if auto:
+                    p.offset_registers = self.context.auto_offset_budget or 0
+                address_speller(self.context).spell(p)
+                if auto:
+                    p.offset_registers = -1
         if self.params["print-modified-ir"].value:
             raise early_exit("\n\n".join(p.render() for p in self.context.programs))

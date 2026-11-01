@@ -2,15 +2,12 @@
 Emitting the specialized LSC IR as assembly
 """
 
-import copy
 import logging
 
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
-from ...specializers.addresses import address_speller, spells
-from ...emitters.signature import signature_emitter, emit_program, emit_program_measured, \
-    AUTO_OFFSET_REGISTERS
+from ...emitters.signature import signature_emitter, emit_program, emit_program_measured
 from ...specializers.signature import specialization_error
 
 
@@ -58,38 +55,17 @@ class emit_stage(stage):
             raise stage_error(f"--loop-align {align}: a power of two")
         self.context.loop_align = int(align) if align not in (None, "") else None
         try:
-            # address moves as one-instruction steps, the offsets planned with
-            # them (specializers/addresses.py): the IR says what each costs,
-            # the emitter turns each into its one
-            emitted = []
-            for i, p in enumerate(list(self.context.programs)):
-                if not spells(p):
-                    emitted.append(emit_program(self.context, p))
-                    continue
-                if p.offset_registers is None or p.offset_registers >= 0:
-                    address_speller(self.context).spell(p)
-                    emitted.append(emit_program(self.context, p))
-                    continue
-                # max-offset-registers auto: spelled and emitted without offset
-                # registers, the general registers never needed counted, then
-                # planned and spelled again from the program as it was, with
-                # that many less one - an emission that fails keeps the first
-                original = copy.deepcopy(p)
-                p.offset_registers = 0
-                address_speller(self.context).spell(p)
+            # the moves spelled before scheduling (post-specialize); the fewest
+            # general registers left free recorded - max-offset-registers
+            # auto's measure, the flow's driver running again with it
+            emitted, frees = [], []
+            for p in self.context.programs:
                 out, free = emit_program_measured(self.context, p)
-                spare = (free or 0) - 1
-                if spare > 0:
-                    original.offset_registers = min(spare, AUTO_OFFSET_REGISTERS)
-                    address_speller(self.context).spell(original)
-                    try:
-                        out = emit_program(self.context, original)
-                        self.context.programs[i] = original
-                    except specialization_error:
-                        pass
-                p.offset_registers = -1
                 emitted.append(out)
+                frees.append(free)
             self.context.emitted = emitted
+            known = [f for f in frees if f is not None]
+            self.context.min_free_gregs = min(known) if known else None
         except specialization_error as err:
             raise stage_error(f"emitting: {err}") from err
         text = "\n\n".join(p.render() for p in self.context.emitted)
