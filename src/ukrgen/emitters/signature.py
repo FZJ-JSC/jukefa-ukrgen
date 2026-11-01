@@ -226,6 +226,30 @@ class offset_planner:
             return out
         raise specialization_error(f"no instruction for the step {step}")
 
+    def scaled_from(self, dst, source, n: int) -> list[str]:
+        """
+        dst = n times source (n > 0), from nothing - setup's values: n's lowest
+        set bit a shift from the source (no copy, no zero set first), its
+        others shifted adds where the ISA shifts the operand (Zba's shNadd,
+        AArch64's LSL, x86's lea), plain adds where it doesn't - or the
+        multiply by n (an immediate's load and a mul; x86's imul), the shorter
+        """
+        bits = [b for b in range(n.bit_length()) if n >> b & 1]
+        out = asmops.shift_left_from(self.e.gen, src=source, dst=dst, bit_count=bits[0])
+        for b in bits[1:]:
+            if self.e.shifted_available("add", b):
+                out.append(asmops.shifted(self.e.gen, "add", dst=dst, reg1=dst, reg2=source, shift=b))
+            else:
+                out += [asmops.arith(self.e.gen, "add", dst=dst, reg1=dst, reg2=source)] * (1 << b)
+        if len(out) > 2 and source != dst:
+            try:
+                mul = [l for l in asmops.mul_imm(self.e.gen, src=source, dst=dst, factor=n).splitlines() if l.strip()]
+            except (ValueError, NotImplementedError):
+                mul = None
+            if mul and len(mul) < len(out):
+                return mul
+        return out
+
     def add_scaled(self, areg, source, n: int) -> list[str]:
         """
         areg moved by n times a register's amount (scaled_steps), the register
@@ -309,15 +333,25 @@ class offset_planner:
             # is a stack parameter deferred there (C's strides), else setup
             sink = self.e.dispatch_setup if self.e.placed_at_dispatch("offset_value", (amount, comp)) \
                 else self.e.late_setup
-            sink.append(asmops.set_imm(self.e.gen, reg=reg, imm=dict(amount.terms).get((), 0)))
-            for factors, coeff in amount.terms:
-                if 1 == len(factors) and factors[0].startswith("stride("):
-                    sink += self.add_scaled(reg, self.stride_reg(factors[0], setup=True), coeff // esize)
+            # seeded with its first positive stride term (sh2add t1,a4,a4 for 5
+            # strides, not li 0, add, sh2add), the others added, the constant last
+            strides = [(f[0], c // esize) for f, c in amount.terms if 1 == len(f) and f[0].startswith("stride(")]
+            seed = next(((f, n) for f, n in strides if n > 0), None)
+            const = dict(amount.terms).get((), 0)
+            if seed is None:
+                sink.append(asmops.set_imm(self.e.gen, reg=reg, imm=const))
+            else:
+                sink += self.scaled_from(reg, self.stride_reg(seed[0], setup=True), seed[1])
+            for f, n in strides:
+                if (f, n) != seed:
+                    sink += self.add_scaled(reg, self.stride_reg(f, setup=True), n)
             # vector lengths (of strides) as add_bytes moves by them: setup values
             # of their own (vl_bytes, vl_multiple, vl_stride), incb on SVE
             others = {f: c for f, c in amount.terms if f and not (1 == len(f) and f[0].startswith("stride("))}
             if others:
                 sink += self.add_bytes(reg, sym._make(others), comp)
+            if seed is not None and const:
+                sink.append(asmops.add_imm(self.e.gen, reg=reg, imm=const))
         return self.e.strides_in[key]
 
     def vl_stride(self, factor: str, dt):
@@ -377,8 +411,8 @@ class offset_planner:
             vlreg = self.e.gen.isa_setup().vector_length_register(rt=self.e.rt)
             reg = self.e.greg()
             self.e.vlb[esize] = reg
-            self.e.late_setup += [asmops.mov(self.e.gen, src=vlreg, dst=reg),
-                                asmops.shift_left(self.e.gen, reg=reg, bit_count=esize.bit_length() - 1)]
+            self.e.late_setup += asmops.shift_left_from(self.e.gen, src=vlreg, dst=reg,
+                                                        bit_count=esize.bit_length() - 1)
         return self.e.vlb[esize]
 
     def vl_multiple(self, dt, k: int):
@@ -394,12 +428,8 @@ class offset_planner:
             base = self.vl_bytes(dt)
             reg = self.e.greg()
             self.e.vlm[key] = reg
-            if 0 == k & (k - 1):
-                self.e.late_setup += [asmops.mov(self.e.gen, src=base, dst=reg),
-                                    asmops.shift_left(self.e.gen, reg=reg, bit_count=k.bit_length() - 1)]
-            else:
-                self.e.late_setup += [asmops.mov(self.e.gen, src=base, dst=reg)] + \
-                    [asmops.add(self.e.gen, dst=reg, reg1=reg, reg2=base) for _ in range(k - 1)]
+            # (it was a copy and k - 1 adds: 13 instructions for 12 vectors)
+            self.e.late_setup += self.scaled_from(reg, base, k)
         return self.e.vlm[key]
 
     def vector_multiple(self, amount, comp: str) -> int | None:

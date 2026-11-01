@@ -1141,6 +1141,25 @@ int main( void )
         for out in outs:
             self.assertIn("4 runs, 4 by generated cases, 0 wrong", out, k.symbol)
 
+    def test_trans_setup_short(self):
+        # setup's values spelled the shortest way: k vector lengths a shift or
+        # a multiply (it was a copy and k - 1 adds: 13 for 12 vectors), the
+        # vector length in bytes one shift from its register (it was a copy
+        # and a shift) - the K3's trans14, its whole kernel
+        import re
+        from ukrgen.injectors.blis.cgen import asm_source
+        k = self.k3_trans14({})
+        lines = [l.strip() for l in asm_source(k).splitlines() if l.strip()]
+        run = longest = 0
+        for i in range(1, len(lines)):
+            run = run + 1 if lines[i] == lines[i - 1] and lines[i].startswith("add ") else 0
+            longest = max(longest, run + 1 if run else 0)
+        self.assertLessEqual(longest, 3, k.symbol)
+        for a, b in zip(lines, lines[1:]):
+            m = re.match(r"^add (\w+),(\w+),0$", a)
+            if m:
+                self.assertFalse(re.match(rf"^slli {m.group(1)},{m.group(1)},", b), (a, b))
+
     def test_trans_rewind_folds(self):
         # X on one register, no column pointers: its rows walked, and the
         # iteration's end - the advance less the walk, VL - 12 rs - one move;

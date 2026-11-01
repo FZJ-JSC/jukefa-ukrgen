@@ -96,8 +96,11 @@ in the IR, in order.
    2. Merges where shorter: consecutive stride moves (never worse); a
       doubled add into a shifted one; a copy and an operation on it into one
       with the source (`slli t3,t0,2`); cancelling pairs.
-   3. Setup values through the same spelling: `vl_multiple`'s k - 1 adds,
-      offset values seeded with their first term (`sh2add t1,a4,a4`).
+   3. Setup values spelled the shortest way - done (ukrgen 0270): k vector
+      lengths a shift or a multiply (`vl_multiple`'s k - 1 adds gone), the
+      vector length in bytes one shift from its register, offset values
+      seeded with their first term; the K3's trans14 setup 39 -> 24
+      instructions, the K1's 50 -> 28.
    4. Scratch registers in the IR: the scratch multiply three steps.
 4. **Column pointers gone.**
    1. Configurations on walks (`column-pointers: {C: 0}`; the K1's sgemm vm

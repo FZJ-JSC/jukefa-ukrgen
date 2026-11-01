@@ -11,12 +11,9 @@ bli_dgemm_ukrgen_rvv_vm_1vx4_asm:
 # a5 = base(beta)
 # a6 = stride(C,n)
 vsetvli t0, zero, e64, m1, ta, ma
-add t1,t0,0
-slli t1,t1,3
-add t2,t1,0
-slli t2,t2,1
-add t3,t1,0
-slli t3,t3,2
+slli t1,t0,3
+slli t2,t1,1
+slli t3,t1,2
 add t4,a1,0
 add a1,a1,t1
 add t5,a2,0
