@@ -7,6 +7,7 @@ import logging
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
+from ...specializers.addresses import address_speller, spells
 from ...emitters.signature import signature_emitter, emit_program
 from ...specializers.signature import specialization_error
 
@@ -55,6 +56,11 @@ class emit_stage(stage):
             raise stage_error(f"--loop-align {align}: a power of two")
         self.context.loop_align = int(align) if align not in (None, "") else None
         try:
+            # address moves as one-instruction steps (docs/ADDRESSING_PLAN.md):
+            # the IR says what each costs, the emitter turns each into its one
+            for p in self.context.programs:
+                if spells(p):
+                    address_speller(self.context).spell(p)
             self.context.emitted = [emit_program(self.context, p)
                                     for p in self.context.programs]
         except specialization_error as err:

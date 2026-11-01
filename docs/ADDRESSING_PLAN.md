@@ -45,8 +45,12 @@ in the IR, in order.
 
 ## Steps
 
-1. **Spelling in the IR** - done (ukrgen 0265): emitters/signature.py
-   `spell_addresses` turns every move into its steps before the emission
+1. **Spelling in the IR** - done (ukrgen 0265, 0266): specializers/
+   addresses.py (`address_speller`: what the ISA does in one instruction -
+   shifted adds, vector lengths counted, three operands - and every move's
+   steps; the emit stage runs it on each program, the emitter only emits a
+   step's instruction, its value register resolved by name) turns every move
+   into its steps before the emission
    (after scheduling: the steps sit where the move did, the kernels the
    same byte for byte - the golden kernels compared with and without,
    test_spelled_addresses), `address()` emits a step as its instruction;

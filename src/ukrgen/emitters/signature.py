@@ -42,6 +42,7 @@ from ..lsc_model.state import merge_switches
 from ..lsc_model.addressing import sym
 from ..lsc_model.ir import ir_program, ir_block
 from ..components.tile import scalar_tile
+from ..specializers.addresses import address_speller
 from ..models.load_store_operations import (lsc_state, 
     lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop, lsc_permute)
 from ..models.lsc.index import lsc_reg_index
@@ -187,72 +188,6 @@ class offset_planner:
         """
         return self.e.params[factor]
 
-    def scaled_steps(self, value: tuple, n: int) -> list[tuple]:
-        """
-        A register's amount n times, n negative backwards, as steps of one
-        instruction: an add or sub per set bit of n - shifted where the ISA
-        shifts the operand (AArch64 add x, x, y, LSL #s; x86 lea; Zba's
-        shNadd), plain adds or subs repeated where it doesn't. A run longer
-        than three: the count times the register in a scratch register, one
-        step of three instructions (load, multiply, add) carrying its run for
-        where no general register is free
-        """
-        op = "sub" if n < 0 else "add"
-        out, k, bit = [], abs(n), 0
-        while k:
-            if k & 1:
-                if not bit or self.e.shifted_available(op, bit):
-                    out.append(("reg", value, op, bit))
-                else:
-                    out += [("reg", value, op, 0)] * (1 << bit)
-            k >>= 1
-            bit += 1
-        if len(out) > 3:
-            return [("mul", value, op, abs(n), tuple(out))]
-        return out
-
-    def move_steps(self, amount: sym, comp: str) -> list[tuple]:
-        """
-        Steps of one instruction moving an address register by a number of
-        bytes: constants as an immediate; whole vectors with incb/decb where
-        the ISA counts them so; multiples of a register's amount - strides, the
-        vector length (RVV), vector lengths of strides or of vectors, each held
-        in bytes - as shifted or repeated adds and subs of it (scaled_steps)
-        """
-        dt = self.e.ctx.component_dts[comp]
-        esize = adt_size(dt)
-        steps = []
-        for factors, coeff in amount.terms:
-            if not factors:
-                steps.append(("imm", coeff))
-                continue
-            if 0 != coeff % esize:
-                raise specialization_error(
-                    f"moving {comp}'s address by {amount} bytes: {coeff} isn't whole elements")
-            n = coeff // esize
-            if ("VL",) == factors and not self.e.vector_length_kept:
-                # whole vectors, forward or back: incb or decb
-                steps.append(("vectors", n))
-                continue
-            if ("VL",) == factors and n > 1:
-                # RVV: k vector lengths in a register of their own - one add
-                steps.append(("reg", ("vl_multiple", dt, n), "add", 0))
-                continue
-            if ("VL",) == factors:
-                value = ("vl_bytes", dt)        # RVV: the vector length in bytes
-            elif 1 == len(factors) and factors[0].startswith("stride("):
-                value = ("stride", factors[0])
-            elif 2 == len(factors) and "VL" == factors[0] and factors[1].startswith("stride("):
-                value = ("vl_stride", factors[1], dt)   # a vector length of strided elements
-            elif ("VL", "VL") == factors:
-                value = ("vl_squared", dt)      # vector lengths of vectors: a packed layout's next tile
-            else:
-                raise specialization_error(
-                    f"moving {comp}'s address by {amount} bytes needs run-time arithmetic "
-                    f"(vector length), which is not specialized yet")
-            steps += self.scaled_steps(value, n)
-        return steps
-
     def value_reg(self, value: tuple):
         """
         The register holding a step's value - a setup value, by name and
@@ -308,7 +243,7 @@ class offset_planner:
         given - setup's own computations (offset_value)
         """
         out = []
-        for step in self.scaled_steps(("given",), n):
+        for step in self.e.speller.scaled_steps(("given",), n):
             if "mul" == step[0]:
                 _, _, op, count, run = step
                 try:
@@ -335,7 +270,7 @@ class offset_planner:
         Move an address register on by a number of bytes: its steps
         (move_steps), each emitted (emit_step)
         """
-        return [line for step in self.move_steps(amount, comp) for line in self.emit_step(areg, step)]
+        return [line for step in self.e.speller.move_steps(amount, comp) for line in self.emit_step(areg, step)]
 
     # --- operations ----------------------------------------------------------
 
@@ -497,17 +432,9 @@ class offset_planner:
 
     def vector_multiple(self, amount, comp: str) -> int | None:
         """
-        k where an amount of bytes is k whole vector lengths (k > 0) and the
-        ISA keeps the vector length in a register; else None
+        k where an amount of bytes is k whole vector lengths (the speller's)
         """
-        if not self.e.vector_length_kept:
-            return None
-        terms = list(amount.terms)
-        if 1 != len(terms) or ("VL",) != tuple(terms[0][0]):
-            return None
-        esize = adt_size(self.e.ctx.component_dts[comp])
-        coeff = terms[0][1]
-        return coeff // esize if coeff > 0 and 0 == coeff % esize else None
+        return self.e.speller.vector_multiple(amount, comp)
 
 
 class signature_emitter:
@@ -519,9 +446,8 @@ class signature_emitter:
     """
 
     #: shifted operands' forms asked of the operations, by (op, shift)
-    shifted_known: dict | None = None
 
-    def __init__(self, ctx, program: ir_program, preallocate=(), keep_params=(), spell=False):
+    def __init__(self, ctx, program: ir_program, preallocate=(), keep_params=()):
         self.ctx = ctx
         self.gen = ctx.gen
         self.program = program
@@ -541,10 +467,10 @@ class signature_emitter:
         self.vlm: dict[tuple, object] = {}
         #: how address offsets are formed
         self.offsets = offset_planner(self)
-        #: the program's address moves spelled as steps of one instruction
-        #: before emitting (spell_addresses) - not where offset registers are
-        #: planned: the planner takes a move's whole polynomial
-        self.spell = spell
+        #: what the ISA does in one instruction (shifted adds, vector lengths
+        #: counted, three operands) and how a move is spelled - the
+        #: specializer's (specializers/addresses.py), its setup's moves too
+        self.speller = address_speller(ctx)
         #: the fewest general registers free at any reservation (greg)
         self.min_free_gregs = None
         #: offset polynomials with a register of their own (plan_offsets)
@@ -829,18 +755,9 @@ class signature_emitter:
     def shifted_available(self, op: str, shift: int) -> bool:
         """
         Whether the ISA adds or subtracts a register shifted by shift in one
-        instruction: asked once - a generator raises NotImplementedError where
-        it doesn't - and remembered
+        instruction (the speller's)
         """
-        if self.shifted_known is None:
-            self.shifted_known = {}
-        known = self.shifted_known
-        if (op, shift) not in known:
-            reg = self.gen.greg(0)
-            known[(op, shift)] = getattr(self.gen, op).fits(
-                adreg=reg, bdreg=reg, cdreg=reg, a_dt=adt.UINT64, b_dt=adt.UINT64, c_dt=adt.UINT64,
-                operand_modifiers={"bdreg": {opd_mod.ISHIFT}}, bdreg_shift=shift) is not None
-        return known[(op, shift)]
+        return self.speller.shifted_available(op, shift)
 
     def add_bytes(self, *args, **kwargs):
         return self.offsets.add_bytes(*args, **kwargs)
@@ -1603,98 +1520,6 @@ class signature_emitter:
     def vector_multiple(self, *args, **kwargs):
         return self.offsets.vector_multiple(*args, **kwargs)
 
-    def step_delta(self, step: tuple, comp: str) -> sym:
-        """
-        A step's move in the component's elements - the steps of a move adding
-        up to its delta
-        """
-        esize = adt_size(self.ctx.component_dts[comp])
-        kind = step[0]
-        if "copy" == kind:
-            return sym.const(0)
-        if "imm" == kind:
-            return sym.const(step[1] // esize)
-        if "vectors" == kind:
-            return sym._make({("VL",): step[1]})
-        if "from_vectors" == kind:
-            return sym._make({("VL",): step[2]})
-        if "from_stride" == kind:
-            return sym._make({(step[1],): 1})
-        value = step[1]
-        sign = -1 if "sub" == step[2] else 1
-        times = step[3] if "mul" == kind else 1 << step[3]
-        factors = {"stride": (value[1],) if "stride" == value[0] else None, "vl_bytes": ("VL",),
-                   "vl_multiple": ("VL",), "vl_squared": ("VL", "VL"),
-                   "vl_stride": ("VL", value[1]) if "vl_stride" == value[0] else None}[value[0]]
-        if "vl_multiple" == value[0]:
-            times *= value[2]
-        return sym._make({factors: sign * times})
-
-    def spelled(self, op: lsc_addr_compute) -> list:
-        """
-        An address move as steps of one instruction each, as address() spells
-        it: from another register one add where it can (k vector lengths, one
-        stride), else a copy and the move's steps (move_steps); a loop's
-        advance on the last
-        """
-        comp = op.indices[0].component
-        src, dst = op.indices[0].indices[0], op.indices[1].indices[0]
-        dt = self.ctx.component_dts[comp]
-        amount = self.bytes_of(comp, op.delta)
-        k = self.vector_multiple(amount, comp)
-        terms = dict(amount.terms)
-        props = dict(op.properties or {})
-        advance = props.pop("advance", None)
-        one = next(iter(terms)) if 1 == len(terms) else None
-        three = 1 == len([l for l in asmops.add(self.gen, dst=self.gen.greg(0), reg1=self.gen.greg(1),
-                                                reg2=self.gen.greg(2)).splitlines() if l.strip()])
-        if src != dst and k is not None:
-            steps = [(src, ("from_vectors", dt, k))]
-        elif src != dst and one is not None and 1 == len(one) and one[0].startswith("stride(") \
-                and terms[one] == adt_size(dt) and three:
-            steps = [(src, ("from_stride", one[0]))]
-        else:
-            steps = ([(src, ("copy",))] if src != dst else []) + \
-                [(dst, st) for st in self.offsets.move_steps(amount, comp)]
-        if not steps:
-            return [op]      # a move of nothing: as it was
-        out = []
-        for n, (s_src, step) in enumerate(steps):
-            o = lsc_addr_compute(comp, s_src, dst, self.step_delta(step, comp), scalar_tile)
-            o.properties = dict(props, step=step)
-            if advance is not None and len(steps) - 1 == n:
-                o.properties["advance"] = advance
-            out.append(o)
-        total = sym.const(0)
-        for o in out:
-            total = total + o.delta
-        if dict(total.terms) != dict(op.delta.terms):
-            raise specialization_error(f"spelling {comp}'s move by {op.delta}: steps add up to {total}")
-        return out
-
-    def spell_addresses(self):
-        """
-        Every address move of the program as steps of one instruction each
-        (spelled): the IR says what a move costs. Done once - a step isn't
-        spelled again
-        """
-        def spell(ops):
-            out = []
-            for op in ops:
-                if isinstance(op, lsc_loop):
-                    op.block = spell(list(op.block))
-                    op.refresh()
-                elif isinstance(op, lsc_addr_compute) and "step" not in (op.properties or {}):
-                    out += self.spelled(op)
-                    continue
-                out.append(op)
-            return out
-        for block in self.program.blocks + [b for case in self.program.cases for b in case.blocks]:
-            for section in ("prologue", "body", "epilogue", "tail", "subtail"):
-                ops = getattr(block, section)
-                if ops:
-                    setattr(block, section, spell(list(ops)))
-
     def address(self, op: lsc_addr_compute) -> list[str]:
         """
         An address register set from another plus an offset
@@ -1707,7 +1532,7 @@ class signature_emitter:
         dest = self.aregs[dest_key]
         step = (op.properties or {}).get("step")
         if step is not None:
-            # one step of a spelled move (spell_addresses): its instruction
+            # one step of a spelled move (specializers/addresses.py): its instruction
             if "copy" == step[0]:
                 lines = [asmops.mov(self.gen, src=self.aregs[src_key], dst=dest)]
             elif "from_vectors" == step[0]:
@@ -2086,8 +1911,6 @@ class signature_emitter:
         return [l.strip() for l in lines]
 
     def emit(self) -> emitted_program:
-        if self.spell:
-            self.spell_addresses()
         import copy
         # what the ISA needs set up: SVE's all-true predicate, SME's smstart,
         # RVV's vsetvli - for the narrowest element type, so a predicate covers
@@ -2597,11 +2420,6 @@ class signature_emitter:
 
 
 
-#: address moves spelled as one-instruction steps in the IR before emitting
-#: (spell_addresses; docs/ADDRESSING_PLAN.md step 1) - the kernels byte for
-#: byte the same either way, off for comparing
-SPELL_ADDRESSES = True
-
 #: the most offset registers max-offset-registers auto takes
 AUTO_OFFSET_REGISTERS = 8
 
@@ -2616,15 +2434,12 @@ def emit_program(ctx, program: ir_program) -> emitted_program:
     value allocated before the regions
     """
     keep: set[str] = set()
-    # address moves as one-instruction steps where no offset register is
-    # planned (docs/ADDRESSING_PLAN.md, step 1)
-    spell = SPELL_ADDRESSES and 0 == (program.offset_registers or 0)
 
     def emit_once(preallocate=()):
         # a stack parameter deferred to the dispatch but needed earlier (a
         # stride setup computes with): emitted again, that one from entry
         while True:
-            emitter = signature_emitter(ctx, program, preallocate=preallocate, keep_params=keep, spell=spell)
+            emitter = signature_emitter(ctx, program, preallocate=preallocate, keep_params=keep)
             try:
                 return emitter, emitter.emit()
             except KeyError as err:

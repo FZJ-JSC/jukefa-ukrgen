@@ -71,7 +71,7 @@ class test_spelled_addresses(unittest.TestCase):
     """
 
     def test_same_kernels(self):
-        from ukrgen.emitters import signature as sg
+        from ukrgen.specializers import addresses as sg
         from tests.flow.golden_kernels import kernels, build
         for label, path, family, m, n in kernels():
             with self.subTest(kernel=label):
