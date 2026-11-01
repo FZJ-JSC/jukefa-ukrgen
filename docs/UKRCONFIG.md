@@ -146,7 +146,8 @@ case of their own. `docs/BLISGEN_PLAN.md` has the details of each.
   by k step, leapfrog: one add each); a general stride's row change one move,
   rs - (n - R) cs. Moves taking more than one instruction spelled out get a
   register of their own, computed once (`max-offset-registers`, a flow
-  parameter - under `params:`: off by
+  parameter - under `params:`; `auto` the general registers an emission
+  without them leaves free, less one: off by
   default - each takes a general register from address registers and column
   pointers, large microtiles then don't build; `auto` 4, 1 on x86): the most
   used, saving the most instructions, first - vector lengths in them too (a

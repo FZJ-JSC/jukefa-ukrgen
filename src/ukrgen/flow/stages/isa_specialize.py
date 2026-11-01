@@ -46,8 +46,8 @@ class isa_specialize_stage(stage):
                             "strided walk's row change, rs - (n - R) cs - each computed once, an add "
                             "of it where the walk moves; the moves used most, saving the most "
                             "instructions, first (0, the default: none - every move spelled out, the general "
-                            "registers left to address registers and column pointers; auto: 4, 1 on "
-                            "x86's 16)")
+                            "registers left to address registers and column pointers; auto: the general "
+                            "registers an emission without them leaves free, less one, at most 8)")
         self.params["max-imm-offset"] = stage_param(
                 value=None, required=False,
                 description="Largest immediate offset in bytes, either sign, a load or store "
@@ -81,7 +81,9 @@ class isa_specialize_stage(stage):
         value = str(self.params["max-offset-registers"].value or "0")
         if "auto" != value:
             return int(value)
-        return 1 if ".avx." in type(ctx.gen).__module__ else 4
+        # measured: the emitter takes the general registers a first emission
+        # left free (emit_program)
+        return -1
 
     def assumed_state(self) -> dict[str, str]:
         """

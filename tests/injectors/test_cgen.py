@@ -1186,6 +1186,43 @@ int main( void )
             self.assertGreaterEqual(len(moved), 5, sorted(moved))
         self.run_k3_trans14(k)
 
+    def test_offset_registers_auto(self):
+        # max-offset-registers auto: emitted without offset registers, the
+        # general registers it never needed counted, then again with them -
+        # the K3's sgemm vm 4x6 shorter and built (a fixed budget of 4 kept
+        # it from building). Budget 2 too: C's walk in the any storage, VL rs
+        # - 5 cs, computed in setup beside a multiply's scratch register (it
+        # was overwritten: the offset 0). Both right
+        import copy
+        from ukrgen.injectors.blis.families import configuration
+        cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv_zba"]
+        if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
+            self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")
+        c = configuration.from_files({("gemm", "FP32"): os.path.join(HERE, "..", "..", "ukrconfig", "rvv",
+                                                                     "k3-x100", "sgemm.yaml")})
+        count = {}
+        for budget in ("0", "2", "auto"):
+            fam = copy.deepcopy(next(f for f in c.families if "vm" == f.name))
+            fam.sizes = {"m": [4], "n": [6]}
+            fam.params["max-offset-registers"] = budget
+            built, skipped = build_gemm(c.isa, c.name, fam)
+            self.assertTrue(built, skipped)
+            k = built[0]
+            count[budget] = sum(1 for l in asm_source(k).splitlines()
+                                if l.strip() and not l.strip().endswith(":") and not l.strip().startswith((".", "#")))
+            if "0" == budget:
+                continue
+            src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator("rvv")) + gemm_wrapper(k) + \
+                  f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, 'float', k.vl_fn)}; }}\n" \
+                  f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, 'float', k.vl_fn)}; }}\n" + \
+                  open(os.path.join(HERE, "wrapper_harness.c")).read()
+            outs = self.run_c("rvv", src, [k], [["qemu-riscv64-static", "-cpu", f"rv64,v=true,vlen={v},elen=64"]
+                                               for v in (128, 256)], [f"-DUKR={k.symbol}", "-DWT=float"], cc=cc)
+            self.assertEqual(2, len(outs))
+            for out in outs:
+                self.assertIn("81 runs, 0 wrong", out, (budget, k.symbol))
+        self.assertLess(count["auto"], count["0"])
+
     def test_lanes_without_column_pointers(self):
         # NEON's vn kernels store C across vectors lane by lane: with no
         # column pointers (column-pointers: {C: 0}) each lane's address is

@@ -329,16 +329,19 @@ class offset_planner:
             reg = self.e.greg()
             self.e.strides_in[key] = reg
             esize = adt_size(self.e.ctx.component_dts[comp])
-            lines = [asmops.set_imm(self.e.gen, reg=reg, imm=dict(amount.terms).get((), 0))]
+            # each piece in setup as it's made: a scratch register add_scaled
+            # frees is free again for the next setup value (vl_stride), whose
+            # computation goes in at once - collected and placed after it, the
+            # scratch's uses would overwrite that value (VL*rs - 5 cs came out 0)
+            self.e.late_setup.append(asmops.set_imm(self.e.gen, reg=reg, imm=dict(amount.terms).get((), 0)))
             for factors, coeff in amount.terms:
                 if 1 == len(factors) and factors[0].startswith("stride("):
-                    lines += self.add_scaled(reg, self.stride_reg(factors[0], setup=True), coeff // esize)
+                    self.e.late_setup += self.add_scaled(reg, self.stride_reg(factors[0], setup=True), coeff // esize)
             # vector lengths (of strides) as add_bytes moves by them: setup values
             # of their own (vl_bytes, vl_multiple, vl_stride), incb on SVE
             others = {f: c for f, c in amount.terms if f and not (1 == len(f) and f[0].startswith("stride("))}
             if others:
-                lines += self.add_bytes(reg, sym._make(others), comp)
-            self.e.late_setup += lines
+                self.e.late_setup += self.add_bytes(reg, sym._make(others), comp)
         return self.e.strides_in[key]
 
     def vl_stride(self, factor: str, dt):
@@ -468,6 +471,8 @@ class signature_emitter:
         self.vlm: dict[tuple, object] = {}
         #: how address offsets are formed
         self.offsets = offset_planner(self)
+        #: the fewest general registers free at any reservation (greg)
+        self.min_free_gregs = None
         #: offset polynomials with a register of their own (plan_offsets)
         self.offset_plan = set()
         self.masks: dict = {}
@@ -723,7 +728,12 @@ class signature_emitter:
 
     def greg(self):
         try:
-            return self.gen.greg(self.rt.reserve_any_reg("greg"))
+            reg = self.gen.greg(self.rt.reserve_any_reg("greg"))
+            # the fewest general registers ever left: what offset registers
+            # could have had (max-offset-registers auto)
+            free = self.rt.available("greg")
+            self.min_free_gregs = free if self.min_free_gregs is None else min(self.min_free_gregs, free)
+            return reg
         except IndexError:
             raise specialization_error(
                 "no general register left - the parameters, A's, B's and C's address registers, "
@@ -2404,6 +2414,10 @@ class signature_emitter:
 
 
 
+#: the most offset registers max-offset-registers auto takes
+AUTO_OFFSET_REGISTERS = 8
+
+
 def emit_program(ctx, program: ir_program) -> emitted_program:
     """
     Emit a program. Values setup computes once (the vector length in bytes,
@@ -2430,9 +2444,30 @@ def emit_program(ctx, program: ir_program) -> emitted_program:
                     raise
                 keep.add(key)
 
-    emitter, out = emit_once()
-    for _ in range(3):
-        if not any(late for _, _, late in emitter.recipes):
-            return out
-        emitter, out = emit_once([(n, a) for n, a, _ in emitter.recipes])
-    raise specialization_error("setup's registers kept changing between emissions")
+    def emit_all():
+        emitter, out = emit_once()
+        for _ in range(3):
+            if not any(late for _, _, late in emitter.recipes):
+                return emitter, out
+            emitter, out = emit_once([(n, a) for n, a, _ in emitter.recipes])
+        raise specialization_error("setup's registers kept changing between emissions")
+    # max-offset-registers auto (-1): emitted without offset registers first,
+    # the general registers it never needed counted, then again with that
+    # many less one - an offset register lives in setup, every region keeps
+    # it, so it comes out of that headroom, never out of what a microtile
+    # needs (a fixed budget kept large ones from building)
+    if program.offset_registers is None or program.offset_registers >= 0:
+        return emit_all()[1]
+    program.offset_registers = 0
+    try:
+        emitter, out = emit_all()
+        spare = (emitter.min_free_gregs or 0) - 1
+        if spare > 0:
+            program.offset_registers = min(spare, AUTO_OFFSET_REGISTERS)
+            try:
+                out = emit_all()[1]
+            except specialization_error:
+                pass    # the first emission stands
+    finally:
+        program.offset_registers = -1
+    return out
