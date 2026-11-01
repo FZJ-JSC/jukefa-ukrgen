@@ -97,9 +97,13 @@ in the IR, in order.
       another order (recorded anew). `auto` the flow driver's: a first run
       without offsets measures, a second runs with the spare registers
       (families' run_flow; the command line runs once - no offsets).
-   2. Merges where shorter: consecutive stride moves (never worse); a
-      doubled add into a shifted one; a copy and an operation on it into one
-      with the source (`slli t3,t0,2`); cancelling pairs.
+   2. Merges where shorter - done (ukrgen 0272): after the spelling, before
+      scheduling, adjacent steps of one register - a run of identical adds
+      into shifted ones (where the ISA shifts the operand), immediates into
+      one, cancelling pairs gone, a copy and a step on it into one step from
+      the source (three operands). The golden kernels 4055 -> 3855
+      instructions, their k loops the same; the K3's sgemm vm 2x14 2124 ->
+      2044, trans14 256 -> 240, the K1's sgemm 2157 -> 2097.
    3. Setup values spelled the shortest way - done (ukrgen 0270): k vector
       lengths a shift or a multiply (`vl_multiple`'s k - 1 adds gone), the
       vector length in bytes one shift from its register, offset values

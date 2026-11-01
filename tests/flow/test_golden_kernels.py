@@ -65,9 +65,9 @@ class test_no_mergeable_adds(unittest.TestCase):
 class test_spelled_addresses(unittest.TestCase):
     """
     Address moves spelled as one-instruction steps in the IR before
-    scheduling (docs/ADDRESSING_PLAN.md 1, 3.1): every golden kernel as many
-    instructions with the steps as without, its k loop too - the scheduler
-    places the steps, it adds none - and the moves really steps
+    scheduling (docs/ADDRESSING_PLAN.md 1, 3.1, 3.2): every golden kernel no
+    more instructions with the steps as without - the scheduler places them,
+    merging shortens - and the moves really steps
     """
 
     def test_same_kernels(self):
@@ -85,7 +85,8 @@ class test_spelled_addresses(unittest.TestCase):
                     sg.SPELL_ADDRESSES = saved
                 count = lambda t: sum(1 for l in t.splitlines() if l.strip() and not l.strip().endswith(":")
                                       and not l.strip().startswith((".", "#", "//")))
-                self.assertEqual(count(whole), count(spelled))
+                # the steps merged where shorter (3.2): never more instructions
+                self.assertLessEqual(count(spelled), count(whole))
 
     def test_steps(self):
         from tests.specializers.gemm_helper import gemm

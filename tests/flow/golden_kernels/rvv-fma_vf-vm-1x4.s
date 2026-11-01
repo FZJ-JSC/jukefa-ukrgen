@@ -186,15 +186,13 @@ j .ukr0_case5
 j .ukr0_cases_end
 .ukr0_case0:
 add t4,a3,0
-add t5,t4,0
+add t5,t4,a6
 vse64.v v1, (t4)
-add t6,t4,0
+add t6,t4,a6
 add a0,t4,a6
 add t5,t5,a6
 add t6,t6,a6
 vse64.v v2, (a0)
-add t5,t5,a6
-add t6,t6,a6
 add t5,t5,a6
 vse64.v v3, (t6)
 vse64.v v4, (t5)
@@ -202,10 +200,10 @@ j .ukr0_cases_end
 .ukr0_case1:
 add t4,a3,0
 fld f0, 0(a4)
-add t5,t4,0
-add t6,t4,0
+add t5,t4,a6
+add t6,t4,a6
 add a0,t4,a6
-add t6,t6,a6
+add t5,t5,a6
 add t6,t6,a6
 vfmul.vf v5,v1,f0
 add t5,t5,a6
@@ -213,37 +211,31 @@ vfmul.vf v1,v2,f0
 vfmul.vf v2,v3,f0
 vfmul.vf v3,v4,f0
 vse64.v v5, (t4)
-add t5,t5,a6
 vse64.v v1, (a0)
 vse64.v v2, (t6)
-add t5,t5,a6
 vse64.v v3, (t5)
 j .ukr0_cases_end
 .ukr0_case2:
 add t4,a3,0
-add t5,t4,0
+add t5,t4,a6
 vle64.v v5, (t4)
 add t6,t4,a6
 add a0,a3,a6
 add t5,t5,a6
 vle64.v v6, (t6)
-add t5,t5,a6
+add a1,a3,a6
 vle64.v v7, (t5)
 vfadd.vv v5,v1,v5
-add a1,a3,0
+add a0,a0,a6
 vfadd.vv v6,v2,v6
 vfadd.vv v7,v3,v7
 vse64.v v5, (a3)
-add a2,t4,0
-add a1,a1,a6
+add a2,t4,a6
 add a2,a2,a6
-add a1,a1,a6
-vse64.v v6, (a0)
-add a7,a3,0
+vse64.v v6, (a1)
+add a7,a3,a6
 add a2,a2,a6
-add a7,a7,a6
-add a2,a2,a6
-vse64.v v7, (a1)
+vse64.v v7, (a0)
 add a7,a7,a6
 vle64.v v1, (a2)
 add a7,a7,a6
@@ -252,29 +244,25 @@ vse64.v v1, (a7)
 j .ukr0_cases_end
 .ukr0_case3:
 add t4,a3,0
-add t5,t4,0
+add t5,t4,a6
 vle64.v v5, (t4)
 add t6,t4,a6
 fld f0, 0(a4)
 add a0,a3,a6
 add t5,t5,a6
 vle64.v v6, (t6)
-add t5,t5,a6
+add a1,a3,a6
 vle64.v v7, (t5)
 vfmacc.vf v5,f0,v1
-add a1,a3,0
+add a0,a0,a6
 vfmacc.vf v6,f0,v2
 vfmacc.vf v7,f0,v3
 vse64.v v5, (a3)
-add a2,t4,0
-add a1,a1,a6
+add a2,t4,a6
 add a2,a2,a6
-vse64.v v6, (a0)
-add a7,a3,0
-add a1,a1,a6
-add a2,a2,a6
-add a7,a7,a6
-vse64.v v7, (a1)
+vse64.v v6, (a1)
+add a7,a3,a6
+vse64.v v7, (a0)
 add a2,a2,a6
 add a7,a7,a6
 vle64.v v1, (a2)
@@ -284,29 +272,25 @@ vse64.v v1, (a7)
 j .ukr0_cases_end
 .ukr0_case4:
 add t4,a3,0
-add t5,t4,0
+add t5,t4,a6
 vle64.v v5, (t4)
 add t6,t4,a6
 fld f0, 0(a5)
 add a0,a3,a6
 add t5,t5,a6
 vle64.v v6, (t6)
-add t5,t5,a6
+add a1,a3,a6
 vle64.v v7, (t5)
 vfmacc.vf v1,f0,v5
-add a1,a3,0
+add a0,a0,a6
 vfmacc.vf v2,f0,v6
 vfmacc.vf v3,f0,v7
 vse64.v v1, (a3)
-add a2,t4,0
-add a1,a1,a6
+add a2,t4,a6
 add a2,a2,a6
-vse64.v v2, (a0)
-add a7,a3,0
-add a1,a1,a6
-add a2,a2,a6
-add a7,a7,a6
-vse64.v v3, (a1)
+vse64.v v2, (a1)
+add a7,a3,a6
+vse64.v v3, (a0)
 add a2,a2,a6
 add a7,a7,a6
 vle64.v v1, (a2)
@@ -318,34 +302,30 @@ j .ukr0_cases_end
 add t4,a3,0
 add t5,t4,a6
 vle64.v v5, (t4)
-add t6,t4,0
+add t6,t4,a6
 fld f0, 0(a5)
 fld f1, 0(a4)
 add a0,a3,a6
 vle64.v v6, (t5)
 add t6,t6,a6
 vfmul.vf v5,v5,f0
-add t6,t6,a6
-vfmul.vf v6,v6,f0
 vle64.v v7, (t6)
+vfmul.vf v6,v6,f0
 vfmacc.vf v5,f1,v1
-vfmacc.vf v6,f1,v2
 vfmul.vf v7,v7,f0
+vfmacc.vf v6,f1,v2
 vse64.v v5, (a3)
-add a1,t4,0
-add a2,a3,0
-vse64.v v6, (a0)
+add a1,t4,a6
 vfmacc.vf v7,f1,v3
+add a2,a3,a6
+vse64.v v6, (a0)
+add a7,a3,a6
 add a1,a1,a6
-add a7,a3,0
 add a2,a2,a6
-add a1,a1,a6
 add a7,a7,a6
-add a2,a2,a6
 add a1,a1,a6
 add a7,a7,a6
 vle64.v v1, (a1)
-add a7,a7,a6
 vse64.v v7, (a2)
 vfmul.vf v1,v1,f0
 vfmacc.vf v1,f1,v4

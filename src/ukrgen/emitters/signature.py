@@ -1516,6 +1516,14 @@ class signature_emitter:
             return [asmops.add(self.gen, dst=dest, reg1=src, reg2=self.vl_multiple(step[1], step[2]))]
         if "from_stride" == step[0]:
             return [asmops.add(self.gen, dst=dest, reg1=src, reg2=self.stride_reg(step[1]))]
+        if "from" == step[0]:
+            # a copy and a step merged: dest = src op (value << shift), one
+            # instruction of three operands
+            _, (_, value, op, bit) = step
+            source = self.offsets.value_reg(value)
+            if not bit:
+                return [asmops.arith(self.gen, op, dst=dest, reg1=src, reg2=source)]
+            return [asmops.shifted(self.gen, op, dst=dest, reg1=src, reg2=source, shift=bit)]
         return self.offsets.emit_step(dest, step)
 
     def address(self, op: lsc_addr_compute) -> list[str]:

@@ -147,7 +147,9 @@ class post_specialize_irmod_stage(irmod_stage_base):
                 auto = p.offset_registers is not None and p.offset_registers < 0
                 if auto:
                     p.offset_registers = self.context.auto_offset_budget or 0
-                address_speller(self.context).spell(p)
+                speller = address_speller(self.context)
+                speller.spell(p)
+                speller.merge(p)        # adjacent steps where shorter (ADDRESSING_PLAN 3.2)
                 if auto:
                     p.offset_registers = -1
         if self.params["print-modified-ir"].value:

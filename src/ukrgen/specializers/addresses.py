@@ -237,6 +237,8 @@ class address_speller:
             return sym._make({(step[1],): 1})
         if "offset" == kind:
             return self.elements_of(step[1], step[2])
+        if "from" == kind:
+            return self.step_delta(step[1], comp)
         value, sign = step[1], -1 if "sub" == step[2] else 1
         times = step[3] if "mul" == kind else 1 << step[3]
         if "stride" == value[0]:
@@ -308,6 +310,116 @@ class address_speller:
             raise specialization_error(f"spelling {comp}'s move by {op.delta}: steps add up to {total}")
         return out
 
+    def merged_run(self, run: list) -> list | None:
+        """
+        A run of identical plain adds or subs of one value as one shifted
+        step a set bit of its length - where the ISA shifts the operand and
+        that's fewer; None where not
+        """
+        _, value, op, bit = run[0]
+        n = len(run)
+        bits = [b for b in range(n.bit_length()) if n >> b & 1]
+        if any(b and not self.shifted_available(op, b) for b in bits) or len(bits) >= n:
+            return None
+        return [("reg", value, op, b) for b in bits]
+
+    def merge_ops(self, ops: list) -> list:
+        """
+        Adjacent steps moving one register merged where that's shorter - before
+        scheduling, steps of one move (and moves of one register) adjacent:
+        a run of identical adds into shifted ones, immediates into one,
+        cancelling pairs gone, a copy and a step on it into one step from the
+        source (three operands)
+        """
+        out = []
+        i = 0
+        while i < len(ops):
+            op = ops[i]
+            st = _step(op)
+            if st is None:
+                out.append(op)
+                i += 1
+                continue
+            comp, src, dst = _regs(op)
+            # a run of the same plain step on one register
+            if "reg" == st[0] and 0 == st[3] and src == dst:
+                j = i + 1
+                while j < len(ops) and _step(ops[j]) == st and _regs(ops[j]) == (comp, dst, dst) \
+                        and "advance" not in (ops[j - 1].properties or {}):
+                    j += 1
+                merged = self.merged_run([st] * (j - i)) if j - i > 1 else None
+                if merged is not None:
+                    out += self.rebuilt(ops[i:j], merged, comp, dst, dst)
+                    i = j
+                    continue
+            nxt = ops[i + 1] if i + 1 < len(ops) else None
+            ns = _step(nxt) if nxt is not None else None
+            if ns is not None and "advance" not in (op.properties or {}) and _regs(nxt) == (comp, dst, dst):
+                # immediates into one; cancelling pairs gone
+                if "imm" == st[0] == ns[0] and src == dst and abs(st[1] + ns[1]) <= MERGED_IMMEDIATE:
+                    total = st[1] + ns[1]
+                    out += self.rebuilt([op, nxt], [("imm", total)] if total else [], comp, dst, dst)
+                    i += 2
+                    continue
+                if "reg" == st[0] == ns[0] and src == dst and st[1] == ns[1] and st[3] == ns[3] \
+                        and {st[2], ns[2]} == {"add", "sub"}:
+                    out += self.rebuilt([op, nxt], [], comp, dst, dst)
+                    i += 2
+                    continue
+                # a copy and a step on it: one step from the source
+                if "copy" == st[0] and "reg" == ns[0] and self.three_operands:
+                    out += self.rebuilt([op, nxt], [("from", ns)], comp, src, dst)
+                    i += 2
+                    continue
+            out.append(op)
+            i += 1
+        return out
+
+    def rebuilt(self, ops: list, steps: list, comp: str, src: int, dst: int) -> list:
+        """
+        ops' moves as steps (from src into dst), the same delta in all - a
+        loop's advance on the last; nothing where they cancel (a move of
+        nothing kept where an advance rides on it)
+        """
+        advance = next(((o.properties or {}).get("advance") for o in reversed(ops)
+                        if "advance" in (o.properties or {})), None)
+        props = {k: v for k, v in (ops[0].properties or {}).items() if k not in ("step", "advance")}
+        if not steps and advance is not None:
+            steps = [("imm", 0)]
+        out = []
+        for n, st in enumerate(steps):
+            o = lsc_addr_compute(comp, src if 0 == n else dst, dst, self.step_delta(st, comp), scalar_tile)
+            o.properties = dict(props, step=st)
+            if advance is not None and len(steps) - 1 == n:
+                o.properties["advance"] = advance
+            out.append(o)
+        before = sym.const(0)
+        for o in ops:
+            before = before + o.delta
+        after = sym.const(0)
+        for o in out:
+            after = after + o.delta
+        if dict(before.terms) != dict(after.terms):
+            raise specialization_error(f"merging {comp}'s steps: {before} became {after}")
+        return out
+
+    def merge(self, program: ir_program) -> None:
+        """
+        Every program's adjacent steps merged (merge_ops) - in its sections,
+        its loops' blocks, its cases'
+        """
+        def walk(ops):
+            for op in ops:
+                if isinstance(op, lsc_loop):
+                    op.block = self.merge_ops(walk(list(op.block)))
+                    op.refresh()
+            return ops
+        for block in program.blocks + [b for case in program.cases for b in case.blocks]:
+            for section in SECTIONS:
+                ops = getattr(block, section)
+                if ops:
+                    setattr(block, section, self.merge_ops(walk(list(ops))))
+
     def spell(self, program: ir_program) -> None:
         """
         Every address move of the program as its steps - in its sections, its
@@ -333,6 +445,19 @@ class address_speller:
                 ops = getattr(block, section)
                 if ops:
                     setattr(block, section, rewrite(list(ops)))
+
+
+#: an immediate two adds merge into - within every ISA's add of one
+#: (RISC-V's addi: 12 bits signed)
+MERGED_IMMEDIATE = 2047
+
+
+def _step(op):
+    return (op.properties or {}).get("step") if isinstance(op, lsc_addr_compute) else None
+
+
+def _regs(op):
+    return op.indices[0].component, op.indices[0].indices[0], op.indices[1].indices[0]
 
 
 def spells(program: ir_program) -> bool:
