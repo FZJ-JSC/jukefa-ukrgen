@@ -6,6 +6,7 @@ families:
   preset: gemm_fma_bc_blocks
   vectorize: n
   unroll: 4
+  column-pointers: {C: 0}     # C walks: its lanes through x86's index forms
   m: [4, 6, 8, 12]
   n: 1..3
   params:
@@ -18,6 +19,7 @@ families:
   preset: gemm_fma_bc_blocks
   vectorize: m
   unroll: 4
+  column-pointers: {C: 0}     # C walks: its lanes through x86's index forms
   m: 1..3
   n: [4, 8, 12, 14]
   params:

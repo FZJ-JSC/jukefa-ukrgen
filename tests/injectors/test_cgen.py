@@ -5,6 +5,7 @@ C column-major, row-major and general strided - and the kernel table's
 chooser: an MR x NR asked for, else the family's default
 """
 
+import copy
 import os
 import shutil
 import subprocess
@@ -19,6 +20,8 @@ from ukrgen.injectors.blis.cgen import (gemm_wrapper, asm_source, vl_helper, vl_
 from tests.injectors.test_families import VM, VN, VNF, VMF
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+#: the repository's root (its ukrconfig)
+ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 CC = ["aarch64-linux-gnu-gcc", "-static", "-march=armv8-a+sve"]
 QEMU = "qemu-aarch64-static"
 
@@ -1205,6 +1208,35 @@ int main( void )
             self.assertGreaterEqual(len(moved), 5, sorted(moved))
         self.run_k3_trans14(k)
 
+    def test_avx512_configs_walk(self):
+        # the AVX-512 configurations walk C (column-pointers: {C: 0}): each
+        # gemm family as configured, its default size or its first, right
+        # natively - vn through the storage harness, vm the wrapper's
+        if "avx512f" not in open("/proc/cpuinfo").read():
+            self.skipTest("needs AVX-512")
+        cc = ["gcc", "-mavx512f", "-mavx512dq", "-mfma"]
+        for cfg in ("fma_bc_blocks", "fma_bc_vindex"):
+            for dt, name, wt in (("FP64", "dgemm", "double"), ("FP32", "sgemm", "float")):
+                c = configuration.from_files({("gemm", dt): os.path.join(ROOT, "ukrconfig", "avx512", cfg, f"{name}.yaml")})
+                for fam in c.families:
+                    with self.subTest(cfg=cfg, gemm=name, family=fam.name):
+                        self.assertEqual("0", str(fam.params.get("C-column-pointers")), fam.params)
+                        f = copy.deepcopy(fam)
+                        f.sizes = {"m": [8 if "vn" == fam.name else 2], "n": [3 if "vn" == fam.name else 8]}
+                        built, skipped = build_gemm(c.isa, c.name, f)
+                        self.assertTrue(built, skipped)
+                        k = built[0]
+                        if "vn" == fam.name:
+                            outs = self.run_storage_kernel(c.isa, k, cc, [[]], wt=wt)
+                        else:
+                            src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator(c.isa)) + gemm_wrapper(k) + \
+                                f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, wt, k.vl_fn)}; }}\n" \
+                                f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, wt, k.vl_fn)}; }}\n" + \
+                                open(os.path.join(HERE, "wrapper_harness.c")).read()
+                            outs = self.run_c(c.isa, src, [k], [[]], [f"-DUKR={k.symbol}", f"-DWT={wt}"], cc=cc)
+                        for out in outs:
+                            self.assertIn(" 0 wrong", out, k.symbol)
+
     def test_lanes_indexed_x86(self):
         # without column pointers a column's lanes are one register's, lane j
         # at (base, stride, j) - x86's index forms of vmovsd, vmovhpd (asmgen
@@ -1737,10 +1769,10 @@ int main( void )
                          [p for p in k.params if not p.startswith("stride(")])
         return k
 
-    def run_storage_kernel(self, isa, k, cc, runners):
+    def run_storage_kernel(self, isa, k, cc, runners, wt="double"):
         src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator(isa)) + gemm_wrapper(k) + \
-              f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, 'double', k.vl_fn)}; }}\n" \
-              f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, 'double', k.vl_fn)}; }}\n" + \
+              f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, wt, k.vl_fn)}; }}\n" \
+              f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, wt, k.vl_fn)}; }}\n" + \
               open(os.path.join(HERE, "wrapper_harness.c")).read()
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "k.s"), "w") as fh:
@@ -1748,7 +1780,7 @@ int main( void )
             subprocess.run(cc + ["-c", os.path.join(d, "k.s"), "-o", os.path.join(d, "k.o")], check=True)
             with open(os.path.join(d, "w.c"), "w") as fh:
                 fh.write(src)
-            r = subprocess.run(cc + ["-O1", f"-I{HERE}", f"-DUKR={k.symbol}", "-DWT=double",
+            r = subprocess.run(cc + ["-O1", f"-I{HERE}", f"-DUKR={k.symbol}", f"-DWT={wt}",
                                      os.path.join(d, "w.c"), os.path.join(d, "k.o"), "-o",
                                      os.path.join(d, "run")], capture_output=True, text=True)
             self.assertEqual(0, r.returncode, r.stderr)
