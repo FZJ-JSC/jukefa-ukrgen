@@ -72,19 +72,22 @@ in the IR, in order.
       limits the offsets rather than claiming registers - AVX-512's storage
       branches at 2, the K3's sgemm vm 3x6, 3x8, 4x6 at 4 build (they ran
       out).
-   3. *The planner in the speller.* Its ranking (uses, a loop's body
+   3. *The planner in the speller* - done (ukrgen 0269). Its ranking (uses, a loop's body
       tenfold, times the instructions a register saves) over the IR's own
       moves; a chosen offset a named value (`("offset", component,
       polynomial)`), a move it covers one step adding it - from another
       register in one add where the ISA takes three operands. Every move
       spelled, under any budget; the emitter's planner, its cost and
       `address()`'s whole-move paths go.
-   4. *`auto` in the emit stage.* Spelled and emitted without offset
+   4. *`auto` in the emit stage* - done (ukrgen 0269; the spare registers
+      counted over the whole kernel still - before and after the dispatch
+      apart is open). Spelled and emitted without offset
       registers, the spare general registers counted - before the dispatch
       and after it apart (C's offsets live only in the cases) - then
       planned again from the program as it was before spelling (a copy) and
       emitted.
-   5. *Tests on the old failures*: NEON's general-stride C, AVX-512's
+   5. *Tests on the old failures* - done (test_offset_registers_deferred_
+      strides, test_offset_registers_auto, test_widen's address variants): NEON's general-stride C, AVX-512's
       storage branches, the K3's vm 4x6, each under a budget; the mixed-
       precision variants (test_widen).
 3. **`addrmerge` on steps, the scheduler seeing them.**

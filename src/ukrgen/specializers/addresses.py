@@ -35,6 +35,17 @@ SPELL_ADDRESSES = True
 SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
 
 
+def plannable(factors: tuple) -> bool:
+    """
+    A term of an address move an offset register can hold, computed once: a
+    stride, the vector length, a vector length of a stride, the vector
+    length squared (a loop's advance less its walk: VL - 12 rs)
+    """
+    if 1 == len(factors):
+        return factors[0].startswith("stride(") or "VL" == factors[0]
+    return 2 == len(factors) and "VL" == factors[0] and (factors[1].startswith("stride(") or "VL" == factors[1])
+
+
 class address_speller:
     """
     A program's address moves as one-instruction steps, the ISA asked what it
@@ -50,6 +61,8 @@ class address_speller:
         #: vector length in a register
         self.vector_length_kept = "IMPLICIT" == self.gen.isa_setup().predication().name
         self._shifted: dict[tuple[str, int], bool] = {}
+        #: the offsets planned for the program being spelled
+        self.planned: set = set()
         reg = self.gen.greg(0)
         #: an add of three registers one instruction (not x86's: a copy too)
         self.three_operands = 1 == len([l for l in asmops.add(self.gen, dst=reg, reg1=self.gen.greg(1),
@@ -146,6 +159,67 @@ class address_speller:
             steps += self.scaled_steps(value, n)
         return steps
 
+    def offset_cost(self, amount: sym, comp: str) -> int:
+        """
+        The instructions moving an address by amount takes spelled out: an
+        immediate's add, a vector length's one, a stride's per set bit (where
+        the ISA shifts the operand, else as many as the bit is worth), at most
+        three a term (the scratch multiply)
+        """
+        esize = self.esize(comp)
+        cost = 0
+        for factors, coeff in amount.terms:
+            if not factors:
+                cost += 1 if coeff else 0
+                continue
+            if ("VL",) == factors:
+                cost += 1
+                continue
+            n, bit, op, term = abs(coeff // esize), 0, "sub" if coeff < 0 else "add", 0
+            while n:
+                if n & 1:
+                    term += 1 if not bit or self.shifted_available(op, bit) else 1 << bit
+                n >>= 1
+                bit += 1
+            cost += min(term, 3)
+        return cost
+
+    def plan(self, program: ir_program) -> dict:
+        """
+        The offsets that get a register of their own (max-offset-registers):
+        every move of strides and vector lengths taking more than one
+        instruction spelled out, its uses weighted - a loop's body tenfold -
+        times the instructions a register saves; the most first. Stride
+        parameters on the stack too: the emitter computes an offset where its
+        inputs are (after the dispatch's loads)
+
+        :return: (polynomial's text, component) -> (polynomial, rank)
+        """
+        budget = program.offset_registers or 0
+        if budget <= 0:
+            return {}
+        found = {}
+        def visit(ops, weight):
+            for op in ops:
+                if isinstance(op, lsc_loop):
+                    visit(op.block, weight)
+                    continue
+                if not isinstance(op, lsc_addr_compute) or "step" in (op.properties or {}):
+                    continue
+                comp = op.indices[0].component
+                amount = self.bytes_of(comp, op.delta)
+                if not all(plannable(f) for f, _ in amount.terms if f):
+                    continue
+                cost = self.offset_cost(amount, comp)
+                if cost > 1:
+                    entry = found.setdefault((str(amount), comp), [0, cost, amount])
+                    entry[0] += weight
+        for block in program.blocks + [b for case in program.cases for b in case.blocks]:
+            for section in SECTIONS:
+                visit(getattr(block, section) or [], 10 if "body" == section else 1)
+        ranked = sorted(found.items(), key=lambda kv: -kv[1][0] * (kv[1][1] - 1))
+        return {key: (amount, uses * (cost - 1)) for key, (uses, cost, amount) in ranked[:budget]}
+
     def step_delta(self, step: tuple, comp: str) -> sym:
         """
         A step's move in the component's elements: a move's steps add up to it
@@ -161,6 +235,8 @@ class address_speller:
             return sym._make({("VL",): step[2]})
         if "from_stride" == kind:
             return sym._make({(step[1],): 1})
+        if "offset" == kind:
+            return self.elements_of(step[1], step[2])
         value, sign = step[1], -1 if "sub" == step[2] else 1
         times = step[3] if "mul" == kind else 1 << step[3]
         if "stride" == value[0]:
@@ -174,6 +250,13 @@ class address_speller:
             if "vl_multiple" == value[0]:
                 times *= value[2]
         return sym._make({factors: sign * times})
+
+    def elements_of(self, comp: str, amount: sym) -> sym:
+        """
+        A polynomial in bytes back in the component's elements
+        """
+        esize = self.esize(comp)
+        return sym._make({f: c // esize for f, c in amount.terms})
 
     def spelled(self, op: lsc_addr_compute) -> list:
         """
@@ -189,7 +272,18 @@ class address_speller:
         k = self.vector_multiple(amount, comp)
         terms = dict(amount.terms)
         one = next(iter(terms)) if 1 == len(terms) else None
+        whole = []
         if src != dst and k is not None:
+            whole = [(src, ("from_vectors", dt, k))]
+        elif src != dst and one is not None and 1 == len(one) and one[0].startswith("stride(") \
+                and terms[one] == adt_size(dt) and self.three_operands:
+            whole = [(src, ("from_stride", one[0]))]
+        if (str(amount), comp) in self.planned and not whole:
+            # one add of the offset's register, its spelling carried for where
+            # the register was given up (the emitter's choice, per region)
+            fallback = ((("copy",),) if src != dst else ()) + tuple(self.move_steps(amount, comp))
+            steps = [(src, ("offset", comp, amount, fallback))]
+        elif src != dst and k is not None:
             steps = [(src, ("from_vectors", dt, k))]
         elif src != dst and one is not None and 1 == len(one) and one[0].startswith("stride(") \
                 and terms[one] == adt_size(dt) and self.three_operands:
@@ -217,8 +311,12 @@ class address_speller:
     def spell(self, program: ir_program) -> None:
         """
         Every address move of the program as its steps - in its sections, its
-        loops' blocks, its cases'. Done once: a step isn't spelled again
+        loops' blocks, its cases' - the offsets planned first (plan), a move
+        one covers one step adding it. Done once: a step isn't spelled again
         """
+        chosen = self.plan(program)
+        self.planned = set(chosen)
+        program.offset_plan = {key: rank for key, (_, rank) in chosen.items()}
         def rewrite(ops):
             out = []
             for op in ops:
@@ -239,8 +337,7 @@ class address_speller:
 
 def spells(program: ir_program) -> bool:
     """
-    Whether a program's moves are spelled: not where offset registers are
-    planned - the planner takes a move's whole polynomial (step 2 moves it
-    into the specializer)
+    Whether a program's moves are spelled (SPELL_ADDRESSES) - under any
+    budget: the offsets planned with them
     """
-    return SPELL_ADDRESSES and 0 == (program.offset_registers or 0)
+    return SPELL_ADDRESSES

@@ -153,6 +153,9 @@ class ir_program:
     addr_setup : dict[tuple[str, int], int]
     registers : dict[str, tuple[rgt, int]]
     cases : list[ir_case] = field(default_factory=list)
+    #: the offsets the specializer chose a register for (the speller's
+    #: plan): (polynomial's text, component) -> rank, the most valuable highest
+    offset_plan : dict = field(default_factory=dict)
     #: column pointers the specializer may add per address register, by
     #: component (--COMP-column-pointers); unset the ISA's default
     column_pointers : dict[str, int] = field(default_factory=dict)

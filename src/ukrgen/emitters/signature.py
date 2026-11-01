@@ -157,17 +157,6 @@ class emitted_program:
         return "\n".join(lines)
 
 
-def _plannable(factors: tuple) -> bool:
-    """
-    A term of an address move offset_value computes once: a stride, the
-    vector length, a vector length of a stride, the vector length squared -
-    what add_bytes moves by (a loop's advance less its walk: VL - 12 rs)
-    """
-    if 1 == len(factors):
-        return factors[0].startswith("stride(") or "VL" == factors[0]
-    return 2 == len(factors) and "VL" == factors[0] and (factors[1].startswith("stride(") or "VL" == factors[1])
-
-
 class offset_planner:
     """
     How an address offset is formed - every decision in one place: a
@@ -292,32 +281,6 @@ class offset_planner:
             self.e.late_setup.append(self.e.gen.set(**call))
             self.e.strides_in[key] = reg
         return self.e.strides_in[key]
-
-    def offset_cost(self, amount: sym, comp: str) -> int:
-        """
-        The instructions moving an address by amount takes spelled out: an
-        immediate's add, add_scaled's per stride - an add per set bit where
-        the ISA shifts the operand, else as many as the bit is worth
-        """
-        esize = adt_size(self.e.ctx.component_dts[comp])
-        cost = 0
-        for factors, coeff in amount.terms:
-            if not factors:
-                cost += 1 if coeff else 0
-                continue
-            if ("VL",) == factors:
-                # a vector length's multiple: one add (incb, a register holding it)
-                cost += 1
-                continue
-            n, bit, op, term = abs(coeff // esize), 0, "sub" if coeff < 0 else "add", 0
-            while n:
-                if n & 1:
-                    term += 1 if not bit or self.e.shifted_available(op, bit) else 1 << bit
-                n >>= 1
-                bit += 1
-            # add_scaled multiplies a longer run into a scratch register: three
-            cost += min(term, 3)
-        return cost
 
     def offset_value(self, amount: sym, comp: str):
         """
@@ -489,7 +452,7 @@ class signature_emitter:
         #: (register, plan key, rank); the planner's ranks
         self.evictable: dict = {}
         self.offset_rank: dict = {}
-        #: offset polynomials with a register of their own (plan_offsets)
+        #: offset polynomials with a register of their own (the speller's plan)
         self.offset_plan = set()
         self.masks: dict = {}
         self.indexes: dict = {}
@@ -802,40 +765,6 @@ class signature_emitter:
 
     def offset_value(self, *args, **kwargs):
         return self.offsets.offset_value(*args, **kwargs)
-
-    def plan_offsets(self) -> set:
-        """
-        The offset polynomials address moves need that get a register of their
-        own (max-offset-registers): every move of constants and strides that
-        takes more than one instruction spelled out (a strided walk's row
-        change), its uses weighted - a loop's body tenfold - times the
-        instructions a register saves; the most first
-        """
-        budget = self.program.offset_registers
-        if not budget:
-            return set()
-        found = {}
-        def visit(ops, weight):
-            for op in ops:
-                if isinstance(op, lsc_loop):
-                    visit(op.block, weight)
-                    continue
-                if not isinstance(op, lsc_addr_compute):
-                    continue
-                comp = op.indices[0].component
-                amount = self.bytes_of(comp, op.delta)
-                if not all(_plannable(f) for f, _ in amount.terms if f):
-                    continue
-                cost = self.offsets.offset_cost(amount, comp)
-                if cost > 1:
-                    entry = found.setdefault((str(amount), comp), [0, cost])
-                    entry[0] += weight
-        for block in self.program.blocks + [b for case in self.program.cases for b in case.blocks]:
-            for section in ("prologue", "body", "epilogue", "tail", "subtail"):
-                visit(getattr(block, section) or [], 10 if "body" == section else 1)
-        ranked = sorted(found.items(), key=lambda kv: -kv[1][0] * (kv[1][1] - 1))
-        self.offset_rank = {key: uses * (cost - 1) for key, (uses, cost) in ranked[:budget]}
-        return {key for key, _ in ranked[:budget]}
 
     def slices(self, op) -> list[str]:
         """
@@ -1546,6 +1475,19 @@ class signature_emitter:
     def vector_multiple(self, *args, **kwargs):
         return self.offsets.vector_multiple(*args, **kwargs)
 
+    def move_step(self, step: tuple, src, dest) -> list[str]:
+        """
+        A step's instruction: a copy from src, one add from src (k vector
+        lengths, one stride), else dest moved by it (emit_step)
+        """
+        if "copy" == step[0]:
+            return [asmops.mov(self.gen, src=src, dst=dest)]
+        if "from_vectors" == step[0]:
+            return [asmops.add(self.gen, dst=dest, reg1=src, reg2=self.vl_multiple(step[1], step[2]))]
+        if "from_stride" == step[0]:
+            return [asmops.add(self.gen, dst=dest, reg1=src, reg2=self.stride_reg(step[1]))]
+        return self.offsets.emit_step(dest, step)
+
     def address(self, op: lsc_addr_compute) -> list[str]:
         """
         An address register set from another plus an offset
@@ -1559,37 +1501,35 @@ class signature_emitter:
         step = (op.properties or {}).get("step")
         if step is not None:
             # one step of a spelled move (specializers/addresses.py): its instruction
-            if "copy" == step[0]:
-                lines = [asmops.mov(self.gen, src=self.aregs[src_key], dst=dest)]
-            elif "from_vectors" == step[0]:
-                lines = [asmops.add(self.gen, dst=dest, reg1=self.aregs[src_key],
-                                    reg2=self.vl_multiple(step[1], step[2]))]
-            elif "from_stride" == step[0]:
-                lines = [asmops.add(self.gen, dst=dest, reg1=self.aregs[src_key], reg2=self.stride_reg(step[1]))]
+            if "offset" == step[0]:
+                # an offset's register, where this region still has it - else
+                # its spelling (the register given up for a needed value)
+                _, comp_o, amount_o, fallback = step
+                reg = None
+                if (str(amount_o), comp_o) in self.offset_plan:
+                    try:
+                        reg = self.offset_value(amount_o, comp_o)
+                    except (IndexError, specialization_error):
+                        reg = None
+                if reg is not None:
+                    lines = [asmops.add(self.gen, dst=dest, reg1=self.aregs[src_key], reg2=reg)]
+                else:
+                    lines = [l for sub in fallback for l in self.move_step(sub, self.aregs[src_key], dest)]
             else:
-                lines = self.offsets.emit_step(dest, step)
+                lines = self.move_step(step, self.aregs[src_key], dest)
             advance = (op.properties or {}).get("advance")
             self.positions[dest_key] = self.positions[src_key] + op.delta - (advance or sym.const(0))
             return lines
         amount = self.bytes_of(comp, op.delta)
         k = self.vector_multiple(amount, comp)
         terms = dict(amount.terms)
-        planned = None
-        if (str(amount), comp) in self.offset_plan:
-            try:
-                planned = self.offset_value(amount, comp)
-            except (IndexError, specialization_error):
-                planned = None          # no general register left: spelled out
         once = None
         if src_key != dest_key and k is None and 1 == len(terms):
             (factors, coeff), = terms.items()
             if 1 == len(factors) and factors[0].startswith("stride(") \
                     and coeff == adt_size(self.ctx.component_dts[comp]):
                 once = factors[0]
-        if planned is not None:
-            # a planned offset polynomial (a strided walk's row change): one add
-            lines = [asmops.add(self.gen, dst=dest, reg1=self.aregs[src_key], reg2=planned)]
-        elif src_key != dest_key and k is not None:
+        if src_key != dest_key and k is not None:
             # k vectors on from another pointer: one add, as the scheduler counts it
             dt = self.ctx.component_dts[comp]
             lines = [asmops.add(self.gen, dst=dest, reg1=self.aregs[src_key],
@@ -1984,7 +1924,9 @@ class signature_emitter:
         for name, args in self.preallocate:
             if not self.placed_at_dispatch(name, args):
                 getattr(self, name)(*args)
-        self.offset_plan = self.plan_offsets()
+        # the offsets the speller chose (specializers/addresses.py plan)
+        self.offset_plan = set(self.program.offset_plan)
+        self.offset_rank = dict(self.program.offset_plan)
         self.regions_started = True
         # regions - each block, the dispatch, each case - set up what they
         # need at their start and release, at their end, what no later region
@@ -2462,6 +2404,9 @@ class signature_emitter:
 
 
 
+#: the last emission's fewest free general registers (emit_program_measured)
+_last_min_free = [None]
+
 #: the most offset registers max-offset-registers auto takes
 AUTO_OFFSET_REGISTERS = 8
 
@@ -2496,26 +2441,18 @@ def emit_program(ctx, program: ir_program) -> emitted_program:
         emitter, out = emit_once()
         for _ in range(3):
             if not any(late for _, _, late in emitter.recipes):
+                _last_min_free[0] = emitter.min_free_gregs
                 return emitter, out
             emitter, out = emit_once([(n, a) for n, a, _ in emitter.recipes])
         raise specialization_error("setup's registers kept changing between emissions")
-    # max-offset-registers auto (-1): emitted without offset registers first,
-    # the general registers it never needed counted, then again with that
-    # many less one - an offset register lives in setup, every region keeps
-    # it, so it comes out of that headroom, never out of what a microtile
-    # needs (a fixed budget kept large ones from building)
-    if program.offset_registers is None or program.offset_registers >= 0:
-        return emit_all()[1]
-    program.offset_registers = 0
-    try:
-        emitter, out = emit_all()
-        spare = (emitter.min_free_gregs or 0) - 1
-        if spare > 0:
-            program.offset_registers = min(spare, AUTO_OFFSET_REGISTERS)
-            try:
-                out = emit_all()[1]
-            except specialization_error:
-                pass    # the first emission stands
-    finally:
-        program.offset_registers = -1
-    return out
+    return emit_all()[1]
+
+
+def emit_program_measured(ctx, program: ir_program) -> tuple:
+    """
+    A program emitted, with the fewest general registers left free at any
+    reservation: what offset registers could have (max-offset-registers
+    auto, the emit stage's)
+    """
+    out = emit_program(ctx, program)
+    return out, _last_min_free[0]
