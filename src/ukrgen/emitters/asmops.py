@@ -38,8 +38,19 @@ def add_imm(gen: asmgen, *, reg: greg_base, imm: int) -> str:
 
 
 def arith(gen: asmgen, op: str, *, dst: greg_base, reg1: greg_base, reg2: greg_base) -> str:
-    """dst = reg1 op reg2 - op add or sub"""
-    return getattr(gen, op)(adreg=reg1, bdreg=reg2, cdreg=dst, a_dt=GP, b_dt=GP, c_dt=GP)
+    """
+    dst = reg1 op reg2 - op add or sub. An add into a third register where
+    the ISA's takes two operands (x86: a copy and an add) the shifted add by
+    nothing where that's one instruction (x86's lea (reg1,reg2,1))
+    """
+    line = getattr(gen, op)(adreg=reg1, bdreg=reg2, cdreg=dst, a_dt=GP, b_dt=GP, c_dt=GP)
+    if "add" == op and str(dst) not in (str(reg1), str(reg2)) \
+            and len([l for l in line.splitlines() if l.strip()]) > 1:
+        call = dict(adreg=reg1, bdreg=reg2, cdreg=dst, a_dt=GP, b_dt=GP, c_dt=GP,
+                    operand_modifiers={"bdreg": {operand_modifier.ISHIFT}}, bdreg_shift=0)
+        if gen.add.fits(**call) is not None:
+            return gen.add(**call)
+    return line
 
 
 def add(gen: asmgen, *, dst: greg_base, reg1: greg_base, reg2: greg_base) -> str:
