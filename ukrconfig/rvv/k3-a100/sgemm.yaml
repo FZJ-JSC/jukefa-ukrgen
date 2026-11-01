@@ -24,6 +24,8 @@
 #   BLIS_NR_IN_NC_MAX_S=800
 # ==================================================
 isa: rvv
+# the K3's cores have Zba: sh1add..sh3add for a register shifted and added
+isa-params: {rvv-ZBA: '1'}
 blocksizes: {mr-in-mc: 4, nr-in-nc: 600, nr-in-nc-max: 800, kc: 768, kc-max: 800}
 families:
 - family: vn

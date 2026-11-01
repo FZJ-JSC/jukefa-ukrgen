@@ -339,5 +339,28 @@ class test_packm_dispatch_choices(unittest.TestCase):
 
 
 
+    def test_isa_params(self):
+        # an ISA's features for every family and case (isa-params: {rvv-ZBA:
+        # '1'}), an entry's own params winning; the K3's configurations have
+        # Zba, and BLIS builds them with it (config_flags: the families' union)
+        import os
+        from ukrgen.injectors.blis.families import family, configuration
+        from ukrgen.injectors.blis.generate import config_flags
+        from ukrgen.codegen.isa_compiler_support import isa_flags
+        fam = family.from_yaml("packm", {"family": "p", "dtypes": ["FP32"], "isa-params": {"rvv-ZBA": "1"},
+                                         "cases": [{"kind": "vec", "m": [1]},
+                                                   {"kind": "trans", "m": [2], "params": {"rvv-ZBA": "0"}}]})
+        self.assertEqual("1", fam.params["rvv-ZBA"])
+        self.assertEqual(["1", "0"], [p["rvv-ZBA"] for _, _, p in fam.cases])
+        root = os.path.join(os.path.dirname(__file__), "..", "..", "ukrconfig", "rvv")
+        for cfg in ("k3-x100", "k3-a100"):
+            # the gemm files (the packm files turn it on per case, the tuner's)
+            c = configuration.from_files({("gemm", "FP32"): os.path.join(root, cfg, "sgemm.yaml"),
+                                          ("gemm", "FP64"): os.path.join(root, cfg, "dgemm.yaml")})
+            self.assertTrue(all("1" == f.params.get("rvv-ZBA") for f in c.families), cfg)
+            self.assertEqual("-march=rv64gcv_zba", config_flags(c), cfg)
+        plain = configuration.from_files({("gemm", "FP64"): os.path.join(root, "fma_vf", "dgemm.yaml")})
+        self.assertEqual(isa_flags["rvv"], config_flags(plain))
+
 if __name__ == "__main__":
     unittest.main()

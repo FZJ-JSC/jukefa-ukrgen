@@ -32,6 +32,8 @@
 # tailmask-route stays mask (it wins everywhere except k1's below-one-vector case); vec-tail's default
 # overlap is right too - it beats the reference for the unmasked fallback by 30-45%.
 isa: rvv
+# the K3's cores have Zba: sh1add..sh3add for a register shifted and added
+isa-params: {rvv-ZBA: '1'}
 family: pk
 min-inflight: 16
 cases:

@@ -311,6 +311,15 @@ class family:
 
     @staticmethod
     def from_yaml(kind: str, entry: dict) -> "family":
+        # the ISA's features (isa-params: {rvv-ZBA: '1'}) - the file's or the
+        # family's - in its params and every case's, theirs winning
+        entry = dict(entry)
+        shared = entry.pop("isa-params", None)
+        if shared:
+            entry["params"] = dict(shared, **(entry.get("params") or {}))
+            if entry.get("cases"):
+                entry["cases"] = [dict(c, params=dict(shared, **(c.get("params") or {})))
+                                  for c in entry["cases"]]
         check_keys(f"{kind} family {entry.get('family')}", entry, FAMILY_KEYS)
         for case in entry.get("cases") or []:
             check_keys(f"{kind} family {entry.get('family')}, case {case.get('name') or case.get('kind')}",
@@ -451,8 +460,13 @@ class configuration:
                 if isa is not None and file_isa != isa:
                     raise ValueError(f"{path} is for {file_isa}, the other files for {isa}")
                 isa = file_isa
+            # the ISA's features for every family of the file (isa-params:
+            # {rvv-ZBA: '1'}): from_yaml merges them into each one's params
+            shared = data.get("isa-params")
             for entry in data.get("families", [data]):
                 entry = dict(entry)
+                if shared and "isa-params" not in entry:
+                    entry["isa-params"] = shared
                 entry["dtypes"] = [dt]
                 if "default" in entry and not isinstance(entry["default"], dict):
                     entry["default"] = {dt: entry["default"]}

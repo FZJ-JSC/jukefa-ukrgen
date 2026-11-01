@@ -153,6 +153,10 @@ case of their own. `docs/BLISGEN_PLAN.md` has the details of each.
   walked register's rewind with the loop's advance, VL - 12 rs: one add, not
   an add and twelve subs) - but none from a stride passed on the stack and loaded
   where the cases first need it (C's), which setup would have to load early.
+- `isa-params:` at a file's top level gives the ISA's features to every family
+  and case in it (the K3's `isa-params: {rvv-ZBA: '1'}`: Zba's sh1add..sh3add
+  add a shifted register in one instruction); BLIS's `make_defs.mk` gets the
+  union of the families' features (`-march=rv64gcv_zba`).
 - A family's `unroll` is a ceiling: a size that doesn't build at it is built
   at half of it, down to 1. A kernel records the unroll it got (`unroll`), and
   blisgen lists the kernels built below their family's (`unroll 2 of 4: vm

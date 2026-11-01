@@ -51,6 +51,8 @@
 #=================================================
 
 isa: rvv
+# the K3's cores have Zba: sh1add..sh3add for a register shifted and added
+isa-params: {rvv-ZBA: '1'}
 blocksizes: {mr-in-mc: 6, mr-in-mc-max: 8, nr-in-nc: 432, nr-in-nc-max: 484, kc: 688, kc-max: 812}
 families:
 - family: vn
