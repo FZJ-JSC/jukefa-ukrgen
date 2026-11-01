@@ -210,6 +210,32 @@ class signature_specializer:
             # computed again, from here, on their next use
             self.pointers = {k for k in self.pointers if k[:2] != (comp, reg) or "walk" == k[2]}
 
+    def indexed_lane(self, op, comp: str, strided: dict, usable: list) -> tuple | None:
+        """
+        A lane access's own stride and count where an index register takes
+        them - the count a scale of the operation's own index forms (x86:
+        1, 2, 4, 8) and the access a plain form the index extends; None where
+        not (lane 0, lane 3, an ISA without the forms)
+        """
+        singles = [k[0] for k in strided if 1 == len(k)]
+        index = op.properties.get("stride_index")
+        named = f"stride({comp},{index})" if index is not None else None
+        factor = named if named in singles else (singles[0] if 1 == len(strided) and 1 == len(singles) else None)
+        if factor is None:
+            return None
+        count = strided[(factor,)]
+        dt = self.ctx.component_dts[comp]
+        operation = getattr(self.ctx.gen, op.step.op, None)      # IR pseudo-operations have none
+        full = operation.get_signatures() if operation is not None else []
+        # the index forms of the lane's own forms (vmovhpd's, an extract's -
+        # not a whole vector's store): its modifiers and the scaled offset
+        mods = lambda sig: {m.name for m in sig.modifiers}
+        own = [mods(u) - {"IOFFSET"} for u in usable]
+        scales = {s.structural_params.get("scale_factor") for s in full
+                  if "SCALEOFFSET" in mods(s) and (mods(s) - {"SCALEOFFSET", "GOFFSET", "IOFFSET"}) in own
+                  and ("adreg" not in s.operands or s.operands["adreg"].dt == dt)}
+        return (factor, count) if count in scales else None
+
     @staticmethod
     def walkable(comp: str, factors: tuple) -> bool:
         """
@@ -313,8 +339,19 @@ class signature_specializer:
             # lane by lane with no column pointers: each lane's address walked
             # to like any other access's, from the register nearest it - the
             # pattern's registers (phase+rotate) rotating through the lanes,
-            # no lane walker of their own (NEON's vn C, across vectors)
-            self.walk_to(comp, reg, strided, inserted, scalar_tile)
+            # no lane walker of their own (NEON's vn C, across vectors). Where
+            # the ISA scales an index register (x86: 1, 2, 4, 8 - lane 1, 2,
+            # 4 of a column), the register walks to the column only and the
+            # lane is its stride through the index: no walk lane by lane, no
+            # rewind to the next column
+            lane = self.indexed_lane(op, comp, strided, usable)
+            if lane is not None:
+                rest = {f: c for f, c in strided.items() if f != (lane[0],)}
+                if rest:
+                    self.walk_to(comp, reg, rest, inserted, scalar_tile)
+                op.properties["scaled_index"] = lane
+            else:
+                self.walk_to(comp, reg, strided, inserted, scalar_tile)
             rel = {f: c for f, c in rel.items() if not f}
             strided = {}
         if strided and any(c < 0 for c in strided.values()) \

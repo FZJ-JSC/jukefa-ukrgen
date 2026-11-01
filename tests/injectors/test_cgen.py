@@ -1205,6 +1205,46 @@ int main( void )
             self.assertGreaterEqual(len(moved), 5, sorted(moved))
         self.run_k3_trans14(k)
 
+    def test_lanes_indexed_x86(self):
+        # without column pointers a column's lanes are one register's, lane j
+        # at (base, stride, j) - x86's index forms of vmovsd, vmovhpd (asmgen
+        # 0100) - no walk lane by lane, no rewind: shorter than with column
+        # pointers, and right in every storage pair, natively
+        import sys
+        from ukrgen.injectors.blis.cgen import asm_source
+        sys.path.insert(0, os.path.join(HERE, "..", "flow"))
+        import golden_kernels as gk
+        count = lambda t: sum(1 for l in t.splitlines() if l.strip() and not l.strip().endswith(":")
+                              and not l.strip().startswith((".", "#")))
+        cpu = open("/proc/cpuinfo").read()
+        cases = [("avx2/fma_bc_blocks/dgemm.yaml", "avx2", ["-mavx2", "-mfma"], [4], [2])]
+        if "avx512f" in cpu:
+            cases.append(("avx512/fma_bc_blocks/dgemm.yaml", "avx512f", ["-mavx512f", "-mavx512dq", "-mfma"], [8], [3]))
+        for path, flag, flags, m, n in cases:
+            if flag not in cpu:
+                continue
+            isa = gk._config(path).isa
+            for storages in (["row", "any"], ["col", "any"]):
+                with self.subTest(isa=isa, storages=storages):
+                    sizes = {}
+                    for cp in (None, "0"):
+                        params = {"A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"]}
+                        if cp is not None:
+                            params["C-column-pointers"] = cp
+                        fam = family.from_yaml("gemm", {"family": "vn", "dtypes": ["FP64"], "m": m, "n": n,
+                                                        "preset": "gemm_fma_bc_blocks", "vectorize": "n", "unroll": 4,
+                                                        "c-storage": storages, "params": params})
+                        built, skipped = build_gemm(isa, "ukrgen_x86", fam)
+                        # with column pointers these sizes may not fit x86's 16
+                        # general registers at all; without, they must
+                        if cp is not None:
+                            self.assertTrue(built, skipped)
+                        sizes[cp] = count(asm_source(built[0])) if built else None
+                    if sizes[None] is not None:
+                        self.assertLess(sizes["0"], sizes[None], (isa, storages, sizes))
+                    for out in self.run_storage_kernel(isa, built[0], ["gcc"] + flags, [[]]):
+                        self.assertIn("81 runs, 0 wrong", out, built[0].symbol)
+
     def test_offset_registers_deferred_strides(self):
         # offsets of C's strides - stack parameters the emitter loads at the
         # dispatch - planned like any, computed right after the dispatch's
