@@ -157,6 +157,10 @@ case of their own. `docs/BLISGEN_PLAN.md` has the details of each.
   and case in it (the K3's `isa-params: {rvv-ZBA: '1'}`: Zba's sh1add..sh3add
   add a shifted register in one instruction); BLIS's `make_defs.mk` gets the
   union of the families' features (`-march=rv64gcv_zba`).
+- An address moved by many strides - a column pointer's 13 ldc, a rewind's
+  12 rs back (no ISA shifts a sub) - takes one add a set bit where the ISA
+  shifts the operand (Zba, AArch64, x86's lea), else the count times the
+  stride in a scratch register, then one add or sub: never more than three.
 - A family's `unroll` is a ceiling: a size that doesn't build at it is built
   at half of it, down to 1. A kernel records the unroll it got (`unroll`), and
   blisgen lists the kernels built below their family's (`unroll 2 of 4: vm

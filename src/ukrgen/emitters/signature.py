@@ -209,6 +209,19 @@ class offset_planner:
                     out += [plain(dst=areg, reg1=areg, reg2=source)] * (1 << bit)
             k >>= 1
             bit += 1
+        if len(out) > 3:
+            # a long run (twelve subs of a stride, no shifted sub): the count
+            # times the register in a scratch register - three instructions
+            # whatever the count - where one is free
+            try:
+                scratch = self.e.greg()
+            except specialization_error:
+                return out
+            mul = [asmops.set_imm(self.e.gen, reg=scratch, imm=abs(n)),
+                   asmops.mul(self.e.gen, dst=scratch, reg1=source, reg2=scratch),
+                   plain(dst=areg, reg1=areg, reg2=scratch)]
+            self.e.rt.unuse_reg("greg", scratch.idx)
+            return mul
         return out
 
     def add_bytes(self, areg, amount: sym, comp: str) -> list[str]:
@@ -293,12 +306,14 @@ class offset_planner:
                 # a vector length's multiple: one add (incb, a register holding it)
                 cost += 1
                 continue
-            n, bit, op = abs(coeff // esize), 0, "sub" if coeff < 0 else "add"
+            n, bit, op, term = abs(coeff // esize), 0, "sub" if coeff < 0 else "add", 0
             while n:
                 if n & 1:
-                    cost += 1 if not bit or self.e.shifted_available(op, bit) else 1 << bit
+                    term += 1 if not bit or self.e.shifted_available(op, bit) else 1 << bit
                 n >>= 1
                 bit += 1
+            # add_scaled multiplies a longer run into a scratch register: three
+            cost += min(term, 3)
         return cost
 
     def offset_value(self, amount: sym, comp: str):

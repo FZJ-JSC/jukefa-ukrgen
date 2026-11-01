@@ -1155,6 +1155,25 @@ int main( void )
             self.assertFalse([l for l in body if l.startswith("sub ")], k.symbol)
         self.run_k3_trans14(k)
 
+    def test_trans_rewind_bounded(self):
+        # no offset register for it (budget 0): the rewind - twelve strides
+        # back, which no shifted sub spells (Zba shifts adds only) - the count
+        # times the stride in a scratch register, then one sub: no run of
+        # more than three, whatever the count
+        k = self.k3_trans14({"X-column-pointers": "0", "max-offset-registers": "0",
+                             "X-addr-regs": "1", "X-addr-pattern": "rotate"})
+        for body in self.loop_bodies(k):
+            # the longest run of adds and subs moving one register in a row
+            longest, run, prev = 0, 0, None
+            for l in body:
+                dest = l.split()[1].rstrip(",") if l.startswith(("sub ", "add ")) else None
+                run = run + 1 if dest is not None and dest == prev else (1 if dest is not None else 0)
+                prev = dest
+                longest = max(longest, run)
+            self.assertLessEqual(longest, 3, k.symbol)
+        self.assertTrue(any(l.startswith("mul ") for b in self.loop_bodies(k) for l in b))
+        self.run_k3_trans14(k)
+
     def test_trans_rotates_without_pointers(self):
         # X on five registers taken in turn, no column pointers: independent
         # chains like the column pointers' (a dual-issue core overlaps them),
