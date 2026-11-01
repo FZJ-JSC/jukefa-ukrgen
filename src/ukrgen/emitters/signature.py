@@ -323,7 +323,9 @@ class offset_planner:
         in setup, the planner's choice (max-offset-registers): an add of it
         where the walk moves
         """
-        key = f"offset {amount}"
+        # the element size in the key: a vector length's bytes are the
+        # component's (a half-precision A's VL bytes aren't an FP32 C's)
+        key = f"offset {adt_size(self.e.ctx.component_dts[comp])}B {amount}"
         if key not in self.e.strides_in:
             self.e.recipes.append(("offset_value", (amount, comp), self.e.regions_started))
             reg = self.e.greg()

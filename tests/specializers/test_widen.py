@@ -134,7 +134,7 @@ class test_widen(unittest.TestCase):
         self.assertEqual(1, sum(l.startswith("vsetvli") for l in p.instructions()))
 
 
-    def gemm_runs(self, isa, cand, narrow, wide, cc, march, qemu, cpu, tol):
+    def gemm_runs(self, isa, cand, narrow, wide, cc, march, qemu, cpu, tol, **extra):
         if not (shutil.which(cc) and shutil.which(qemu)):
             self.skipTest(f"needs {cc} and {qemu}")
         from tests.specializers.gemm_helper import gemm
@@ -146,7 +146,7 @@ class test_widen(unittest.TestCase):
         if "rvv" == isa:
             types["rvv-LMUL"] = "1"
         try:
-            ctx, res = gemm(isa, **types, **{"mm-tileop": [cand]})
+            ctx, res = gemm(isa, **types, **{"mm-tileop": [cand]}, **extra)
         finally:
             t.STAGES = saved
         self.assertTrue(res.completed, res.output)
@@ -184,6 +184,26 @@ class test_widen(unittest.TestCase):
                            "aarch64-linux-gnu-gcc", "-march=armv8-a+sve2",
                            "qemu-aarch64-static", "max,sve256=on", "1e-5")
         self.assertTrue(any(l.startswith("ld2w") for l in p.instructions()))
+
+    def test_gemm_address_variants(self):
+        # mixed precision under the address registers' newer ways: A and B
+        # on two registers each walked along k by the stride (leapfrogging),
+        # C walked rather than through column pointers, offset registers
+        # measured (auto) - every move in its component's bytes (a half-
+        # precision A's vector length isn't an FP32 C's)
+        extra = {"A-addr-regs": "2", "B-addr-regs": "2", "A-addr-pattern": "rotate", "B-addr-pattern": "rotate",
+                 "C-column-pointers": "0", "max-offset-registers": "auto"}
+        for args in (("neon", "fma[PART+widening_method=SPLIT_CONTIGUOUS](A.VEC:direct, B.VEC:bc_load, "
+                      "AB.VEC){i=m, n=1, k*=1}", "FP16", "FP32", "aarch64-linux-gnu-gcc",
+                      "-march=armv8.2-a+fp16+fp16fml", "qemu-aarch64-static", "max", "1e-5"),
+                     ("sve", "fma[PART+widening_method=SPLIT_INTERLEAVED](A.VEC:direct, B.VEC:bc_load, "
+                      "AB.VEC){i=m, n=1, k*=1}", "FP16", "FP32", "aarch64-linux-gnu-gcc", "-march=armv8-a+sve2",
+                      "qemu-aarch64-static", "max,sve256=on", "1e-5"),
+                     ("rvv", "fma[widening_method=VEC_GROUP](A.VEC:direct, B.VEC:bc_load, AB.VEC){i=m, n=1, k*=1}",
+                      "FP32", "FP64", "riscv64-linux-gnu-gcc", "-march=rv64gcv", "qemu-riscv64-static",
+                      "rv64,v=true,vlen=256,elen=64", "1e-12")):
+            with self.subTest(isa=args[0]):
+                self.gemm_runs(*args, **extra)
 
     def test_gemm_rvv(self):
         # arithmetic on the groups in their own type: vtype switched in each
