@@ -1393,6 +1393,32 @@ int main( void )
         for out in self.run_c(c.isa, src, [k], [[QEMU, "-cpu", "max"]], [f"-DUKR={k.symbol}", "-DWT=double"], cc=cc):
             self.assertIn("81 runs, 0 wrong", out, k.symbol)
 
+    def test_sve_register_offset(self):
+        # without column pointers an SVE access one column ahead of its walking
+        # register takes the register offset form ([x0, x_cs, lsl #3]: the
+        # stride in elements the index) - the register reaches two columns a
+        # step; not a scatter's (its vector index) nor with a vector length's
+        # immediate. The fma_blocklane vm 2vx8 uses it, right under qemu
+        cc = ["aarch64-linux-gnu-gcc", "-static", "-march=armv8.2-a+sve"]
+        c = configuration.from_files({("gemm", "FP64"): os.path.join(ROOT, "ukrconfig", "sve", "fma_blocklane", "dgemm.yaml")})
+        f = copy.deepcopy(next(x for x in c.families if "vm" == x.name))
+        f.sizes = {"m": [2], "n": [8]}
+        f.params["C-column-pointers"] = "0"
+        built, skipped = build_gemm(c.isa, c.name, f)
+        self.assertTrue(built, skipped)
+        k = built[0]
+        offsets = [l for l in asm_source(k).splitlines() if ", lsl #" in l and ", z" not in l and ("ld1" in l or "st1" in l)]
+        self.assertTrue(offsets, k.symbol)
+        if not (shutil.which(cc[0]) and shutil.which(QEMU)):
+            return
+        src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator(c.isa)) + gemm_wrapper(k) + \
+            f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, 'double', k.vl_fn)}; }}\n" \
+            f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, 'double', k.vl_fn)}; }}\n" + \
+            open(os.path.join(HERE, "wrapper_harness.c")).read()
+        for out in self.run_c(c.isa, src, [k], [[QEMU, "-cpu", f"max,sve{v}=on"] for v in (256, 512)],
+                              [f"-DUKR={k.symbol}", "-DWT=double"], cc=cc):
+            self.assertIn("81 runs, 0 wrong", out, k.symbol)
+
     def test_lanes_indexed_x86(self):
         # without column pointers a column's lanes are one register's, lane j
         # at (base, stride, j) - x86's index forms of vmovsd, vmovhpd (asmgen

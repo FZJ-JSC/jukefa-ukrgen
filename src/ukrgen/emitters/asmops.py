@@ -91,6 +91,20 @@ def shift_left_from(gen: asmgen, *, src: greg_base, dst: greg_base, bit_count: i
     return ([mov(gen, src=src, dst=dst)] if src != dst else []) + [shift_left(gen, reg=dst, bit_count=bit_count)]
 
 
+def shift_right_from(gen: asmgen, *, src: greg_base, dst: greg_base, bit_count: int) -> list[str]:
+    """
+    dst = src >> bit_count, logical: one instruction where the ISA shifts into
+    another register (lsr), a copy and a shift where it doesn't
+    """
+    if 0 == bit_count:
+        return [mov(gen, src=src, dst=dst)]
+    call = dict(adreg=src, bimm=bit_count, cdreg=dst, a_dt=GP, c_dt=GP, modifiers={optransform_modifier.SHR})
+    if src != dst and gen.shift.fits(**call):
+        return [gen.shift(**call)]
+    call.update(adreg=dst)
+    return ([mov(gen, src=src, dst=dst)] if src != dst else []) + [gen.shift(**call)]
+
+
 def mul(gen: asmgen, *, dst: greg_base, reg1: greg_base, reg2: greg_base) -> str:
     """dst = reg1 * reg2"""
     return gen.mul(adreg=reg1, bdreg=reg2, cdreg=dst, a_dt=GP, b_dt=GP, c_dt=GP)

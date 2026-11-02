@@ -354,6 +354,24 @@ class offset_planner:
                 sink.append(asmops.add_imm(self.e.gen, reg=reg, imm=const))
         return self.e.strides_in[key]
 
+    def stride_elements(self, factor: str, dt):
+        """
+        A stride in elements (SVE's register offset form scales its index by
+        the element size): the stride's bytes shifted right - computed where its
+        input is (after the dispatch's loads for a deferred one)
+        """
+        esize = adt_size(dt)
+        key = f"elements {factor} {esize}"
+        if key not in self.e.strides_in:
+            self.e.recipes.append(("stride_elements", (factor, dt), self.e.regions_started))
+            reg = self.e.greg()
+            self.e.strides_in[key] = reg
+            sink = self.e.dispatch_setup if self.e.placed_at_dispatch("stride_elements", (factor, dt)) \
+                else self.e.late_setup
+            sink += asmops.shift_right_from(self.e.gen, src=self.stride_reg(factor, setup=True), dst=reg,
+                                            bit_count=esize.bit_length() - 1)
+        return self.e.strides_in[key]
+
     def vl_stride(self, factor: str, dt):
         """
         A register holding the vector length in elements times a stride in
@@ -744,7 +762,7 @@ class signature_emitter:
         loads: one of its strides a stack parameter deferred there (C's) -
         used only in the cases, by the deferral's own rule
         """
-        if "vl_stride" == name:
+        if name in ("vl_stride", "stride_elements"):
             factors = [args[0]]
         elif "offset_value" == name:
             factors = [f[-1] for f, _ in args[0].terms if f and f[-1].startswith("stride(")]
@@ -1327,6 +1345,9 @@ class signature_emitter:
         if scaled is not None:
             # the stride times its count through the index register
             rel.pop((scaled[0],), None)
+        goffset = op.properties.get("goffset")
+        if goffset is not None:
+            rel.pop((goffset,), None)       # the register offset form's index
         vl = rel.pop(("VL",), 0)
         if vl:
             line = self._mem(op, self.reg(op.indices[1], op.rtypes[1]), areg, 0, voffset=vl)
@@ -1515,6 +1536,9 @@ class signature_emitter:
     def vl_elements(self, *args, **kwargs):
         return self.offsets.vl_elements(*args, **kwargs)
 
+    def stride_elements(self, *args, **kwargs):
+        return self.offsets.stride_elements(*args, **kwargs)
+
     def vl_stride(self, *args, **kwargs):
         return self.offsets.vl_stride(*args, **kwargs)
 
@@ -1662,11 +1686,22 @@ class signature_emitter:
         dt = self.ctx.component_dts[op.indices[0].component]
         lane = op.properties.get("lane")
         scaled = op.properties.get("scaled_index")
+        goffset = op.properties.get("goffset")
         for sig in sorted(_sigs(op.sigs), key=lambda s: len(s.modifiers)):
             mods = {m.name for m in sig.modifiers} - {"MASK", "STRUCT"}
             kwargs = {}
             call_mods = set(sig.modifiers)
-            if scaled is not None:
+            if goffset is not None:
+                # SVE's register offset: the stride in elements, scaled by the
+                # element size ([x0, x_cs, lsl #3]) - the access's plain form,
+                # the offset register added (asmgen's signatures checking it)
+                from asmgen.asmblocks.op import opmem_modifier as omod
+                if mods or immediate or voffset is not None or increment is not None \
+                        or increment_reg is not None:
+                    continue
+                call_mods = call_mods | {omod.GOFFSET}
+                kwargs["offreg"] = self.offsets.stride_elements(goffset, dt)
+            elif scaled is not None:
                 # base + the stride's register x its count (+ the immediate):
                 # the access's plain or immediate form, the index added - the
                 # ISA's own signatures checking it

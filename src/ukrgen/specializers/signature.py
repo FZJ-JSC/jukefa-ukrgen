@@ -239,6 +239,18 @@ class signature_specializer:
                   and ("adreg" not in s.operands or s.operands["adreg"].dt == dt)}
         return (factor, count) if count in scales else None
 
+    def register_offset_form(self, op, comp: str) -> bool:
+        """
+        Whether the operation has a register offset form at the access's type
+        (SVE's [x0, x1, lsl #3]) - the operation's own signatures: the access's
+        solved forms are its plain and immediate ones
+        """
+        dt = self.ctx.component_dts[comp]
+        operation = getattr(self.ctx.gen, op.step.op, None)      # IR pseudo-operations have none
+        full = operation.get_signatures() if operation is not None else []
+        return any({"GOFFSET"} == {m.name for m in s.modifiers} - {"MASK"}
+                   and ("adreg" not in s.operands or s.operands["adreg"].dt == dt) for s in full)
+
     @staticmethod
     def walkable(comp: str, factors: tuple) -> bool:
         """
@@ -429,8 +441,26 @@ class signature_specializer:
                 exact = rel.get((), 0) and any(
                     {"POSTINC"} == {m.name for m in s.modifiers} - {"MASK", "STRUCT"} and "increg" in s.operands
                     for s in _sigs(op.sigs))
-                self.walk_to(comp, reg, {**strided, (): rel[()]} if exact else strided, inserted, scalar_tile)
-                rel = {} if exact else {f: c for f, c in rel.items() if not f}
+                one = list(strided.items())
+                # the whole offset from the register, as the emitter computes it:
+                # one stride, nothing else (not a vector length - [x0, x_cs,
+                # lsl #3] takes no immediate)
+                whole = dict((self.program.offsets.elements_offset(op.offset, self.program.strides.get(comp, {}))
+                              - self.positions[(comp, reg)]).terms)
+                if self.ctx.gen.is_vla and 1 == len(one) and 1 == len(one[0][0]) and 1 == one[0][1] \
+                        and {f: c for f, c in whole.items() if c} == {one[0][0]: 1} \
+                        and any(not ({m.name for m in sg.modifiers} - {"MASK"}) for sg in _sigs(op.sigs)) \
+                        and self.register_offset_form(op, comp):
+                    # (a contiguous access, its plain form the register offset
+                    # extends - not a scatter's vector index)
+                    # SVE: the next column through the register offset form
+                    # ([x0, x_cs, lsl #3]: the stride in elements the index) -
+                    # the register stays, reaching two columns a step
+                    op.properties["goffset"] = one[0][0][0]
+                    rel = {}
+                else:
+                    self.walk_to(comp, reg, {**strided, (): rel[()]} if exact else strided, inserted, scalar_tile)
+                    rel = {} if exact else {f: c for f, c in rel.items() if not f}
                 strided = {}
             key = (comp, reg, tuple(sorted(strided.items())))
             columns = [k for k in self.pointer_regs if k[:2] == (comp, reg) and "walk" != k[2]]
