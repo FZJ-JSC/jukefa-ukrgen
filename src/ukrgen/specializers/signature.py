@@ -270,8 +270,8 @@ class signature_specializer:
         return self._column_pointers
 
     def __init__(self, ctx, program: ir_program):
-        #: how an access the register walks reaches an immediate offset (--imm-
-        #: offsets): all - by the immediate (ldr q's [x0, #16]); none - the
+        #: how an access the register walks reaches an immediate offset (--ldinc-
+        #: imm-offsets): all - by the immediate (ldr q's [x0, #16]); none - the
         #: register walks to it (where the access's forms post-increment)
         self.imm_offsets = "all"
         # what's been placed and walked, the column pointers made on first use
@@ -534,7 +534,7 @@ class signature_specializer:
             op.properties["at_register"] = True
             return inserted + [op]
 
-        # --imm-offsets none: where this component walks (no column pointers) and
+        # --ldinc-imm-offsets none: where this component walks (no column pointers) and
         # the access's own forms post-increment (NEON's ld1/st1), its register
         # walks to it rather than reach it by an immediate - each row's step a
         # post-increment by the transfer (ldinc), the column's change an offset

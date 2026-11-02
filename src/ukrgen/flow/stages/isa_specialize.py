@@ -48,13 +48,12 @@ class isa_specialize_stage(stage):
                             "instructions, first (0, the default: none - every move spelled out, the general "
                             "registers left to address registers and column pointers; auto: the general "
                             "registers an emission without them leaves free, less one, at most 8)")
-        self.params["imm-offsets"] = stage_param(
-                value=None, default="all", required=False,
-                description="How an access whose register walks reaches an immediate offset (a "
-                            "column's rows): all - by the immediate (ldr q0, [x0, #16]), none - the "
-                            "register walks to it where the access post-increments (NEON's ld1/st1: "
-                            "each row's step the access before it, ld1 {v0.2d}, [x0], #16; the "
-                            "column's change an offset register's post-increment)")
+        # ldinc's parameter (irmod/lsc/ldinc.py): read here, the walk it asks for
+        # decided before the moves are spelled and their offsets planned
+        self.params["ldinc-imm-offsets"] = stage_param(
+                value=None, default="all", required=False, choices=["all", "none"],
+                description="ldinc: how an access whose register walks reaches an immediate offset "
+                            "(read when specializing)")
         self.params["max-imm-offset"] = stage_param(
                 value=None, required=False,
                 description="Largest immediate offset in bytes, either sign, a load or store "
@@ -118,9 +117,9 @@ class isa_specialize_stage(stage):
             for program in self.context.programs:
                 sp = signature_specializer(self.context, program)
                 sp.max_imm_offset = self.imm_limit()
-                sp.imm_offsets = str(self.params["imm-offsets"].value or "all")
+                sp.imm_offsets = str(self.params["ldinc-imm-offsets"].value or "all")
                 if sp.imm_offsets not in ("all", "none"):
-                    raise stage_error(f"--imm-offsets {sp.imm_offsets!r}: all or none")
+                    raise stage_error(f"--ldinc-imm-offsets {sp.imm_offsets!r}: all or none")
                 sp.assumed = self.assumed_state()
                 sp.program.offset_registers = self.offset_budget(self.context)
                 sp.specialize()

@@ -33,6 +33,9 @@ class argparse_prolog:
     def __init__(self, parser : ArgumentParser):
         self.parser=parser
         self.rest=list()
+        # options already added: a parameter two stages declare (ldinc-imm-
+        # offsets: ldinc's, read when specializing) is one option, both take it
+        self.added=set()
 
     def __call__(self, s: stage):
         params = s.get_parameter_names()
@@ -42,6 +45,9 @@ class argparse_prolog:
 
         for pname in params:
             param = s.get_param(pname)
+            if pname in self.added:
+                continue
+            self.added.add(pname)
             if param.flag:
                 self.parser.add_argument(
                     f"--{pname}",

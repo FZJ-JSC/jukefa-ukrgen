@@ -1338,7 +1338,7 @@ int main( void )
         for imm in ("all", "none"):
             f = copy.deepcopy(fam)
             f.params.update({"C-column-pointers": "0", "max-offset-registers": "auto", "order": "knm",
-                             "imm-offsets": imm})
+                             "ldinc-imm-offsets": imm})
             built, _ = build_gemm(c.isa, c.name, f)
             totals[imm] = (len(built), sum(count(asm_source(k)) for k in built))
             kernels[imm] = {tuple(k.size): k for k in built}

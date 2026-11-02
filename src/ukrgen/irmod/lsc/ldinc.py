@@ -13,7 +13,7 @@ from ...models.load_store_operations import (
 from ...models.lsc.reg import lsc_reg_type
 from ...lsc_model.addressing import sym
 from ...specializers.signature import _sigs, _masked, _accepts
-from .base import lsc_irmod, irmod_placement, blocks_and_sections
+from .base import lsc_irmod, irmod_placement, irmod_param, blocks_and_sections
 
 
 class ldinc(lsc_irmod):
@@ -34,6 +34,15 @@ class ldinc(lsc_irmod):
     #: run on the moves spelled as steps (the post-specialize stage's finish):
     #: a walk's step one add of a stride, fusable as a register increment
     on_steps : ClassVar[bool] = True
+    #: how an access whose register walks reaches an immediate offset - the
+    #: specializer reads it (ldinc-imm-offsets): the walk it asks for is
+    #: decided before the moves are spelled and their offsets planned
+    params = [irmod_param(name="imm-offsets", default="all", choices=("all", "none"),
+                          description="how an access whose register walks reaches an immediate offset (a "
+                                      "column's rows): all - by the immediate (ldr q0, [x0, #16]); none - the "
+                                      "register walks to it where the access post-increments (ld1 {v0.2d}, "
+                                      "[x0], #16; the column's change an offset register's post-increment). "
+                                      "Read when specializing")]
     constraints = ("consecutive accesses through one scratch address register set from "
                    "the same source, the distance between them a post-increment one of "
                    "the earlier access's signatures takes - where a signature states no "
