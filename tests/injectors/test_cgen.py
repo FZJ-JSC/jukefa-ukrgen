@@ -1247,7 +1247,14 @@ int main( void )
         count = lambda t: sum(1 for l in t.splitlines() if l.strip() and not l.strip().endswith(":")
                               and not l.strip().startswith((".", "#", "//")))
         c = configuration.from_files({("gemm", "FP64"): os.path.join(ROOT, "ukrconfig", "neon", "fma_lane", "dgemm.yaml")})
-        fam = next(f for f in c.families if "vm" == f.name)
+        # the contiguous path alone (C column-major, as vm was configured before
+        # it took [col, any]): the strided case walks back over a column's
+        # lanes, which no post-increment adds - a walk order of its own to do
+        fam = family.from_yaml("gemm", {"family": "vm", "dtypes": ["FP64"], "preset": "gemm_fma_lane",
+                                        "vectorize": "m", "unroll": 4, "m": "1..4", "n": [4, 6, 8],
+                                        "schedule": ["RAW:data:vreg:::4"],
+                                        "params": {"A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"],
+                                                   "C-layout": ["m:c", "n:s"]}})
         totals, kernels = {}, {}
         for cp in ("4", "0"):
             f = copy.deepcopy(fam)

@@ -6,22 +6,23 @@ families:
   preset: gemm_fma_blocklane_vindex
   vectorize: m
   unroll: 4
+  c-storage: [col, any]     # contiguous columns, and strided C
   m: 1..3
   n: [4, 8, 12]
   params:
     A-layout: ['m:c', 'k:p']
     B-layout: ['n:c', 'k:p']
-    C-layout: ['m:c', 'n:s']
   schedule: ['RAW:data:vreg:::4']
   default: 2x8
 - family: vn
   preset: gemm_fma_blocklane_vindex
   vectorize: n
   unroll: 4
+  loop-order: knm           # vn's mirror of vm's kmn: one vector's rows walked at a time
   m: [4, 8, 12]
   n: 1..3
   params:
     A-layout: ['m:c', 'k:p']
     B-layout: ['n:c', 'k:p']
   schedule: ['RAW:data:vreg:::4']
-  c-storage: [row, any]
+  c-storage: [row, any]     # contiguous rows, and strided C

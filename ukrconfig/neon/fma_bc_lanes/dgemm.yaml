@@ -6,6 +6,7 @@ families:
   preset: gemm_fma_bc_lanes
   vectorize: n
   unroll: 4
+  loop-order: knm           # vn's mirror of vm's kmn: one vector's rows walked at a time
   m: [4, 6, 8]
   n: 1..3
   params:
@@ -13,15 +14,15 @@ families:
     B-layout: ['n:c', 'k:p']
   schedule: ['RAW:data:vreg:::4']
   default: 8x3
-  c-storage: [row, any]
+  c-storage: [row, any]     # contiguous rows, and strided C
 - family: vm
   preset: gemm_fma_bc_lanes
   vectorize: m
   unroll: 4
+  c-storage: [col, any]     # contiguous columns, and strided C
   m: 1..4
   n: [4, 6, 8]
   params:
     A-layout: ['m:c', 'k:p']
     B-layout: ['n:c', 'k:p']
-    C-layout: ['m:c', 'n:s']
   schedule: ['RAW:data:vreg:::4']

@@ -6,6 +6,7 @@ families:
   preset: gemm_fma_vf
   vectorize: n
   unroll: 4
+  loop-order: knm           # vn's mirror of vm's kmn: one vector's rows walked at a time
   m: [4, 6, 8]
   n: 1..2
   params:
@@ -16,17 +17,17 @@ families:
   max-addr-regs: {A: 2, B: 2}
   addr-pattern: {A: rotate, B: rotate}
   default: 6x2
-  c-storage: [row, any]
+  c-storage: [row, any]     # contiguous rows, and strided C
 - family: vm
   preset: gemm_fma_vf
   vectorize: m
   unroll: 4
+  c-storage: [col, any]     # contiguous columns, and strided C
   m: [1, 2]
   n: [4, 7]
   params:
     A-layout: ['m:c', 'k:p']
     B-layout: ['n:c', 'k:p']
-    C-layout: ['m:c', 'n:s']
     rvv-LMUL: '2'
   schedule: ['RAW:data:vreg:::13', 'WAW:data:vreg:::13', 'WAR:data:vreg:::13', 'RAW:address:greg:::3']
   max-addr-regs: {A: 2, B: 2}

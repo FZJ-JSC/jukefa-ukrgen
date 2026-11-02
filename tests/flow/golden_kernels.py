@@ -17,7 +17,13 @@ DATA = os.path.join(HERE, "golden_kernels")
 ROOT = os.path.dirname(os.path.dirname(HERE))
 CONFIGS = ["rvv/fma_vf/dgemm.yaml", "neon/fma_lane/dgemm.yaml", "sve/fma_bc_vindex/dgemm.yaml",
            "avx2/fma_bc_blocks/dgemm.yaml", "avx512/fma_bc_blocks/dgemm.yaml"]
-EXTRA = [("rvv/fma_vf/dgemm.yaml", "vm", 2, 14)]
+EXTRA = [
+    ("rvv/fma_vf/dgemm.yaml", "vm", 2, 14),
+    # vn in the loop order the reference configurations moved off (knm now):
+    # its strided case alternates between a row's vectors - kept to watch
+    # changes' effect on the wrong order
+    ("sve/fma_bc_vindex/dgemm.yaml", "vn@order=kmn", 4, 2),
+]
 
 
 def _config(path: str):
@@ -45,8 +51,12 @@ def build(path: str, family: str, m: int, n: int) -> str:
     from ukrgen.injectors.blis.families import build_gemm
     from ukrgen.injectors.blis.cgen import asm_source
     cfg = _config(path)
+    # family@key=value,...: the family with parameters of its own (a loop order
+    # kept against the configuration's: vn under kmn, the order vm mirrors)
+    family, _, extra = family.partition("@")
     fam = copy.deepcopy(next(f for f in cfg.families if f.name == family))
     fam.sizes = {"m": [m], "n": [n]}
+    fam.params.update(dict(kv.split("=", 1) for kv in extra.split(",") if kv))
     try:
         ok, skipped = build_gemm(cfg.isa, cfg.name, fam)
     except Exception as err:  # pylint: disable=broad-except
