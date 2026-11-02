@@ -2220,7 +2220,8 @@ class signature_emitter:
         self.aliases = dict(self.ctx.composition.storage_aliases or {})
         def canonical(name):
             comp = self.param_comp(name)
-            return name.replace(f"({comp}", "(C", 1) if comp in self.aliases else name
+            base = self.ctx.composition.storage_bases.get(comp, "C")
+            return name.replace(f"({comp}", f"({base}", 1) if comp in self.aliases else name
         given = list(names)
         names = list(dict.fromkeys(canonical(n) for n in given))
         self.cc = self.gen.create_callconv()

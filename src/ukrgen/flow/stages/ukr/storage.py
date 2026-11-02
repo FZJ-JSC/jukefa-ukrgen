@@ -1,17 +1,33 @@
 """
-C's storages as branches of one kernel's epilogue: the composition expanded
+A component's storages as branches of one kernel's epilogue (C's in gemm;
+any component's): the composition expanded - one component after another
 """
 
 import dataclasses
 
 from .ukr import component_description, case_description, branch_description, block_description
 
-#: each storage's C layout
-LAYOUTS = {"row": ["n:c", "m:s"], "col": ["m:c", "n:s"], "any": ["m:s", "n:s"]}
-#: the alias component a storage reaches C through (the default's is C)
-ALIASES = {"row": "Cr", "col": "Cc", "any": "Cg"}
-#: the index a storage has contiguous: its condition, C's stride along it one element
-UNIT = {"row": "n", "col": "m"}
+def storage_layout(storage: str, indices) -> list[str]:
+    """
+    A storage's layout of a two-index component (i, j): row j contiguous,
+    col i, any both strided
+    """
+    i, j = indices[0], indices[1]
+    return {"row": [f"{j}:c", f"{i}:s"], "col": [f"{i}:c", f"{j}:s"], "any": [f"{i}:s", f"{j}:s"]}[storage]
+
+
+def unit_index(storage: str, indices) -> str:
+    """The index a storage has contiguous: its condition, the stride along it one element"""
+    return indices[1] if "row" == storage else indices[0]
+
+
+#: each storage's alias letter: a component's alias for it is the component's
+#: name and the letter (C's: Cr, Cc, Cg)
+SUFFIX = {"row": "r", "col": "c", "any": "g"}
+#: C's (its indices m, n) - the names the rest of the flow has known them by
+LAYOUTS = {s: storage_layout(s, ("m", "n")) for s in SUFFIX}
+ALIASES = {s: f"C{x}" for s, x in SUFFIX.items()}
+UNIT = {s: unit_index(s, ("m", "n")) for s in ("row", "col")}
 
 
 def _fields(o) -> dict:
@@ -90,7 +106,7 @@ def _touches(sto, comp: str) -> bool:
     return bool(found)
 
 
-def storage_branches(base, storages: list[str]):
+def storage_branches(base, storages: list[str], comp: str = "C"):
     """
     The composition with C's storages as branches: the last storage the
     default (C itself, unconditioned), each other an alias component of C
@@ -104,13 +120,19 @@ def storage_branches(base, storages: list[str]):
     default, others = storages[-1], storages[:-1]
     if any(s == "any" for s in others):
         raise ValueError("--C-storage: 'any' takes every C - only as the last (default) storage")
-    aliases = {ALIASES[s]: s for s in others}
-    suffix = {s: s[0] for s in others}
-    epilogue = [s for s in base.get_sto_descriptions() if "mm" != s.name and _touches(s, "C")]
+    from ..layout import component_indices
+    indices = component_indices(base)[comp]
+    aliases = {f"{comp}{SUFFIX[s]}": s for s in others}
+    # C's copies keep their names (store.r); another component's name its own
+    suffix = {s: (SUFFIX[s] if "C" == comp else f"{comp}{SUFFIX[s]}") for s in others}
     branch = base.get_branch()
+    # the STOs of the branch's cases touching the component - the epilogue's
+    in_cases = {n for case in (branch.cases if branch is not None else ()) for b in case.blocks for n in b.stos}
+    epilogue = [s for s in base.get_sto_descriptions() if s.name in in_cases and _touches(s, comp)]
 
     class expanded(base):
-        storage_aliases = aliases
+        storage_aliases = {**base.storage_aliases, **aliases}
+        storage_bases = {**base.storage_bases, **{a: comp for a in aliases}}
         storage_default = default
 
         @classmethod
@@ -118,7 +140,7 @@ def storage_branches(base, storages: list[str]):
             comps = list(base.get_components())
             for alias in aliases:
                 comps.append(component_description(name=alias, storage=next(
-                    c.storage for c in comps if "C" == c.name), dt_reference="C"))
+                    c.storage for c in comps if comp == c.name), dt_reference=comp))
             return comps
 
         @classmethod
@@ -126,7 +148,7 @@ def storage_branches(base, storages: list[str]):
             stos = list(base.get_sto_descriptions())
             for alias, s in aliases.items():
                 for sto in epilogue:
-                    clone = _renamed(sto, "C", alias)
+                    clone = _renamed(sto, comp, alias)
                     clone = dataclasses.replace(clone, name=f"{sto.name}.{suffix[s]}")
                     stos.append(clone)
             return stos
@@ -139,7 +161,7 @@ def storage_branches(base, storages: list[str]):
             for alias, s in aliases.items():
                 renamed = {sto.name: f"{sto.name}.{suffix[s]}" for sto in epilogue}
                 for case in branch.cases:
-                    when = {f"stride(C,{UNIT[s]})": 1}
+                    when = {f"stride({comp},{unit_index(s, indices)})": 1}
                     when.update(case.when)
                     blocks = tuple(dataclasses.replace(b, stos=tuple(
                         renamed.get(n, n) for n in b.stos)) for b in case.blocks)

@@ -305,8 +305,9 @@ class signature_specializer:
             return self.program.stride_pointers[comp]
         # a storage alias of C (Cc, Cr - a storage case's C) takes C's own
         # setting where it has none: stride-pointers {C: 0} walks every case
-        if comp in self.ctx.composition.storage_aliases and "C" in self.program.stride_pointers:
-            return self.program.stride_pointers["C"]
+        base = self.ctx.composition.storage_bases.get(comp)
+        if base is not None and base in self.program.stride_pointers:
+            return self.program.stride_pointers[base]
         if STRIDE_POINTERS_DEFAULT is not None:
             return STRIDE_POINTERS_DEFAULT
         if self._stride_pointers is None:

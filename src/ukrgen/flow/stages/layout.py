@@ -59,9 +59,11 @@ class layout_stage(stage):
         aliases = context.composition.storage_aliases
         for comp, indices in self.indices.items():
             example = " ".join(f"{i}:{'c' if 0 == n else 'p'}" for n, i in enumerate(indices))
-            # an alias of C for one of its storages: that storage's layout
-            from .ukr.storage import LAYOUTS
-            preset = list(LAYOUTS[aliases[comp]]) if comp in aliases else None
+            # a storage alias (of C, or any component): that storage's layout in
+            # its component's indices
+            from .ukr.storage import storage_layout
+            base = context.composition.storage_bases.get(comp, "C")
+            preset = storage_layout(aliases[comp], self.indices.get(base, indices)) if comp in aliases else None
             self.params[f"{comp}-layout"] = stage_param(
                     value=preset, default=preset, required=preset is None,
                     description=f"Layout of {comp}: for each of {', '.join(indices)}, "

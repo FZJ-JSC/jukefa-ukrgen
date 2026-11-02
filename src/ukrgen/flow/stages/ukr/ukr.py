@@ -335,6 +335,8 @@ class ukr_composition(ABC):
     """
     #: C's storages' aliases (storage_branches): none unless branched
     storage_aliases : dict = {}
+    #: each storage alias's component (Cr: C)
+    storage_bases : dict = {}
 
 
     @classmethod
