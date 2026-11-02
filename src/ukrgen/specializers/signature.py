@@ -156,15 +156,15 @@ def _takes(sig, immediate: int, limit: int | None = None) -> bool:
     return False
 
 
-#: column pointers kept per component and base where general registers are
+#: stride pointers kept per component and base where general registers are
 #: many (AArch64, RISC-V: 31); columns beyond them share one walking pointer
-#: column pointers where a component asks for none of its own: none - the
+#: stride pointers where a component asks for none of its own: none - the
 #: pattern's registers walk to the columns (None: the ISA's old default,
-#: MAX_COLUMN_POINTERS, FEW_ on x86)
-COLUMN_POINTERS_DEFAULT = 0
-MAX_COLUMN_POINTERS = 4
+#: MAX_STRIDE_POINTERS, FEW_ on x86)
+STRIDE_POINTERS_DEFAULT = 0
+MAX_STRIDE_POINTERS = 4
 #: ... and where they are few (x86: 16)
-FEW_COLUMN_POINTERS = 2
+FEW_STRIDE_POINTERS = 2
 
 
 class signature_specializer:
@@ -172,7 +172,7 @@ class signature_specializer:
     Adapts one part's IR program to the ISA, in place: after it, every
     operation fits one of its signatures as it stands.
 
-    - an access offset by run-time strides goes through a column pointer: an
+    - an access offset by run-time strides goes through a stride pointer: an
       address register computed once per section from the access's address
       register and the strides
     - an access at a constant offset no signature takes (NEON's ld1r has no
@@ -188,8 +188,8 @@ class signature_specializer:
         An access's address register walked to its offset at run-time strides
         - from whichever of the component's registers is the fewest strides
         away (registers taken in turn leapfrog: one add of a stride each) - not
-        a column pointer: along the loop's own index (k:s), or where the
-        component has none (--COMP-column-pointers 0)
+        a stride pointer: along the loop's own index (k:s), or where the
+        component has none (--COMP-stride-pointers 0)
         """
         target = self.positions[(comp, reg)] + sym._make(strided)
         def strides_away(r):
@@ -213,7 +213,7 @@ class signature_specializer:
                 (target - self.positions[(comp, reg)])
             self.walked_by = walked
             self.positions[(comp, reg)] = target
-            # column pointers computed from it were placed from where it was:
+            # stride pointers computed from it were placed from where it was:
             # computed again, from here, on their next use
             self.pointers = {k for k in self.pointers if k[:2] != (comp, reg) or "walk" == k[2]}
 
@@ -256,7 +256,7 @@ class signature_specializer:
             if not isinstance(op, (lsc_load, lsc_store)) or op.offset is None:
                 continue
             comp = op.indices[0].component
-            if 0 != self.column_pointers(comp) or not any(
+            if 0 != self.stride_pointers(comp) or not any(
                     {"POSTINC"} == {m.name for m in s.modifiers} - {"MASK", "STRUCT"} for s in _sigs(op.sigs)):
                 continue
             terms = dict(self.program.offsets.elements_offset(op.offset, self.program.strides.get(comp, {})).terms)
@@ -294,26 +294,26 @@ class signature_specializer:
             return factors[0].startswith(f"stride({comp},")
         return 2 == len(factors) and "VL" == factors[0] and factors[1].startswith(f"stride({comp},")
 
-    def column_pointers(self, comp: str | None = None) -> int:
+    def stride_pointers(self, comp: str | None = None) -> int:
         """
-        Column pointers kept per component and base: the component's own
-        (--COMP-column-pointers), else fewer where the ISA has few general
+        Stride pointers kept per component and base: the component's own
+        (--COMP-stride-pointers), else fewer where the ISA has few general
         registers - x86's 16 hold A's and B's pointers, the loop's counter and
         the parameters too
         """
-        if comp in self.program.column_pointers:
-            return self.program.column_pointers[comp]
+        if comp in self.program.stride_pointers:
+            return self.program.stride_pointers[comp]
         # a storage alias of C (Cc, Cr - a storage case's C) takes C's own
-        # setting where it has none: column-pointers {C: 0} walks every case
-        if comp in self.ctx.composition.storage_aliases and "C" in self.program.column_pointers:
-            return self.program.column_pointers["C"]
-        if COLUMN_POINTERS_DEFAULT is not None:
-            return COLUMN_POINTERS_DEFAULT
-        if self._column_pointers is None:
+        # setting where it has none: stride-pointers {C: 0} walks every case
+        if comp in self.ctx.composition.storage_aliases and "C" in self.program.stride_pointers:
+            return self.program.stride_pointers["C"]
+        if STRIDE_POINTERS_DEFAULT is not None:
+            return STRIDE_POINTERS_DEFAULT
+        if self._stride_pointers is None:
             # the general registers the tracker allocates, reserved ones included
             gregs = self.ctx.gen.get_reg_tracker().available_reg_count("greg")
-            self._column_pointers = MAX_COLUMN_POINTERS if gregs > 16 else FEW_COLUMN_POINTERS
-        return self._column_pointers
+            self._stride_pointers = MAX_STRIDE_POINTERS if gregs > 16 else FEW_STRIDE_POINTERS
+        return self._stride_pointers
 
     def __init__(self, ctx, program: ir_program):
         #: how an access the register walks reaches an immediate offset (--ldinc-
@@ -322,12 +322,12 @@ class signature_specializer:
         self.imm_offsets = "all"
         #: --ldinc-imm-offsets last: id(first access) -> elements to its last row
         self.jumps = {}
-        # what's been placed and walked, the column pointers made on first use
+        # what's been placed and walked, the stride pointers made on first use
         self.placed = set()
         self.walked_by = {}
         #: the state the caller guarantees (--assume-state)
         self.assumed = {}
-        self._column_pointers = None
+        self._stride_pointers = None
         #: adapting a case's last block: its last section's registers are read
         #: by nothing after it (the kernel returns; the next case starts afresh)
         self.final_block = False
@@ -379,13 +379,13 @@ class signature_specializer:
         # whichever of the component's registers is the fewest strides away:
         # forward a stride (registers taken in turn leapfrog: one add of its
         # register), or a row on (a general stride: rs - (n - R) cs) - not a
-        # column pointer per offset and register, which the walking bases
+        # stride pointer per offset and register, which the walking bases
         # would leave behind
         def single(f):
             return 1 == len(f) and f[0].startswith(f"stride({comp},")
         # only where the loop's own index is strided at run time (k:s): a
         # component contiguous along it (packm's trans X - n:c, m:s) keeps its
-        # column pointers - independent chains, not one serial walk
+        # stride pointers - independent chains, not one serial walk
         along = f"stride({comp},{self.loop_index})" if self.loop_index is not None else None
         walking = along is not None and any(f and along == f[0] for f, _ in strides.get(self.loop_index, sym.const(0)).terms) \
             and strided and all(single(f) for f in strided) and "lane" not in op.properties
@@ -393,9 +393,9 @@ class signature_specializer:
             self.walk_to(comp, reg, strided, inserted, scalar_tile)
             rel = {f: c for f, c in rel.items() if not f}
             strided = {}
-        if strided and "lane" in op.properties and 0 == self.column_pointers(comp) \
+        if strided and "lane" in op.properties and 0 == self.stride_pointers(comp) \
                 and all(self.walkable(comp, f) for f in strided):
-            # lane by lane with no column pointers: each lane's address walked
+            # lane by lane with no stride pointers: each lane's address walked
             # to like any other access's, from the register nearest it - the
             # pattern's registers (phase+rotate) rotating through the lanes,
             # no lane walker of their own (NEON's vn C, across vectors). Where
@@ -418,7 +418,7 @@ class signature_specializer:
             # the access behind its register - which walked past its column (a
             # column's second vector after the last column's first), or which
             # phase+rotate gave a later column first: walked there, from the
-            # register nearest it; column pointers only ever reach forward
+            # register nearest it; stride pointers only ever reach forward
             self.walk_to(comp, reg, strided, inserted, scalar_tile)
             rel = {f: c for f, c in rel.items() if not f}
             strided = {}
@@ -435,7 +435,7 @@ class signature_specializer:
             # pointer per base and stride, stepping by the stride and
             # restarting from its base when the base changes or an access
             # goes back; the other factors (a column) give that base, as a
-            # column pointer. A pointer per lane would take a register each
+            # stride pointer. A pointer per lane would take a register each
             lane_factor = None
             if "lane" in op.properties:
                 singles = [k[0] for k in strided if 1 == len(k)]
@@ -466,9 +466,9 @@ class signature_specializer:
                 if 1 == len(factors) and count in scales and plain:
                     op.properties["scaled_index"] = (factors[0], count)
                     strided = {}
-            if strided and 0 == self.column_pointers(comp) and all(self.walkable(comp, f) for f in strided) \
+            if strided and 0 == self.stride_pointers(comp) and all(self.walkable(comp, f) for f in strided) \
                     and "lane" not in op.properties:
-                # no column pointers for this component (--COMP-column-pointers
+                # no stride pointers for this component (--COMP-stride-pointers
                 # 0: its pattern's registers - phase+rotate's - in their place):
                 # its register walks there - to the access exactly where its
                 # forms post-increment by a register (NEON's ld1/st1): an
@@ -500,7 +500,7 @@ class signature_specializer:
                 strided = {}
             key = (comp, reg, tuple(sorted(strided.items())))
             columns = [k for k in self.pointer_regs if k[:2] == (comp, reg) and "walk" != k[2]]
-            if strided and key not in self.pointer_regs and len(columns) >= self.column_pointers(comp):
+            if strided and key not in self.pointer_regs and len(columns) >= self.stride_pointers(comp):
                 # more columns than pointers kept for them (general registers
                 # are few - RISC-V's C of 14 columns): one pointer walks
                 # between the rest, moved by the difference, computed from
@@ -600,11 +600,11 @@ class signature_specializer:
             op.properties["at_register"] = True
             return inserted + [op]
 
-        # --ldinc-imm-offsets none: where this component walks (no column pointers) and
+        # --ldinc-imm-offsets none: where this component walks (no stride pointers) and
         # the access's own forms post-increment (NEON's ld1/st1), its register
         # walks to it rather than reach it by an immediate - each row's step a
         # post-increment by the transfer (ldinc), the column's change an offset
-        walk_imm = bool(immediate) and "none" == self.imm_offsets and 0 == self.column_pointers(comp) \
+        walk_imm = bool(immediate) and "none" == self.imm_offsets and 0 == self.stride_pointers(comp) \
             and any({"POSTINC"} == {m.name for m in s.modifiers} - {"MASK", "STRUCT"} for s in _sigs(op.sigs))
         if walk_imm or not any(_takes(s, immediate, self.max_imm_offset) for s in usable):
             if not any(_takes(s, 0) for s in usable):
@@ -842,7 +842,7 @@ class signature_specializer:
                     ops.append(lsc_addr_compute(comp, reg, reg, sym.const(0) - delta, scalar_tile))
                     self.positions[(comp, reg)] = self.positions[(comp, reg)] - delta
             setattr(block, section, ops)
-            # column pointers are computed per section, in the same registers;
+            # stride pointers are computed per section, in the same registers;
             # a scratch address placed in one section isn't relied on in the next
             self.pointers = set()
             self.walking = {}

@@ -218,7 +218,7 @@ class test_families(unittest.TestCase):
 
     def test_few_general_registers(self):
         # vectors along m, C column-major with a run-time stride: x86's 16
-        # general registers keep two column pointers, one walks the rest
+        # general registers keep two stride pointers, one walks the rest
         import copy
         cfg = configuration.from_files({("gemm", "FP64"): os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),

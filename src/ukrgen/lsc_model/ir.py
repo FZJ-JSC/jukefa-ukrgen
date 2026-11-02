@@ -156,9 +156,9 @@ class ir_program:
     #: the offsets the specializer chose a register for (the speller's
     #: plan): (polynomial's text, component) -> rank, the most valuable highest
     offset_plan : dict = field(default_factory=dict)
-    #: column pointers the specializer may add per address register, by
-    #: component (--COMP-column-pointers); unset the ISA's default
-    column_pointers : dict[str, int] = field(default_factory=dict)
+    #: stride pointers the specializer may add per address register, by
+    #: component (--COMP-stride-pointers); unset the ISA's default
+    stride_pointers : dict[str, int] = field(default_factory=dict)
     #: the index each component's vector registers run along
     vector_indices : dict[str, str] = field(default_factory=dict)
     #: components whose registers are groups: how many registers, the method

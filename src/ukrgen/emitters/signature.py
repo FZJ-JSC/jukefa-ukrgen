@@ -1652,7 +1652,7 @@ class signature_emitter:
         elif once is not None and 1 == len([l for l in asmops.add(
                 self.gen, dst=dest, reg1=self.aregs[src_key], reg2=self.stride_reg(once)).splitlines() if l.strip()]):
             # a stride on from another pointer (a k:s walk's leapfrog, a
-            # column pointer): one add of the stride's register, not a copy
+            # stride pointer): one add of the stride's register, not a copy
             # and an add - where an add takes three registers (not x86's)
             lines = [asmops.add(self.gen, dst=dest, reg1=self.aregs[src_key], reg2=self.stride_reg(once))]
         else:

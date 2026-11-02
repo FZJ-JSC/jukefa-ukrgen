@@ -188,11 +188,11 @@ class test_widen(unittest.TestCase):
     def test_gemm_address_variants(self):
         # mixed precision under the address registers' newer ways: A and B
         # on two registers each walked along k by the stride (leapfrogging),
-        # C walked rather than through column pointers, offset registers
+        # C walked rather than through stride pointers, offset registers
         # measured (auto) - every move in its component's bytes (a half-
         # precision A's vector length isn't an FP32 C's)
         extra = {"A-addr-regs": "2", "B-addr-regs": "2", "A-addr-pattern": "rotate", "B-addr-pattern": "rotate",
-                 "C-column-pointers": "0", "max-offset-registers": "auto"}
+                 "C-stride-pointers": "0", "max-offset-registers": "auto"}
         for args in (("neon", "fma[PART+widening_method=SPLIT_CONTIGUOUS](A.VEC:direct, B.VEC:bc_load, "
                       "AB.VEC){i=m, n=1, k*=1}", "FP16", "FP32", "aarch64-linux-gnu-gcc",
                       "-march=armv8.2-a+fp16+fp16fml", "qemu-aarch64-static", "max", "1e-5"),

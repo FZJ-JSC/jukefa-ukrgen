@@ -118,7 +118,9 @@ KEYS = {"loop-order": "order", "resolve-order": "resolve-order",
 #: per component: {component: value}
 PER_COMPONENT = {"max-data-regs": "{c}-max-data-regs", "max-preload": "{c}-max-preload",
                  "max-addr-regs": "{c}-addr-regs", "addr-pattern": "{c}-addr-pattern",
-                 "column-pointers": "{c}-column-pointers"}
+                 "stride-pointers": "{c}-stride-pointers",
+                 # the old name, still read
+                 "column-pointers": "{c}-stride-pointers"}
 #: the loop a family's unroll is along
 UNROLL = {"gemm": "k", "packm": "n"}
 

@@ -131,8 +131,8 @@ case of their own. `docs/BLISGEN_PLAN.md` has the details of each.
   cycles, and reports the cycles a block takes (`--print-schedule`).
 - Address registers by default: one each for A and B (`rotate`), two for C
   (`phase`: loads on one, stores on the other); the specializer keeps up to
-  four column pointers per base, one more walking the rest - a multiplier on
-  the address registers. `column-pointers: {C: 0}` keeps none: the pattern's
+  four stride pointers per base, one more walking the rest - a multiplier on
+  the address registers. `stride-pointers: {C: 0}` keeps none: the pattern's
   registers walk to C's columns, from the one nearest - by the column stride,
   and by a strided access's next vector (C at a general stride: VL times its
   row stride, an add of a register holding it), and lane by lane (NEON's vn
@@ -158,7 +158,7 @@ case of their own. `docs/BLISGEN_PLAN.md` has the details of each.
   and case in it (the K3's `isa-params: {rvv-ZBA: '1'}`: Zba's sh1add..sh3add
   add a shifted register in one instruction); BLIS's `make_defs.mk` gets the
   union of the families' features (`-march=rv64gcv_zba`).
-- An address moved by many strides - a column pointer's 13 ldc, a rewind's
+- An address moved by many strides - a stride pointer's 13 ldc, a rewind's
   12 rs back (no ISA shifts a sub) - takes one add a set bit where the ISA
   shifts the operand (Zba, AArch64, x86's lea), else the count times the
   stride in a scratch register, then one add or sub: never more than three.

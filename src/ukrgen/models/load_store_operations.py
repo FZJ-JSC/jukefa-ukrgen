@@ -350,7 +350,7 @@ class lsc_addr_compute(lsc_operation):
     An address register set from another plus an offset in elements of the
     component: dest = src + delta. delta may contain run-time strides
     (stride(C,n)) and is resolved to bytes when emitted. Inserted when
-    specializing for the ISA: column pointers for strided accesses, and scratch
+    specializing for the ISA: stride pointers for strided accesses, and scratch
     addresses for accesses at offsets no signature takes.
     """
     def __init__(self, component : str, src_idx : int, dest_idx : int, delta, t : tile):

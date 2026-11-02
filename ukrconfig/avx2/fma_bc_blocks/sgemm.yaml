@@ -7,7 +7,7 @@ families:
   vectorize: n
   unroll: 4
   c-storage: [row, any]     # contiguous rows, and strided C
-  column-pointers: {C: 0}     # C walks (x86's lanes indexed, its adds leas): strided C's pointers took 10 of the 16 general registers
+  stride-pointers: {C: 0}     # C walks (x86's lanes indexed, its adds leas): strided C's pointers took 10 of the 16 general registers
   loop-order: knm           # vn's mirror of vm's kmn
   m: 2..6
   n: 1..3
@@ -21,7 +21,7 @@ families:
   vectorize: m
   unroll: 4
   c-storage: [col, any]     # contiguous columns, and strided C
-  column-pointers: {C: 0}     # C walks (x86's lanes indexed, its adds leas): strided C's pointers took 10 of the 16 general registers
+  stride-pointers: {C: 0}     # C walks (x86's lanes indexed, its adds leas): strided C's pointers took 10 of the 16 general registers
   m: 1..3
   n: 2..6
   params:

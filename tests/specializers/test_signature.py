@@ -33,9 +33,9 @@ def mm(isa="neon", **extra):
               "mm-tileop": ["fma(A.VEC:direct, B.VEC:bc_load, C.VEC){i=m, n=1, k*=1}"],
               "store-tileop": ["C.VEC:direct"], "m": "2", "n": "2", "k": "1",
               "A-data-regs": "2", "B-data-regs": "2",
-              # column pointers asked for (none is the default since 0278):
+              # stride pointers asked for (none is the default since 0278):
               # these tests are the mechanism's
-              "C-column-pointers": "4"}
+              "C-stride-pointers": "4"}
     params.update(extra)
     def prolog(s):
         for p in s.get_parameter_names():
@@ -88,7 +88,7 @@ class test_signature_specializer(unittest.TestCase):
         # the advance to the next iteration: in the body now, scheduled
         self.assertTrue(loop.advance or any(l.startswith("add") for l in loop.sections["body"]))
 
-    def test_column_pointer(self):
+    def test_stride_pointer(self):
         # C is strided along n: column 1 goes through a pointer computed once
         # from C's address register and the stride register, then reused
         store = self.spec.blocks[1].sections["body"]
@@ -124,7 +124,7 @@ class test_signature_specializer(unittest.TestCase):
                 nxt = loop.body[pos + 1]
                 self.assertIsInstance(nxt, lsc_load)
                 self.assertEqual(op.indices[1].indices, nxt.indices[0].indices)
-        # C's store along its strided n: one column pointer, from C's register
+        # C's store along its strided n: one stride pointer, from C's register
         pointers = [op for op in store.body if isinstance(op, lsc_addr_compute)]
         self.assertEqual(["stride(C,n)"], [str(op.delta) for op in pointers])
 

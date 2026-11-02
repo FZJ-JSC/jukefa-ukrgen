@@ -6,7 +6,7 @@ blocked:N, phase - lsc_model/addressing.py's addr_pattern) compute what a
 reference gemm does, run natively (AVX2) or emulated (NEON, RVV), and the
 registers' number changes the kernel. Patterns taking a register back to an
 earlier column of C walk it there (test_back_to_earlier_columns); C's
-column pointers (--C-column-pointers) 0 its pattern's registers alone.
+stride pointers (--C-stride-pointers) 0 its pattern's registers alone.
 """
 import shutil
 import unittest
@@ -23,8 +23,8 @@ CASES = {
     "C blocked by 3 over 2": {"C": (2, "blocked:3")},
     "all at once": {"A": (2, "rotate"), "B": (2, "blocked:2"), "C": (2, "phase")},
     "C phase+rotate over 4": {"C": (4, "phase+rotate")},
-    "C phase+rotate over 4, no column pointers": {"C": (4, "phase+rotate", 0)},
-    "C by phase over 2, no column pointers": {"C": (2, "phase", 0)},
+    "C phase+rotate over 4, no stride pointers": {"C": (4, "phase+rotate", 0)},
+    "C by phase over 2, no stride pointers": {"C": (2, "phase", 0)},
 }
 # how each ISA runs: the native runner's arguments
 RUNS = {
@@ -42,7 +42,7 @@ def params(case):
         out[f"{comp}-addr-regs"] = str(regs)
         out[f"{comp}-addr-pattern"] = pattern
         if pointers:
-            out[f"{comp}-column-pointers"] = str(pointers[0])
+            out[f"{comp}-stride-pointers"] = str(pointers[0])
     return out
 
 
@@ -110,7 +110,7 @@ class test_addresses(native.test_native):
         # C's tile is 3 columns: a pattern taking a register back to an
         # earlier column - rotating over 2, blocked by 2 - puts an access a
         # negative number of strides from its register: walked there, from the
-        # register nearest it (column pointers only reach forward), and right
+        # register nearest it (stride pointers only reach forward), and right
         self.runnable("rvv")
         for regs, pattern in ((2, "rotate"), (2, "blocked:2"), (3, "blocked:2")):
             with self.subTest(regs=regs, pattern=pattern):

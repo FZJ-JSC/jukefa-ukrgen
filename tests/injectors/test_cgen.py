@@ -1083,7 +1083,7 @@ int main( void )
 
     def test_packm_trans_keeps_column_chains(self):
         # packm's trans X is contiguous along the loop's index (n:c, m:s):
-        # its rows through column pointers - independent chains a dual-issue
+        # its rows through stride pointers - independent chains a dual-issue
         # core overlaps - not one register walked row by row and rewound by
         # subs (a strided walk is for a run-time stride along the loop's
         # index, k:s); the K3's trans14 lost 1.5 % of sgemm so
@@ -1164,15 +1164,15 @@ int main( void )
                 self.assertFalse(re.match(rf"^slli {m.group(1)},{m.group(1)},", b), (a, b))
 
     def test_trans_rewind_folds(self):
-        # X on one register, no column pointers: its rows walked, and the
+        # X on one register, no stride pointers: its rows walked, and the
         # iteration's end - the advance less the walk, VL - 12 rs - one move;
         # spelled out it's an add and twelve subs, with an offset register
         # (the planner takes the vector length's term too) one add. Four: the
         # copy's and the kappa case's rewinds, and the kappa case's walk back
         # three rows mid-body
-        spelled = self.k3_trans14({"X-column-pointers": "0", "max-offset-registers": "0", "X-addr-regs": "1", "X-addr-pattern": "rotate"})
+        spelled = self.k3_trans14({"X-stride-pointers": "0", "max-offset-registers": "0", "X-addr-regs": "1", "X-addr-pattern": "rotate"})
         self.assertTrue(any(l.startswith("sub ") for b in self.loop_bodies(spelled) for l in b))
-        k = self.k3_trans14({"X-column-pointers": "0", "max-offset-registers": "4", "X-addr-regs": "1", "X-addr-pattern": "rotate"})
+        k = self.k3_trans14({"X-stride-pointers": "0", "max-offset-registers": "4", "X-addr-regs": "1", "X-addr-pattern": "rotate"})
         for body in self.loop_bodies(k):
             self.assertFalse([l for l in body if l.startswith("sub ")], k.symbol)
         self.run_k3_trans14(k)
@@ -1182,7 +1182,7 @@ int main( void )
         # back, which no shifted sub spells (Zba shifts adds only) - the count
         # times the stride in a scratch register, then one sub: no run of
         # more than three, whatever the count
-        k = self.k3_trans14({"X-column-pointers": "0", "max-offset-registers": "0",
+        k = self.k3_trans14({"X-stride-pointers": "0", "max-offset-registers": "0",
                              "X-addr-regs": "1", "X-addr-pattern": "rotate"})
         for body in self.loop_bodies(k):
             # the longest run of adds and subs moving one register in a row
@@ -1197,10 +1197,10 @@ int main( void )
         self.run_k3_trans14(k)
 
     def test_trans_rotates_without_pointers(self):
-        # X on five registers taken in turn, no column pointers: independent
-        # chains like the column pointers' (a dual-issue core overlaps them),
+        # X on five registers taken in turn, no stride pointers: independent
+        # chains like the stride pointers' (a dual-issue core overlaps them),
         # each register's rewind folded into an offset register's add
-        k = self.k3_trans14({"X-column-pointers": "0", "X-addr-regs": "5", "X-addr-pattern": "rotate",
+        k = self.k3_trans14({"X-stride-pointers": "0", "X-addr-regs": "5", "X-addr-pattern": "rotate",
                              "max-offset-registers": "4"})
         for body in self.loop_bodies(k):
             self.assertFalse([l for l in body if l.startswith("sub ")], k.symbol)
@@ -1209,10 +1209,10 @@ int main( void )
         self.run_k3_trans14(k)
 
     def test_x86_configs_walk(self):
-        # the x86 configurations walk C (column-pointers: {C: 0}) through their
+        # the x86 configurations walk C (stride-pointers: {C: 0}) through their
         # strided case too ([col, any], [row, any]): each gemm family as
         # configured, at its winning size - AVX2's 4x3v and 3vx4 (12 of 16
-        # vector registers; its strided case's column pointers took 10 of 16
+        # vector registers; its strided case's stride pointers took 10 of 16
         # general registers), AVX-512's 8x3v and 2vx8 - right natively
         cpu = open("/proc/cpuinfo").read()
         runs = [("avx2", "avx2", ["-mavx2", "-mfma"], ("fma_bc_blocks",), {"vn": (4, 3), "vm": (3, 4)}),
@@ -1227,7 +1227,7 @@ int main( void )
                     c = configuration.from_files({("gemm", dt): os.path.join(ROOT, "ukrconfig", isa_dir, cfg, f"{name}.yaml")})
                     for fam in c.families:
                         with self.subTest(cfg=f"{isa_dir}/{cfg}", gemm=name, family=fam.name):
-                            self.assertEqual("0", str(fam.params.get("C-column-pointers")), fam.params)
+                            self.assertEqual("0", str(fam.params.get("C-stride-pointers")), fam.params)
                             f = copy.deepcopy(fam)
                             f.sizes = {"m": [sizes[fam.name][0]], "n": [sizes[fam.name][1]]}
                             built, skipped = build_gemm(c.isa, c.name, f)
@@ -1246,7 +1246,7 @@ int main( void )
                                 self.assertIn(" 0 wrong", out, k.symbol)
 
     def test_neon_walks_post_increment(self):
-        # without column pointers C's registers walk; on NEON a walk's step is
+        # without stride pointers C's registers walk; on NEON a walk's step is
         # the post-increment of the access before it (ld1/st1 [x0], x_cs,
         # ldinc), the access at its register exactly (no ldr q immediate):
         # the fma_lane dgemm vm family no longer than with 4 pointers, its 2x8
@@ -1266,7 +1266,7 @@ int main( void )
         totals, kernels = {}, {}
         for cp in ("4", "0"):
             f = copy.deepcopy(fam)
-            f.params["C-column-pointers"] = cp
+            f.params["C-stride-pointers"] = cp
             built, _ = build_gemm(c.isa, c.name, f)
             self.assertTrue(built)
             totals[cp] = sum(count(asm_source(k)) for k in built)
@@ -1298,8 +1298,8 @@ int main( void )
         c = configuration.from_files({("gemm", "FP64"): os.path.join(ROOT, "ukrconfig", "neon", "fma_lane", "dgemm.yaml")})
         fam = next(f for f in c.families if "vm" == f.name)
         totals, kernels = {}, {}
-        for label, extra in (("pointers", {"C-column-pointers": "4"}),
-                             ("auto", {"C-column-pointers": "0", "max-offset-registers": "auto"})):
+        for label, extra in (("pointers", {"C-stride-pointers": "4"}),
+                             ("auto", {"C-stride-pointers": "0", "max-offset-registers": "auto"})):
             f = copy.deepcopy(fam)
             f.params.update(extra)
             built, skipped = build_gemm(c.isa, c.name, f)
@@ -1309,7 +1309,7 @@ int main( void )
         self.assertLess(totals["auto"][1], totals["pointers"][1], totals)
         f = copy.deepcopy(fam)
         f.sizes = {"m": [1], "n": [4]}
-        f.params.update({"C-column-pointers": "0", "max-offset-registers": "4"})
+        f.params.update({"C-stride-pointers": "0", "max-offset-registers": "4"})
         built, skipped = build_gemm(c.isa, c.name, f)
         self.assertTrue(built, skipped)
         k = kernels["auto"][(2, 8)]
@@ -1337,7 +1337,7 @@ int main( void )
         totals, kernels = {}, {}
         for imm in ("all", "none"):
             f = copy.deepcopy(fam)
-            f.params.update({"C-column-pointers": "0", "max-offset-registers": "auto", "order": "knm",
+            f.params.update({"C-stride-pointers": "0", "max-offset-registers": "auto", "order": "knm",
                              "ldinc-imm-offsets": imm})
             built, _ = build_gemm(c.isa, c.name, f)
             totals[imm] = (len(built), sum(count(asm_source(k)) for k in built))
@@ -1394,7 +1394,7 @@ int main( void )
             self.assertIn("81 runs, 0 wrong", out, k.symbol)
 
     def test_sve_register_offset(self):
-        # without column pointers an SVE access one column ahead of its walking
+        # without stride pointers an SVE access one column ahead of its walking
         # register takes the register offset form ([x0, x_cs, lsl #3]: the
         # stride in elements the index) - the register reaches two columns a
         # step; not a scatter's (its vector index) nor with a vector length's
@@ -1403,7 +1403,7 @@ int main( void )
         c = configuration.from_files({("gemm", "FP64"): os.path.join(ROOT, "ukrconfig", "sve", "fma_blocklane", "dgemm.yaml")})
         f = copy.deepcopy(next(x for x in c.families if "vm" == x.name))
         f.sizes = {"m": [2], "n": [8]}
-        f.params["C-column-pointers"] = "0"
+        f.params["C-stride-pointers"] = "0"
         built, skipped = build_gemm(c.isa, c.name, f)
         self.assertTrue(built, skipped)
         k = built[0]
@@ -1431,7 +1431,7 @@ int main( void )
         c = configuration.from_files({("gemm", "FP64"): os.path.join(ROOT, "ukrconfig", "neon", "fma_lane", "dgemm.yaml")})
         f = copy.deepcopy(next(x for x in c.families if "vm" == x.name))
         f.sizes = {"m": [3], "n": [4]}
-        f.params.update({"order": "knm", "C-column-pointers": "0", "max-offset-registers": "auto",
+        f.params.update({"order": "knm", "C-stride-pointers": "0", "max-offset-registers": "auto",
                          "ldinc-imm-offsets": "last"})
         built, skipped = build_gemm(c.isa, c.name, f)
         self.assertTrue(built, skipped)
@@ -1450,7 +1450,7 @@ int main( void )
             self.assertIn("81 runs, 0 wrong", out, k.symbol)
 
     def test_lanes_indexed_x86(self):
-        # without column pointers a column's lanes are one register's, lane j
+        # without stride pointers a column's lanes are one register's, lane j
         # at (base, stride, j) - x86's index forms of vmovsd, vmovhpd (asmgen
         # 0100) - no walk lane by lane, no rewind: shorter than with column
         # pointers, and right in every storage pair, natively
@@ -1471,14 +1471,14 @@ int main( void )
             for storages in (["row", "any"], ["col", "any"]):
                 with self.subTest(isa=isa, storages=storages):
                     sizes = {}
-                    for cp in ("2", "0"):        # x86's old count of column pointers, none
+                    for cp in ("2", "0"):        # x86's old count of stride pointers, none
                         params = {"A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"],
-                                  "C-column-pointers": cp}
+                                  "C-stride-pointers": cp}
                         fam = family.from_yaml("gemm", {"family": "vn", "dtypes": ["FP64"], "m": m, "n": n,
                                                         "preset": "gemm_fma_bc_blocks", "vectorize": "n", "unroll": 4,
                                                         "c-storage": storages, "params": params})
                         built, skipped = build_gemm(isa, "ukrgen_x86", fam)
-                        # with column pointers these sizes may not fit x86's 16
+                        # with stride pointers these sizes may not fit x86's 16
                         # general registers at all; without, they must
                         if "0" == cp:
                             self.assertTrue(built, skipped)
@@ -1553,14 +1553,14 @@ int main( void )
             self.assertEqual(2, len(outs))
             for out in outs:
                 self.assertIn("81 runs, 0 wrong", out, (budget, k.symbol))
-        # never longer than without offsets: under walks (no column pointers,
+        # never longer than without offsets: under walks (no stride pointers,
         # 0278) the epilogue holds every general register, auto plans none -
         # a fixed cap computes offsets the epilogue then evicts (longer)
         self.assertLessEqual(count["auto"], count["0"])
 
-    def test_lanes_without_column_pointers(self):
+    def test_lanes_without_stride_pointers(self):
         # NEON's vn kernels store C across vectors lane by lane: with no
-        # column pointers (column-pointers: {C: 0}) each lane's address is
+        # stride pointers (stride-pointers: {C: 0}) each lane's address is
         # walked to from the register nearest it, the pattern's registers
         # rotating through the lanes - no lane walker (it wasn't restarted
         # where its base moved: "not a constant offset")
@@ -1574,7 +1574,7 @@ int main( void )
                          "params": {"A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"],
                                     "C-layout": ["m:c", "n:s"]},
                          "max-addr-regs": {"C": regs}, "addr-pattern": {"C": pattern},
-                         "column-pointers": {"C": 0}}
+                         "stride-pointers": {"C": 0}}
                 built, skipped = build_gemm("neon", "ukrgen_neon", family.from_yaml("gemm", entry))
                 self.assertTrue(built, skipped)
                 k = built[0]
@@ -1586,9 +1586,9 @@ int main( void )
                                       [f"-DUKR={k.symbol}", "-DWT=double"], cc=cc):
                     self.assertIn("81 runs, 0 wrong", out, k.symbol)
 
-    def test_general_c_without_column_pointers(self):
+    def test_general_c_without_stride_pointers(self):
         # C at a general stride (the any storage): a strided access's next
-        # vector is VL*stride(C,m) on - with no column pointers (column-
+        # vector is VL*stride(C,m) on - with no stride pointers (column-
         # pointers: {C: 0}) the pattern's registers walk by it, an add of
         # the vl_stride setup value, and by the column stride: the K3's vm
         # family builds (it was "not specialized yet") and is right
@@ -1603,7 +1603,7 @@ int main( void )
                          "params": {"A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"]},
                          "max-addr-regs": {"A": 2, "B": 1, "C": regs},
                          "addr-pattern": {"A": "rotate", "B": "rotate", "C": pattern},
-                         "column-pointers": {"C": 0}}
+                         "stride-pointers": {"C": 0}}
                 built, skipped = build_gemm("rvv", "ukrgen_rvv", family.from_yaml("gemm", entry))
                 self.assertTrue(built, skipped)
                 k = built[0]
@@ -1701,7 +1701,7 @@ int main( void )
         # gemmsup's shape on RVV: A column-major at a column stride, B row-major
         # at a row stride, C column-major at a column stride - A's and B's
         # registers walked along k by the stride (two each, taken in turn or
-        # leapfrogging), not a column pointer per offset
+        # leapfrogging), not a stride pointer per offset
         cc = ["riscv64-linux-gnu-gcc", "-static", "-march=rv64gcv"]
         if not (shutil.which(cc[0]) and shutil.which("qemu-riscv64-static")):
             self.skipTest("needs riscv64-linux-gnu-gcc and qemu-riscv64-static")

@@ -53,7 +53,7 @@
 isa: rvv
 families:
 - family: pk
-  column-pointers: {X: 4, Y: 4}   # the K3 measured slower walking (the tuner): its tuned pointers kept
+  stride-pointers: {X: 4, Y: 4}   # the K3 measured slower walking (the tuner): its tuned pointers kept
   min-inflight: 16
   cases:
   - kind: vec
@@ -79,7 +79,7 @@ families:
       sched-cycle-slots: "2:vl|vs,vf,sl,i"
     schedule: ['RAW:data::::4', 'WAW:data::::4', 'WAR:data::::4', 'RAW:address:greg:::3']
 - family: pktrans
-  column-pointers: {X: 4, Y: 4}   # the K3 measured slower walking (the tuner): its tuned pointers kept
+  stride-pointers: {X: 4, Y: 4}   # the K3 measured slower walking (the tuner): its tuned pointers kept
   min-inflight: 16
   max-addr-regs: {X: 2, Y: 1}
   addr-pattern: {X: 'blocked:m/R', Y: 'blocked:n/R'}

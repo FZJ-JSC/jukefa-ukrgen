@@ -298,7 +298,7 @@ void bli_cntx_init_<config>( cntx_t* cntx )
   signature group's representative says VEC; one vector register kept per
   streamed component where instructions take no memory operand (all but
   x86) - C is loaded before its accumulator is consumed. The specializer
-  keeps four column pointers per component and base, one more walking the
+  keeps four stride pointers per component and base, one more walking the
   rest (C's 14 columns). 8x3v and 2vx14 unrolled 4 exact at VLEN 128 and
   256; the RVV configurations build every size of the old failures' list.
 - Tile operation presets (`--tileop-preset`, families' `preset:`): gemm_fma_bc,

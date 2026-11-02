@@ -17,7 +17,7 @@ class isa_specialize_stage(stage):
     """
     Adapts every part's program to the ISA, IR to IR, as pre-specialization
     did: afterwards every operation fits one of its signatures. An access
-    offset by run-time strides goes through a column pointer, and one at an
+    offset by run-time strides goes through a stride pointer, and one at an
     offset no addressing form takes through a scratch address register - both
     explicit address computations in the IR, for the irmods to fuse and the
     schedulers to place.
@@ -46,7 +46,7 @@ class isa_specialize_stage(stage):
                             "strided walk's row change, rs - (n - R) cs - each computed once, an add "
                             "of it where the walk moves; the moves used most, saving the most "
                             "instructions, first (0, the default: none - every move spelled out, the general "
-                            "registers left to address registers and column pointers; auto: the general "
+                            "registers left to address registers and stride pointers; auto: the general "
                             "registers an emission without them leaves free, less one, at most 8)")
         # ldinc's parameter (irmod/lsc/ldinc.py): read here, the walk it asks for
         # decided before the moves are spelled and their offsets planned

@@ -87,14 +87,14 @@ class addressing_plan:
 
     :param registers: number of address registers
     :param pattern: which register an access uses
-    :param column_pointers: pointers the specializer may add per register for
+    :param stride_pointers: pointers the specializer may add per register for
         accesses at run-time strides (C's columns); None the ISA's default, 0
         none - the pattern's registers walk to them (phase+rotate's in their
         place)
     """
     registers : int = 1
     pattern : addr_pattern = field(default_factory=lambda: addr_pattern("rotate"))
-    column_pointers : int | None = None
+    stride_pointers : int | None = None
 
 
 #: scratch registers a data movement may name (its steps' tags)
@@ -1439,8 +1439,8 @@ class program_builder:
 
         return ir_program(blocks=blocks, offsets=self.db, strides=self.strides,
                           addr_setup=self.addr_setup, registers=dict(self.used),
-                          column_pointers={c: p.column_pointers for c, p in self.addressing.items()
-                                           if p.column_pointers is not None},
+                          stride_pointers={c: p.stride_pointers for c, p in self.addressing.items()
+                                           if p.stride_pointers is not None},
                           cases=cases, vector_indices=dict(self.vidx))
 
 @dataclass

@@ -114,8 +114,8 @@ in the IR, in order.
       one register - the scheduler free to place other work between them);
       no register free at the first, the last spells the run. Setup's own
       multiplies stay one step (emitted where made).
-4. **Column pointers gone.**
-   1. Configurations on walks (`column-pointers: {C: 0}`; the K1's sgemm vm
+4. **Stride pointers gone.**
+   1. Configurations on walks (`stride-pointers: {C: 0}`; the K1's sgemm vm
       2x14 2161 -> 2047 instructions).
    2. x86's lane walks no costlier than its lane walker.
    3. The mechanism removed: walks over the pattern's registers

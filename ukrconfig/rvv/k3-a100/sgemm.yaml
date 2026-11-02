@@ -29,7 +29,7 @@ isa-params: {rvv-ZBA: '1'}
 blocksizes: {mr-in-mc: 4, nr-in-nc: 600, nr-in-nc-max: 800, kc: 768, kc-max: 800}
 families:
 - family: vn
-  column-pointers: {A: 4, B: 4, C: 4}   # the K3 measured slower walking (the tuner): its tuned pointers kept
+  stride-pointers: {A: 4, B: 4, C: 4}   # the K3 measured slower walking (the tuner): its tuned pointers kept
   preset: gemm_fma_vf
   vectorize: n
   unroll: 6
@@ -47,7 +47,7 @@ families:
   addr-pattern: {A: "blocked:mnk/R", B: rotate}
   c-storage: [row, any]
 - family: vm
-  column-pointers: {A: 4, B: 4, C: 4}   # the K3 measured slower walking (the tuner): its tuned pointers kept
+  stride-pointers: {A: 4, B: 4, C: 4}   # the K3 measured slower walking (the tuner): its tuned pointers kept
   preset: gemm_fma_vf
   vectorize: m
   unroll: 6
