@@ -271,19 +271,17 @@ jmp .ukr0_cases_end
 .ukr0_case0:
 movq %rcx, %rax
 movq %rcx, %rdx
-leaq (%rax,%r10,1),%rsi
-leaq (%rsi,%r10,2),%rsi
 vmovupd %zmm0, (%rax)
 vmovupd %zmm1, (%rax,%r10,1)
 vmovupd %zmm2, (%rax,%r10,2)
-vmovupd %zmm3, (%rsi)
+addq %r10,%rax
+leaq (%rax,%r10,2),%rax
+vmovupd %zmm3, (%rax)
 jmp .ukr0_cases_end
 .ukr0_case1:
 movq %rcx, %rax
 movq %rcx, %rdx
 vbroadcastsd (%r8), %zmm4
-leaq (%rax,%r10,1),%rsi
-leaq (%rsi,%r10,2),%rsi
 vmulpd %zmm0,%zmm4,%zmm5
 vmulpd %zmm1,%zmm4,%zmm0
 vmulpd %zmm2,%zmm4,%zmm1
@@ -291,95 +289,93 @@ vmulpd %zmm3,%zmm4,%zmm2
 vmovupd %zmm5, (%rax)
 vmovupd %zmm0, (%rax,%r10,1)
 vmovupd %zmm1, (%rax,%r10,2)
-vmovupd %zmm2, (%rsi)
+addq %r10,%rax
+leaq (%rax,%r10,2),%rax
+vmovupd %zmm2, (%rax)
 jmp .ukr0_cases_end
 .ukr0_case2:
 movq %rcx, %rax
 movq %rcx, %rdx
-leaq (%rax,%r10,1),%rsi
-leaq (%rsi,%r10,2),%rsi
 vmovupd (%rax), %zmm4
 vmovupd (%rax,%r10,1), %zmm5
 vmovupd (%rax,%r10,2), %zmm6
-vmovupd (%rsi), %zmm7
+addq %r10,%rax
+leaq (%rax,%r10,2),%rax
+vmovupd (%rax), %zmm7
 vaddpd %zmm0,%zmm4,%zmm4
 vaddpd %zmm1,%zmm5,%zmm5
 vaddpd %zmm2,%zmm6,%zmm6
 vaddpd %zmm3,%zmm7,%zmm7
-leaq (%rdx,%r10,1),%rdi
 vmovupd %zmm4, (%rdx)
-leaq (%rdi,%r10,2),%rdi
 vmovupd %zmm5, (%rdx,%r10,1)
 vmovupd %zmm6, (%rdx,%r10,2)
-vmovupd %zmm7, (%rdi)
+movq %rax, %rdx
+vmovupd %zmm7, (%rdx)
 jmp .ukr0_cases_end
 .ukr0_case3:
 movq %rcx, %rax
 movq %rcx, %rdx
-leaq (%rax,%r10,1),%rsi
-leaq (%rsi,%r10,2),%rsi
-vbroadcastsd (%r8), %zmm4
-vmovupd (%rax), %zmm5
-vmovupd (%rax,%r10,1), %zmm6
-vmovupd (%rax,%r10,2), %zmm7
-vmovupd (%rsi), %zmm8
-vfmadd231pd %zmm0,%zmm4,%zmm5
-vfmadd231pd %zmm1,%zmm4,%zmm6
-vfmadd231pd %zmm2,%zmm4,%zmm7
-vfmadd231pd %zmm3,%zmm4,%zmm8
-leaq (%rdx,%r10,1),%rdi
-vmovupd %zmm5, (%rdx)
-leaq (%rdi,%r10,2),%rdi
-vmovupd %zmm6, (%rdx,%r10,1)
-vmovupd %zmm7, (%rdx,%r10,2)
-vmovupd %zmm8, (%rdi)
+vmovupd (%rax), %zmm4
+vmovupd (%rax,%r10,1), %zmm5
+vmovupd (%rax,%r10,2), %zmm6
+vbroadcastsd (%r8), %zmm7
+addq %r10,%rax
+leaq (%rax,%r10,2),%rax
+vmovupd (%rax), %zmm8
+vfmadd231pd %zmm0,%zmm7,%zmm4
+vfmadd231pd %zmm1,%zmm7,%zmm5
+vfmadd231pd %zmm2,%zmm7,%zmm6
+vfmadd231pd %zmm3,%zmm7,%zmm8
+vmovupd %zmm4, (%rdx)
+vmovupd %zmm5, (%rdx,%r10,1)
+vmovupd %zmm6, (%rdx,%r10,2)
+movq %rax, %rdx
+vmovupd %zmm8, (%rdx)
 jmp .ukr0_cases_end
 .ukr0_case4:
 movq %rcx, %rax
 movq %rcx, %rdx
-leaq (%rax,%r10,1),%rsi
-leaq (%rsi,%r10,2),%rsi
-vbroadcastsd (%r9), %zmm4
-vmovupd (%rax), %zmm5
-vmovupd (%rax,%r10,1), %zmm6
-vmovupd (%rax,%r10,2), %zmm7
-vmovupd (%rsi), %zmm8
-vfmadd231pd %zmm5,%zmm4,%zmm0
-vfmadd231pd %zmm6,%zmm4,%zmm1
-vfmadd231pd %zmm7,%zmm4,%zmm2
-vfmadd231pd %zmm8,%zmm4,%zmm3
-leaq (%rdx,%r10,1),%rdi
+vmovupd (%rax), %zmm4
+vmovupd (%rax,%r10,1), %zmm5
+vmovupd (%rax,%r10,2), %zmm6
+vbroadcastsd (%r9), %zmm7
+addq %r10,%rax
+leaq (%rax,%r10,2),%rax
+vmovupd (%rax), %zmm8
+vfmadd231pd %zmm4,%zmm7,%zmm0
+vfmadd231pd %zmm5,%zmm7,%zmm1
+vfmadd231pd %zmm6,%zmm7,%zmm2
+vfmadd231pd %zmm8,%zmm7,%zmm3
 vmovupd %zmm0, (%rdx)
-leaq (%rdi,%r10,2),%rdi
 vmovupd %zmm1, (%rdx,%r10,1)
 vmovupd %zmm2, (%rdx,%r10,2)
-vmovupd %zmm3, (%rdi)
+movq %rax, %rdx
+vmovupd %zmm3, (%rdx)
 jmp .ukr0_cases_end
 .ukr0_case5:
 movq %rcx, %rax
 movq %rcx, %rdx
-vbroadcastsd (%r9), %zmm4
-vmovupd (%rax), %zmm5
-vmovupd (%rax,%r10,1), %zmm6
-vmovupd (%rax,%r10,2), %zmm7
+vmovupd (%rax), %zmm4
+vmovupd (%rax,%r10,1), %zmm5
+vmovupd (%rax,%r10,2), %zmm6
+vbroadcastsd (%r9), %zmm7
 vbroadcastsd (%r8), %zmm8
-vmulpd %zmm5,%zmm4,%zmm5
-leaq (%rax,%r10,1),%rsi
-leaq (%rsi,%r10,2),%rsi
-vmulpd %zmm6,%zmm4,%zmm6
-vmulpd %zmm7,%zmm4,%zmm7
-vfmadd231pd %zmm0,%zmm8,%zmm5
-vmovupd (%rsi), %zmm0
-vfmadd231pd %zmm1,%zmm8,%zmm6
-vfmadd231pd %zmm2,%zmm8,%zmm7
-vmovupd %zmm5, (%rdx)
-vmulpd %zmm0,%zmm4,%zmm0
-leaq (%rdx,%r10,1),%rdi
-leaq (%rdi,%r10,2),%rdi
-vmovupd %zmm6, (%rdx,%r10,1)
+vmulpd %zmm4,%zmm7,%zmm4
+addq %r10,%rax
+leaq (%rax,%r10,2),%rax
+vmulpd %zmm5,%zmm7,%zmm5
+vmulpd %zmm6,%zmm7,%zmm6
+vfmadd231pd %zmm0,%zmm8,%zmm4
+vmovupd (%rax), %zmm0
+vfmadd231pd %zmm1,%zmm8,%zmm5
+vfmadd231pd %zmm2,%zmm8,%zmm6
+vmovupd %zmm4, (%rdx)
+vmulpd %zmm0,%zmm7,%zmm0
+vmovupd %zmm5, (%rdx,%r10,1)
+vmovupd %zmm6, (%rdx,%r10,2)
+movq %rax, %rdx
 vfmadd231pd %zmm3,%zmm8,%zmm0
-vmovupd %zmm7, (%rdx,%r10,2)
-vmovupd %zmm0, (%rdi)
+vmovupd %zmm0, (%rdx)
 jmp .ukr0_cases_end
 .ukr0_case6:
 movq %rcx, %rax

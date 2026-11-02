@@ -259,6 +259,10 @@ class signature_specializer:
         """
         if comp in self.program.column_pointers:
             return self.program.column_pointers[comp]
+        # a storage alias of C (Cc, Cr - a storage case's C) takes C's own
+        # setting where it has none: column-pointers {C: 0} walks every case
+        if comp in self.ctx.composition.storage_aliases and "C" in self.program.column_pointers:
+            return self.program.column_pointers["C"]
         if self._column_pointers is None:
             # the general registers the tracker allocates, reserved ones included
             gregs = self.ctx.gen.get_reg_tracker().available_reg_count("greg")
