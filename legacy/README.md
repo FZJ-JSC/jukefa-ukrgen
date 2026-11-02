@@ -19,3 +19,15 @@ it.
 
 The signature emitter's address resolution has a test of its own, as the old
 resolver had `test_addr_resolver`: `tests/specializers/test_addresses.py`.
+
+## Moved here later
+
+- `src/ukrgen/generators/mm.py`: the old mm generator, its two-level loop
+  orders (`MmNnKk`: uppercase a dimension's coarse level - registers -,
+  lowercase its factor - lanes) and the `mm_op` / `tile` types. The flow
+  tiles with `generators/tiling.py`, which took over the two-level orders.
+- `src/ukrgen/models/load_store_cpu.py` and
+  `src/ukrgen/schedulers/minreguse_scheduler.py`: the model and scheduler
+  built on them; nothing in the flow used either.
+- Their tests: `tests/generators/test_mm.py`, `test_mm_pack.py`,
+  `tests/models/test_load_store_cpu.py`.

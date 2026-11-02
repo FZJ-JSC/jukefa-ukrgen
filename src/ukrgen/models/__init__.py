@@ -4,5 +4,4 @@
 # Copyright (C) 2021 Stepan Nassyr <s.nassyr@xcpp.org>
 # ------------------------------------------------------------------------------
 
-from .load_store_cpu import *
 from .addr_resolver import *

@@ -17,11 +17,9 @@ if TYPE_CHECKING:
     # TODO: Fix/rewrite model/specializer/generator
     #       For now the TYPE_CHECKING enables import from already-reworked stages
     from asmgen.registers import reg_tracker
-    from ..models.load_store_cpu import load_store_cpu
     from ..models.load_store_operations import lsc_operation
     from ..models.offset_mapper import offset_mapper
     from ..specializers.asm import lsc_specializer, op_support
-    from ..generators.mm import mm_op
     from ..support.op import op_support_builder
     from .stages.ukr.ukr import ukr_composition
     from .stages.solve import chosen_to
@@ -53,8 +51,6 @@ class ukr_context:
         self.auto_offset_budget : int | None = None
         #: the fewest general registers left free in the emission (emit stage)
         self.min_free_gregs  : int | None = None
-
-        self.model           : load_store_cpu = None
         self.specializer     : lsc_specializer = None
         self.op_support_list : list[op_support] = list()
         self.component_dts   : dict[str,adt] = dict()

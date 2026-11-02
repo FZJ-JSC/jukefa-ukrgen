@@ -5,4 +5,3 @@
 # ------------------------------------------------------------------------------
 
 from .simple_dependency_scheduler import *
-from .minreguse_scheduler import *
