@@ -32,6 +32,8 @@ class irmod_stage_base(stage):
     def __init__(self, context : ukr_context):
         super().__init__(context)
         self.log = logging.getLogger("IRMOD")
+        #: passes run on the spelled steps (ldinc), after them (finish)
+        self.on_steps = []
         here = lsc_irmods.irmods_at(self.placement)
         self.available = [m for m in here if not m.unmet_requirements(context)]
         self.required = [m for m in here if m.required]
@@ -98,6 +100,8 @@ class irmod_stage_base(stage):
             self.run(cls)
         by_name = {m.name: m for m in self.available}
         chosen = self.chosen()
+        #: passes run on the spelled steps (ldinc), after them (finish)
+        self.on_steps = []
         for name in chosen:
             if name not in by_name:
                 # one this kernel's ISA doesn't meet the requirements of, or
@@ -107,6 +111,9 @@ class irmod_stage_base(stage):
                     unmet = known[name].unmet_requirements(self.context)
                     raise stage_error(f"{name} isn't available for this kernel: {', '.join(unmet)}")
                 raise stage_error(f"no IR modification {name} here; these are: {', '.join(sorted(known))}")
+            if by_name[name].on_steps:
+                self.on_steps.append(by_name[name])
+                continue
             self.run(by_name[name])
         self.finish()
         self.context.params.update(self.params)
@@ -152,5 +159,8 @@ class post_specialize_irmod_stage(irmod_stage_base):
                 speller.merge(p)        # adjacent steps where shorter (ADDRESSING_PLAN 3.2)
                 if auto:
                     p.offset_registers = -1
+        # passes on the steps (ldinc: a walk's step a post-increment)
+        for cls in self.on_steps:
+            self.run(cls)
         if self.params["print-modified-ir"].value:
             raise early_exit("\n\n".join(p.render() for p in self.context.programs))

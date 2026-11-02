@@ -1343,9 +1343,15 @@ class signature_emitter:
         increment = op.increment
         if increment is not None:
             # a post-increment: the access at the register, then the register on
-            line = self._mem(op, self.reg(op.indices[1], op.rtypes[1]), areg, immediate,
-                             increment=dict(increment.terms).get((), 0)
-                             * adt_size(self.ctx.component_dts[comp]))
+            strides = [f for f in dict(increment.terms) if f]
+            if strides:
+                # by a stride's register (a walk's step fused: ldinc)
+                line = self._mem(op, self.reg(op.indices[1], op.rtypes[1]), areg, immediate,
+                                 increment_reg=self.stride_reg(strides[0][0]))
+            else:
+                line = self._mem(op, self.reg(op.indices[1], op.rtypes[1]), areg, immediate,
+                                 increment=dict(increment.terms).get((), 0)
+                                 * adt_size(self.ctx.component_dts[comp]))
             if line is None:
                 raise specialization_error(
                     f"no signature of {op.step.op} post-increments by {increment} elements")
@@ -1627,7 +1633,7 @@ class signature_emitter:
                 for p in range(ways)]
 
     def _mem(self, op, data, areg, immediate: int, increment: int | None = None,
-             voffset: int | None = None) -> str | None:
+             voffset: int | None = None, increment_reg=None) -> str | None:
         """
         The access through the first signature taking it with this immediate
         offset (0: one without an offset)
@@ -1645,7 +1651,8 @@ class signature_emitter:
                 # ISA's own signatures checking it
                 from asmgen.asmblocks.op import opmem_modifier as omod
                 name, count = scaled
-                if mods - {"IOFFSET"} or voffset is not None or increment is not None:
+                if mods - {"IOFFSET"} or voffset is not None or increment is not None \
+                        or increment_reg is not None:
                     continue
                 call_mods = (call_mods - {omod.IOFFSET}) | {omod.GOFFSET, omod.SCALEOFFSET}
                 kwargs.update(offreg=self.params[name], scale_factor=count)
@@ -1656,6 +1663,10 @@ class signature_emitter:
                 if {"VOFFSET"} != mods:
                     continue
                 kwargs["voffset"] = voffset
+            elif increment_reg is not None:
+                if {"POSTINC"} != mods or immediate or "increg" not in sig.operands:
+                    continue
+                kwargs["increg"] = increment_reg
             elif increment is not None:
                 if {"POSTINC"} != mods or immediate:
                     continue

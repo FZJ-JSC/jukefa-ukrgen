@@ -196,7 +196,10 @@ class signature_specializer:
                 return float("inf")
             return sum(abs(c) for f, c in d.items() if f)
         bases = [r for (c, r) in self.program.addr_setup if c == comp and (c, r) in self.positions]
-        source = min(bases or [reg], key=strides_away)
+        # another register costs its strides and the copy (or the step from it);
+        # a tie the access's own: its steps fuse into post-increments (ldinc),
+        # a copy doesn't
+        source = min(bases or [reg], key=lambda r: (strides_away(r) + (0 if r == reg else 1), r != reg))
         move = target - self.positions[(comp, source)]
         if dict(move.terms) or source != reg:
             # (source first, then the register set: dest = src + delta)
@@ -513,6 +516,8 @@ class signature_specializer:
             self.positions[(comp, scratch)] = here
             self.placed = self.placed | {(comp, scratch)}
             op.indices[0] = lsc_reg_index(comp, [scratch])
+            # at its register exactly: a post-increment can be its (ldinc)
+            op.properties["at_register"] = True
             return inserted + [op]
 
         if not any(_takes(s, immediate, self.max_imm_offset) for s in usable):
@@ -527,7 +532,11 @@ class signature_specializer:
             walked = self.walked_by
             walked[(comp, reg)] = walked.get((comp, reg), sym.const(0)) + sym.const(const)
             self.walked_by = walked
+            immediate = 0
         op.indices[0] = lsc_reg_index(comp, [reg])
+        # at its register exactly (no immediate): only such an access post-
+        # increments (ld1/st1 take no offset; ldr q's immediate can't) - ldinc
+        op.properties["at_register"] = 0 == immediate
         return inserted + [op]
 
     def adapt_slices(self, op) -> list:

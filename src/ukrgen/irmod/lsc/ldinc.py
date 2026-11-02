@@ -4,6 +4,8 @@ ldinc: address computations fused into post-increment accesses
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from asmgen.registers import adt_size
 
 from ...models.load_store_operations import (
@@ -29,6 +31,9 @@ class ldinc(lsc_irmod):
     name = "ldinc"
     description = "fuse address computations into post-increment accesses"
     placement = irmod_placement.POST_SPECIALIZE
+    #: run on the moves spelled as steps (the post-specialize stage's finish):
+    #: a walk's step one add of a stride, fusable as a register increment
+    on_steps : ClassVar[bool] = True
     constraints = ("consecutive accesses through one scratch address register set from "
                    "the same source, the distance between them a post-increment one of "
                    "the earlier access's signatures takes - where a signature states no "
@@ -76,6 +81,18 @@ class ldinc(lsc_irmod):
                 return True
         return False
 
+    def check_reg(self, op) -> bool:
+        """
+        Whether one of an access's signatures post-increments its address
+        register by a register (AArch64's ld1 {v}, [x0], x1)
+        """
+        # the access's own forms (a lane store's, not a whole vector's)
+        for sig in _sigs(op.sigs):
+            mods = {m.name for m in sig.modifiers} - {"MASK", "STRUCT"}
+            if {"POSTINC"} == mods and "increg" in sig.operands:
+                return True
+        return False
+
     @staticmethod
     def post_increment(op, elements: int):
         op.increment = sym.const(elements)
@@ -90,20 +107,39 @@ class ldinc(lsc_irmod):
         while i < len(ops):
             op = ops[i]
             nxt = ops[i + 1] if i + 1 < len(ops) else None
+            terms = dict(op.delta.terms) if isinstance(op, lsc_addr_compute) else {}
+            # a walk's step by one stride: a register increment (spelled steps)
+            by_stride = 1 == len(terms) and all(len(f) == 1 and f[0].startswith("stride(") and 1 == c
+                                                for f, c in terms.items())
             if isinstance(op, lsc_addr_compute) and isinstance(nxt, (lsc_load, lsc_store)) \
-                    and set(dict(op.delta.terms)) <= {()} \
+                    and (set(terms) <= {()} or by_stride) \
                     and nxt.indices[0].indices == op.indices[1].indices \
                     and nxt.indices[0].component == op.indices[1].component:
                 comp = op.indices[0].component
                 key = (comp, op.indices[1].indices[0])
                 src = op.indices[0].indices[0]
-                offset = dict(op.delta.terms).get((), 0)
+                offset = None if by_stride else dict(op.delta.terms).get((), 0)
                 prev = chains.get(key)
                 # a walk (a = a + c) moves by its own delta: that is the
                 # increment; a scratch computation (s = a + c) by the distance
                 # from the previous one
                 walk = op.indices[0].indices == op.indices[1].indices
-                if prev is not None and prev[2] == src:
+                if not walk:
+                    # it reads its source register: that one's chain ends here
+                    # (a0's next step fused before this copy from a0 moved it)
+                    chains.pop((comp, src), None)
+                # only an access at its register exactly post-increments: an
+                # immediate (ldr q's) can't be the same instruction's
+                at_reg = prev is not None and (prev[0].properties or {}).get("at_register")
+                if prev is not None and prev[2] == src and by_stride:
+                    if walk and at_reg and self.check_reg(prev[0]):
+                        prev[0].increment = op.delta
+                        out.append(nxt)
+                        chains[key] = (nxt, None, src)
+                        fused += 1
+                        i += 2
+                        continue
+                elif prev is not None and prev[2] == src and at_reg and (walk or prev[1] is not None):
                     gap = offset if walk else offset - prev[1]
                     if self.check(prev[0], gap * adt_size(self.ctx.component_dts[comp])):
                         self.post_increment(prev[0], gap)

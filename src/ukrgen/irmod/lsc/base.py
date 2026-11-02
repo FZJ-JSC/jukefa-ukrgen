@@ -56,6 +56,9 @@ class lsc_irmod:
     required : ClassVar[bool] = False
     #: for optional modifications: on unless the user chooses otherwise
     default_enabled : ClassVar[bool] = True
+    #: run on the moves spelled as one-instruction steps: after the spelling
+    #: (the post-specialize stage's finish), not among the passes before it
+    on_steps : ClassVar[bool] = False
     #: what every site it changes must satisfy - what check() checks
     constraints : ClassVar[str] = ""
     #: registers it needs beyond the program's own, per register file
