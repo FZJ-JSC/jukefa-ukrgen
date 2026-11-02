@@ -57,6 +57,22 @@ def _across(order: list, pos: int, live_out: set, groups) -> dict:
             counts[tag] = counts.get(tag, 0) + 1
     return counts
 
+def _index_vectors(block) -> int:
+    """
+    Index vectors a block's gathers and scatters take (the emitter builds one
+    per component and stride - a vector register held besides the tiles)
+    """
+    from ...specializers.signature import _sigs
+    from ...models.load_store_operations import lsc_load, lsc_store
+    keys = set()
+    for section in SECTIONS:
+        for op in getattr(block, section) or []:
+            if isinstance(op, (lsc_load, lsc_store)) and op.sigs is not None \
+                    and any("vidxreg" in s.operands for s in _sigs(op.sigs)):
+                keys.add((op.indices[0].component, (op.properties or {}).get("stride_index")))
+    return len(keys)
+
+
 class schedule_stage(stage):
     """
     Schedules every section of every part's program under dependency distances
@@ -160,8 +176,13 @@ class schedule_stage(stage):
                     if mru and block.loop_index is None:
                         later = blocks[pos + 1:] + ([] if case is not None else
                                                     [b for c in program.cases for b in c.blocks])
+                        # a gather's or scatter's index vector (the emitter's
+                        # index_vector: one per component and stride, held for
+                        # the region) takes a vector register the tiles don't:
+                        # SVE's vindex 2vx14 loaded C ahead into alpha's
+                        indexes = _index_vectors(block)
                         budget = register_budget(
-                            registers={"vreg": gen.max_vregs() - reserve,
+                            registers={"vreg": gen.max_vregs() - reserve - indexes,
                                        "freg": gen.max_fregs() - reserve},
                             inflight=None if inflight is None else int(inflight),
                             live_out=_read_before_written(later))

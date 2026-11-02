@@ -158,6 +158,10 @@ def _takes(sig, immediate: int, limit: int | None = None) -> bool:
 
 #: column pointers kept per component and base where general registers are
 #: many (AArch64, RISC-V: 31); columns beyond them share one walking pointer
+#: column pointers where a component asks for none of its own: none - the
+#: pattern's registers walk to the columns (None: the ISA's old default,
+#: MAX_COLUMN_POINTERS, FEW_ on x86)
+COLUMN_POINTERS_DEFAULT = 0
 MAX_COLUMN_POINTERS = 4
 #: ... and where they are few (x86: 16)
 FEW_COLUMN_POINTERS = 2
@@ -303,6 +307,8 @@ class signature_specializer:
         # setting where it has none: column-pointers {C: 0} walks every case
         if comp in self.ctx.composition.storage_aliases and "C" in self.program.column_pointers:
             return self.program.column_pointers["C"]
+        if COLUMN_POINTERS_DEFAULT is not None:
+            return COLUMN_POINTERS_DEFAULT
         if self._column_pointers is None:
             # the general registers the tracker allocates, reserved ones included
             gregs = self.ctx.gen.get_reg_tracker().available_reg_count("greg")

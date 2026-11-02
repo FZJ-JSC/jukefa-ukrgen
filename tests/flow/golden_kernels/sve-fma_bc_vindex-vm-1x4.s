@@ -12,7 +12,8 @@ bli_dgemm_ukrgen_sve_vm_1vx4_asm:
 # x6 = stride(C,m)
 # x7 = stride(C,n)
 ptrue p0.d
-and x8,x0,#3
+lsr x8,x7,#3
+and x9,x0,#3
 lsr x0,x0,#2
 dup z0.d,#0
 dup z1.d,#0
@@ -104,9 +105,9 @@ fmla z3.d,p0/m,z27.d,z31.d
 incb x1, ALL, MUL #3
 add x2,x2,#96
 .ukr1_done:
-cbz x8,.ukr1_taildone
+cbz x9,.ukr1_taildone
 .ukr1_tail:
-add x8,x8,#-1
+add x9,x9,#-1
 ld1d {z4.d}, p0/z, [x1]
 ld1rd {z5.d}, p0/z, [x2]
 ld1rd {z6.d}, p0/z, [x2, #8]
@@ -118,7 +119,7 @@ fmla z2.d,p0/m,z4.d,z7.d
 fmla z3.d,p0/m,z4.d,z16.d
 incb x1, ALL, MUL #1
 add x2,x2,#32
-cbnz x8,.ukr1_tail
+cbnz x9,.ukr1_tail
 .ukr1_taildone:
 mov x0,x6
 add x0,x0,#-8
@@ -250,268 +251,228 @@ b .ukr0_cases_end
 .ukr0_case0:
 mov x0,x3
 mov x1,x3
-add x2,x0,x7
-add x8,x0,x7
-add x9,x0,x7, LSL #1
-add x2,x2,x7, LSL #1
 st1d {z0.d}, p0, [x0]
-st1d {z1.d}, p0, [x8]
-st1d {z2.d}, p0, [x9]
-st1d {z3.d}, p0, [x2]
+st1d {z1.d}, p0, [x0, x8, lsl #3]
+add x0,x0,x7, LSL #1
+st1d {z2.d}, p0, [x0]
+st1d {z3.d}, p0, [x0, x8, lsl #3]
 b .ukr0_cases_end
 .ukr0_case1:
 mov x0,x3
 mov x1,x3
 ld1rd {z4.d}, p0/z, [x4]
-add x2,x0,x7
-add x8,x0,x7
-add x9,x0,x7, LSL #1
 fmul z5.d,z0.d,z4.d
 fmul z0.d,z1.d,z4.d
 fmul z1.d,z2.d,z4.d
 fmul z2.d,z3.d,z4.d
-add x2,x2,x7, LSL #1
 st1d {z5.d}, p0, [x0]
-st1d {z0.d}, p0, [x8]
-st1d {z1.d}, p0, [x9]
-st1d {z2.d}, p0, [x2]
+st1d {z0.d}, p0, [x0, x8, lsl #3]
+add x0,x0,x7, LSL #1
+st1d {z1.d}, p0, [x0]
+st1d {z2.d}, p0, [x0, x8, lsl #3]
 b .ukr0_cases_end
 .ukr0_case2:
 mov x0,x3
 mov x1,x3
-add x2,x0,x7
-add x8,x0,x7, LSL #1
 ld1d {z4.d}, p0/z, [x0]
-ld1d {z5.d}, p0/z, [x2]
-ld1d {z6.d}, p0/z, [x8]
-add x9,x1,x7
+ld1d {z5.d}, p0/z, [x0, x8, lsl #3]
+add x0,x0,x7, LSL #1
+ld1d {z6.d}, p0/z, [x0]
+ld1d {z7.d}, p0/z, [x0, x8, lsl #3]
 fadd z4.d,z0.d,z4.d
-add x10,x0,x7
 fadd z5.d,z1.d,z5.d
 fadd z6.d,z2.d,z6.d
-add x11,x1,x7, LSL #1
+fadd z7.d,z3.d,z7.d
 st1d {z4.d}, p0, [x1]
-add x10,x10,x7, LSL #1
-ld1d {z0.d}, p0/z, [x10]
-add x12,x1,x7
-add x12,x12,x7, LSL #1
-st1d {z5.d}, p0, [x9]
-fadd z0.d,z3.d,z0.d
-st1d {z6.d}, p0, [x11]
-st1d {z0.d}, p0, [x12]
+st1d {z5.d}, p0, [x1, x8, lsl #3]
+mov x1,x0
+st1d {z6.d}, p0, [x1]
+st1d {z7.d}, p0, [x1, x8, lsl #3]
 b .ukr0_cases_end
 .ukr0_case3:
 mov x0,x3
 mov x1,x3
-add x2,x0,x7
-add x8,x0,x7, LSL #1
 ld1rd {z4.d}, p0/z, [x4]
 ld1d {z5.d}, p0/z, [x0]
-ld1d {z6.d}, p0/z, [x2]
-ld1d {z7.d}, p0/z, [x8]
-add x9,x1,x7
+ld1d {z6.d}, p0/z, [x0, x8, lsl #3]
+add x0,x0,x7, LSL #1
+ld1d {z7.d}, p0/z, [x0]
+ld1d {z16.d}, p0/z, [x0, x8, lsl #3]
 fmla z5.d,p0/m,z0.d,z4.d
-add x10,x0,x7
 fmla z6.d,p0/m,z1.d,z4.d
 fmla z7.d,p0/m,z2.d,z4.d
-add x11,x1,x7, LSL #1
+fmla z16.d,p0/m,z3.d,z4.d
 st1d {z5.d}, p0, [x1]
-add x10,x10,x7, LSL #1
-ld1d {z0.d}, p0/z, [x10]
-add x12,x1,x7
-add x12,x12,x7, LSL #1
-st1d {z6.d}, p0, [x9]
-fmla z0.d,p0/m,z3.d,z4.d
-st1d {z7.d}, p0, [x11]
-st1d {z0.d}, p0, [x12]
+st1d {z6.d}, p0, [x1, x8, lsl #3]
+mov x1,x0
+st1d {z7.d}, p0, [x1]
+st1d {z16.d}, p0, [x1, x8, lsl #3]
 b .ukr0_cases_end
 .ukr0_case4:
 mov x0,x3
 mov x1,x3
-add x2,x0,x7
-add x8,x0,x7, LSL #1
 ld1rd {z4.d}, p0/z, [x5]
 ld1d {z5.d}, p0/z, [x0]
-ld1d {z6.d}, p0/z, [x2]
-ld1d {z7.d}, p0/z, [x8]
-add x9,x1,x7
+ld1d {z6.d}, p0/z, [x0, x8, lsl #3]
+add x0,x0,x7, LSL #1
+ld1d {z7.d}, p0/z, [x0]
+ld1d {z16.d}, p0/z, [x0, x8, lsl #3]
 fmla z0.d,p0/m,z5.d,z4.d
-add x10,x0,x7
 fmla z1.d,p0/m,z6.d,z4.d
 fmla z2.d,p0/m,z7.d,z4.d
-add x11,x1,x7, LSL #1
+fmla z3.d,p0/m,z16.d,z4.d
 st1d {z0.d}, p0, [x1]
-add x10,x10,x7, LSL #1
-ld1d {z0.d}, p0/z, [x10]
-add x12,x1,x7
-add x12,x12,x7, LSL #1
-st1d {z1.d}, p0, [x9]
-fmla z3.d,p0/m,z0.d,z4.d
-st1d {z2.d}, p0, [x11]
-st1d {z3.d}, p0, [x12]
+st1d {z1.d}, p0, [x1, x8, lsl #3]
+mov x1,x0
+st1d {z2.d}, p0, [x1]
+st1d {z3.d}, p0, [x1, x8, lsl #3]
 b .ukr0_cases_end
 .ukr0_case5:
 mov x0,x3
 mov x1,x3
-add x2,x0,x7
 ld1rd {z4.d}, p0/z, [x5]
-add x8,x0,x7, LSL #1
 ld1d {z5.d}, p0/z, [x0]
-ld1d {z6.d}, p0/z, [x2]
-ld1d {z7.d}, p0/z, [x8]
-ld1rd {z16.d}, p0/z, [x4]
+ld1d {z6.d}, p0/z, [x0, x8, lsl #3]
+add x0,x0,x7, LSL #1
+ld1d {z7.d}, p0/z, [x0]
 fmul z5.d,z5.d,z4.d
+ld1rd {z16.d}, p0/z, [x4]
 fmul z6.d,z6.d,z4.d
 fmul z7.d,z7.d,z4.d
-add x9,x1,x7
 fmla z5.d,p0/m,z0.d,z16.d
+ld1d {z0.d}, p0/z, [x0, x8, lsl #3]
 fmla z6.d,p0/m,z1.d,z16.d
 fmla z7.d,p0/m,z2.d,z16.d
-add x10,x1,x7, LSL #1
 st1d {z5.d}, p0, [x1]
-add x11,x0,x7
-add x11,x11,x7, LSL #1
-ld1d {z0.d}, p0/z, [x11]
-st1d {z6.d}, p0, [x9]
-add x12,x1,x7
-add x12,x12,x7, LSL #1
 fmul z0.d,z0.d,z4.d
-st1d {z7.d}, p0, [x10]
+st1d {z6.d}, p0, [x1, x8, lsl #3]
+mov x1,x0
+st1d {z7.d}, p0, [x1]
 fmla z0.d,p0/m,z3.d,z16.d
-st1d {z0.d}, p0, [x12]
+st1d {z0.d}, p0, [x1, x8, lsl #3]
 b .ukr0_cases_end
 .ukr0_case6:
 mov x0,x3
 index z4.d,#0,x6
-add x1,x0,x7
-add x2,x0,x7
-add x8,x0,x7, LSL #1
-add x1,x1,x7, LSL #1
 st1d {z0.d}, p0, [x0, z4.d]
-st1d {z1.d}, p0, [x2, z4.d]
-st1d {z2.d}, p0, [x8, z4.d]
-st1d {z3.d}, p0, [x1, z4.d]
+add x0,x0,x7
+st1d {z1.d}, p0, [x0, z4.d]
+add x0,x0,x7
+st1d {z2.d}, p0, [x0, z4.d]
+add x0,x0,x7
+st1d {z3.d}, p0, [x0, z4.d]
 b .ukr0_cases_end
 .ukr0_case7:
 mov x0,x3
 index z4.d,#0,x6
 ld1rd {z5.d}, p0/z, [x4]
-add x1,x0,x7
-add x2,x0,x7
-add x8,x0,x7, LSL #1
 fmul z6.d,z0.d,z5.d
 fmul z0.d,z1.d,z5.d
 fmul z1.d,z2.d,z5.d
 fmul z2.d,z3.d,z5.d
-add x1,x1,x7, LSL #1
 st1d {z6.d}, p0, [x0, z4.d]
-st1d {z0.d}, p0, [x2, z4.d]
-st1d {z1.d}, p0, [x8, z4.d]
-st1d {z2.d}, p0, [x1, z4.d]
+add x0,x0,x7
+st1d {z0.d}, p0, [x0, z4.d]
+add x0,x0,x7
+st1d {z1.d}, p0, [x0, z4.d]
+add x0,x0,x7
+st1d {z2.d}, p0, [x0, z4.d]
 b .ukr0_cases_end
 .ukr0_case8:
 mov x0,x3
 index z4.d,#0,x6
-add x1,x0,x7
-add x2,x0,x7, LSL #1
 ld1d {z5.d}, p0/z, [x0, z4.d]
-ld1d {z6.d}, p0/z, [x1, z4.d]
-ld1d {z7.d}, p0/z, [x2, z4.d]
-add x8,x3,x7
+add x0,x0,x7
+ld1d {z6.d}, p0/z, [x0, z4.d]
+add x0,x0,x7
 fadd z5.d,z0.d,z5.d
-add x9,x0,x7
+ld1d {z0.d}, p0/z, [x0, z4.d]
+add x0,x0,x7
 fadd z6.d,z1.d,z6.d
-fadd z7.d,z2.d,z7.d
-add x10,x3,x7, LSL #1
 st1d {z5.d}, p0, [x3, z4.d]
-add x9,x9,x7, LSL #1
-ld1d {z0.d}, p0/z, [x9, z4.d]
-add x11,x3,x7
-add x11,x11,x7, LSL #1
-st1d {z6.d}, p0, [x8, z4.d]
-fadd z0.d,z3.d,z0.d
-st1d {z7.d}, p0, [x10, z4.d]
-st1d {z0.d}, p0, [x11, z4.d]
+ld1d {z1.d}, p0/z, [x0, z4.d]
+fadd z0.d,z2.d,z0.d
+add x3,x3,x7
+st1d {z6.d}, p0, [x3, z4.d]
+fadd z1.d,z3.d,z1.d
+add x3,x3,x7
+st1d {z0.d}, p0, [x3, z4.d]
+add x3,x3,x7
+st1d {z1.d}, p0, [x3, z4.d]
 b .ukr0_cases_end
 .ukr0_case9:
 mov x0,x3
 index z4.d,#0,x6
-add x1,x0,x7
-add x2,x0,x7, LSL #1
 ld1d {z5.d}, p0/z, [x0, z4.d]
 ld1rd {z6.d}, p0/z, [x4]
-ld1d {z7.d}, p0/z, [x1, z4.d]
-ld1d {z16.d}, p0/z, [x2, z4.d]
-add x8,x3,x7
+add x0,x0,x7
+ld1d {z7.d}, p0/z, [x0, z4.d]
+add x0,x0,x7
 fmla z5.d,p0/m,z0.d,z6.d
-add x9,x0,x7
+ld1d {z0.d}, p0/z, [x0, z4.d]
+add x0,x0,x7
 fmla z7.d,p0/m,z1.d,z6.d
-fmla z16.d,p0/m,z2.d,z6.d
-add x10,x3,x7, LSL #1
 st1d {z5.d}, p0, [x3, z4.d]
-add x9,x9,x7, LSL #1
-ld1d {z0.d}, p0/z, [x9, z4.d]
-add x11,x3,x7
-add x11,x11,x7, LSL #1
-st1d {z7.d}, p0, [x8, z4.d]
-fmla z0.d,p0/m,z3.d,z6.d
-st1d {z16.d}, p0, [x10, z4.d]
-st1d {z0.d}, p0, [x11, z4.d]
+ld1d {z1.d}, p0/z, [x0, z4.d]
+fmla z0.d,p0/m,z2.d,z6.d
+add x3,x3,x7
+st1d {z7.d}, p0, [x3, z4.d]
+fmla z1.d,p0/m,z3.d,z6.d
+add x3,x3,x7
+st1d {z0.d}, p0, [x3, z4.d]
+add x3,x3,x7
+st1d {z1.d}, p0, [x3, z4.d]
 b .ukr0_cases_end
 .ukr0_case10:
 mov x0,x3
 index z4.d,#0,x6
-add x1,x0,x7
-add x2,x0,x7, LSL #1
 ld1d {z5.d}, p0/z, [x0, z4.d]
 ld1rd {z6.d}, p0/z, [x5]
-ld1d {z7.d}, p0/z, [x1, z4.d]
-ld1d {z16.d}, p0/z, [x2, z4.d]
-add x8,x3,x7
+add x0,x0,x7
+ld1d {z7.d}, p0/z, [x0, z4.d]
+add x0,x0,x7
 fmla z0.d,p0/m,z5.d,z6.d
-add x9,x0,x7
+ld1d {z5.d}, p0/z, [x0, z4.d]
+add x0,x0,x7
 fmla z1.d,p0/m,z7.d,z6.d
-fmla z2.d,p0/m,z16.d,z6.d
-add x10,x3,x7, LSL #1
 st1d {z0.d}, p0, [x3, z4.d]
-add x9,x9,x7, LSL #1
-ld1d {z0.d}, p0/z, [x9, z4.d]
-add x11,x3,x7
-add x11,x11,x7, LSL #1
-st1d {z1.d}, p0, [x8, z4.d]
+ld1d {z0.d}, p0/z, [x0, z4.d]
+fmla z2.d,p0/m,z5.d,z6.d
+add x3,x3,x7
+st1d {z1.d}, p0, [x3, z4.d]
 fmla z3.d,p0/m,z0.d,z6.d
-st1d {z2.d}, p0, [x10, z4.d]
-st1d {z3.d}, p0, [x11, z4.d]
+add x3,x3,x7
+st1d {z2.d}, p0, [x3, z4.d]
+add x3,x3,x7
+st1d {z3.d}, p0, [x3, z4.d]
 b .ukr0_cases_end
 .ukr0_case11:
 mov x0,x3
 index z4.d,#0,x6
-add x1,x0,x7
 ld1d {z5.d}, p0/z, [x0, z4.d]
-add x2,x0,x7, LSL #1
 ld1rd {z6.d}, p0/z, [x5]
-ld1d {z7.d}, p0/z, [x1, z4.d]
-ld1d {z16.d}, p0/z, [x2, z4.d]
-ld1rd {z17.d}, p0/z, [x4]
+add x0,x0,x7
+ld1d {z7.d}, p0/z, [x0, z4.d]
+add x0,x0,x7
 fmul z5.d,z5.d,z6.d
+ld1rd {z16.d}, p0/z, [x4]
+ld1d {z17.d}, p0/z, [x0, z4.d]
 fmul z7.d,z7.d,z6.d
-fmul z16.d,z16.d,z6.d
-add x8,x3,x7
-fmla z5.d,p0/m,z0.d,z17.d
-fmla z7.d,p0/m,z1.d,z17.d
-fmla z16.d,p0/m,z2.d,z17.d
-add x9,x3,x7, LSL #1
+fmla z5.d,p0/m,z0.d,z16.d
+fmul z17.d,z17.d,z6.d
+fmla z7.d,p0/m,z1.d,z16.d
 st1d {z5.d}, p0, [x3, z4.d]
-add x10,x0,x7
-add x10,x10,x7, LSL #1
-ld1d {z0.d}, p0/z, [x10, z4.d]
-st1d {z7.d}, p0, [x8, z4.d]
-add x11,x3,x7
-add x11,x11,x7, LSL #1
+add x0,x0,x7
+ld1d {z0.d}, p0/z, [x0, z4.d]
+fmla z17.d,p0/m,z2.d,z16.d
+add x3,x3,x7
+st1d {z7.d}, p0, [x3, z4.d]
 fmul z0.d,z0.d,z6.d
-st1d {z16.d}, p0, [x9, z4.d]
-fmla z0.d,p0/m,z3.d,z17.d
-st1d {z0.d}, p0, [x11, z4.d]
+add x3,x3,x7
+st1d {z17.d}, p0, [x3, z4.d]
+add x3,x3,x7
+fmla z0.d,p0/m,z3.d,z16.d
+st1d {z0.d}, p0, [x3, z4.d]
 .ukr0_cases_end:
 ret
 .cfi_endproc
