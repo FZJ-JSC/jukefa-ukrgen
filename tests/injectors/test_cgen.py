@@ -1314,6 +1314,38 @@ int main( void )
         for out in self.run_c(c.isa, src, [k], [[QEMU, "-cpu", "max"]], [f"-DUKR={k.symbol}", "-DWT=double"], cc=cc):
             self.assertIn("81 runs, 0 wrong", out, k.symbol)
 
+    def test_imm_offsets_none(self):
+        # --imm-offsets none: where C walks and its accesses post-increment
+        # (NEON's ld1/st1), its register walks to every access instead of
+        # reaching a row by ldr q's immediate - the rows' steps post-increments
+        # by the transfer, the column's change an offset register's. Under knm
+        # (a column's rows together) the vm family shorter than with "all",
+        # every size built; its 2x8 right under qemu
+        cc = ["aarch64-linux-gnu-gcc", "-static"]
+        count = lambda t: sum(1 for l in t.splitlines() if l.strip() and not l.strip().endswith(":")
+                              and not l.strip().startswith((".", "#", "//")))
+        c = configuration.from_files({("gemm", "FP64"): os.path.join(ROOT, "ukrconfig", "neon", "fma_lane", "dgemm.yaml")})
+        fam = next(f for f in c.families if "vm" == f.name)
+        totals, kernels = {}, {}
+        for imm in ("all", "none"):
+            f = copy.deepcopy(fam)
+            f.params.update({"C-column-pointers": "0", "max-offset-registers": "auto", "order": "knm",
+                             "imm-offsets": imm})
+            built, _ = build_gemm(c.isa, c.name, f)
+            totals[imm] = (len(built), sum(count(asm_source(k)) for k in built))
+            kernels[imm] = {tuple(k.size): k for k in built}
+        self.assertEqual(totals["all"][0], totals["none"][0], totals)
+        self.assertLess(totals["none"][1], totals["all"][1], totals)
+        k = kernels["none"][(2, 8)]
+        if not (shutil.which(cc[0]) and shutil.which(QEMU)):
+            return
+        src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator(c.isa)) + gemm_wrapper(k) + \
+            f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, 'double', k.vl_fn)}; }}\n" \
+            f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, 'double', k.vl_fn)}; }}\n" + \
+            open(os.path.join(HERE, "wrapper_harness.c")).read()
+        for out in self.run_c(c.isa, src, [k], [[QEMU, "-cpu", "max"]], [f"-DUKR={k.symbol}", "-DWT=double"], cc=cc):
+            self.assertIn("81 runs, 0 wrong", out, k.symbol)
+
     def test_lanes_indexed_x86(self):
         # without column pointers a column's lanes are one register's, lane j
         # at (base, stride, j) - x86's index forms of vmovsd, vmovhpd (asmgen

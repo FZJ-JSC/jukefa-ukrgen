@@ -270,6 +270,10 @@ class signature_specializer:
         return self._column_pointers
 
     def __init__(self, ctx, program: ir_program):
+        #: how an access the register walks reaches an immediate offset (--imm-
+        #: offsets): all - by the immediate (ldr q's [x0, #16]); none - the
+        #: register walks to it (where the access's forms post-increment)
+        self.imm_offsets = "all"
         # what's been placed and walked, the column pointers made on first use
         self.placed = set()
         self.walked_by = {}
@@ -530,7 +534,13 @@ class signature_specializer:
             op.properties["at_register"] = True
             return inserted + [op]
 
-        if not any(_takes(s, immediate, self.max_imm_offset) for s in usable):
+        # --imm-offsets none: where this component walks (no column pointers) and
+        # the access's own forms post-increment (NEON's ld1/st1), its register
+        # walks to it rather than reach it by an immediate - each row's step a
+        # post-increment by the transfer (ldinc), the column's change an offset
+        walk_imm = bool(immediate) and "none" == self.imm_offsets and 0 == self.column_pointers(comp) \
+            and any({"POSTINC"} == {m.name for m in s.modifiers} - {"MASK", "STRUCT"} for s in _sigs(op.sigs))
+        if walk_imm or not any(_takes(s, immediate, self.max_imm_offset) for s in usable):
             if not any(_takes(s, 0) for s in usable):
                 raise specialization_error(
                     f"no {op.step.op} signature for {db[op.offset]} takes a plain address")
