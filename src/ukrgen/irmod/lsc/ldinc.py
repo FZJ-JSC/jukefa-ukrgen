@@ -131,7 +131,10 @@ class ldinc(lsc_irmod):
                 # only an access at its register exactly post-increments: an
                 # immediate (ldr q's) can't be the same instruction's
                 at_reg = prev is not None and (prev[0].properties or {}).get("at_register")
-                if prev is not None and prev[2] == src and by_stride:
+                # a walk's step: the register's previous access, however the
+                # register was set (from another: x0 = x3 + 16), nothing else
+                # having used it since
+                if prev is not None and (walk or prev[2] == src) and by_stride:
                     if walk and at_reg and self.check_reg(prev[0]):
                         prev[0].increment = op.delta
                         out.append(nxt)

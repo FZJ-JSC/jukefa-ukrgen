@@ -66,6 +66,9 @@ class address_speller:
         #: a scratch multiply's three steps' group, numbered
         self.next_scratch = 0
         reg = self.gen.greg(0)
+        #: an immediate added into another register one instruction
+        self.imm_from = 1 == len([l for l in asmops.add_imm_from(self.gen, src=self.gen.greg(1), dst=reg, imm=16)
+                                  .splitlines() if l.strip()])
         #: an add of three registers one instruction (not x86's: a copy too)
         self.three_operands = 1 == len([l for l in asmops.add(self.gen, dst=reg, reg1=self.gen.greg(1),
                                                               reg2=self.gen.greg(2)).splitlines() if l.strip()])
@@ -248,6 +251,8 @@ class address_speller:
             return self.elements_of(step[1], step[2])
         if "from" == kind:
             return self.step_delta(step[1], comp)
+        if "from_imm" == kind:
+            return sym.const(step[1] // self.esize(comp))
         if kind in ("scratch_set", "scratch_mul"):
             return sym.const(0)
         if "scratch_add" == kind:
@@ -378,6 +383,11 @@ class address_speller:
                 if "reg" == st[0] == ns[0] and src == dst and st[1] == ns[1] and st[3] == ns[3] \
                         and {st[2], ns[2]} == {"add", "sub"}:
                     out += self.rebuilt([op, nxt], [], comp, dst, dst)
+                    i += 2
+                    continue
+                # a copy and an immediate: one add from the source
+                if "copy" == st[0] and "imm" == ns[0] and self.imm_from and abs(ns[1]) <= MERGED_IMMEDIATE:
+                    out += self.rebuilt([op, nxt], [("from_imm", ns[1])], comp, src, dst)
                     i += 2
                     continue
                 # a copy and a step on it: one step from the source

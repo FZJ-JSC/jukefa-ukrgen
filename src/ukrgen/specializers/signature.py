@@ -414,9 +414,15 @@ class signature_specializer:
                     and "lane" not in op.properties:
                 # no column pointers for this component (--COMP-column-pointers
                 # 0: its pattern's registers - phase+rotate's - in their place):
-                # its register walks there
-                self.walk_to(comp, reg, strided, inserted, scalar_tile)
-                rel = {f: c for f, c in rel.items() if not f}
+                # its register walks there - to the access exactly where its
+                # forms post-increment by a register (NEON's ld1/st1): an
+                # access at its register takes its walk's next step (ldinc),
+                # one with an immediate (ldr q's) can't
+                exact = rel.get((), 0) and any(
+                    {"POSTINC"} == {m.name for m in s.modifiers} - {"MASK", "STRUCT"} and "increg" in s.operands
+                    for s in _sigs(op.sigs))
+                self.walk_to(comp, reg, {**strided, (): rel[()]} if exact else strided, inserted, scalar_tile)
+                rel = {} if exact else {f: c for f, c in rel.items() if not f}
                 strided = {}
             key = (comp, reg, tuple(sorted(strided.items())))
             columns = [k for k in self.pointer_regs if k[:2] == (comp, reg) and "walk" != k[2]]

@@ -1525,6 +1525,8 @@ class signature_emitter:
             return [asmops.add(self.gen, dst=dest, reg1=src, reg2=self.vl_multiple(step[1], step[2]))]
         if "from_stride" == step[0]:
             return [asmops.add(self.gen, dst=dest, reg1=src, reg2=self.stride_reg(step[1]))]
+        if "from_imm" == step[0]:
+            return [asmops.add_imm_from(self.gen, src=src, dst=dest, imm=step[1])]
         if "scratch_set" == step[0]:
             # a scratch multiply's first step: its register - none free, the
             # group's last step spells its run instead

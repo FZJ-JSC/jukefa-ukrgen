@@ -37,6 +37,11 @@ def add_imm(gen: asmgen, *, reg: greg_base, imm: int) -> str:
     return gen.add(adreg=reg, bimm=imm, cdreg=reg, a_dt=GP, c_dt=GP)
 
 
+def add_imm_from(gen: asmgen, *, src: greg_base, dst: greg_base, imm: int) -> str:
+    """dst = src + imm (AArch64's add x0, x3, #16; RISC-V's addi)"""
+    return gen.add(adreg=src, bimm=imm, cdreg=dst, a_dt=GP, c_dt=GP)
+
+
 def arith(gen: asmgen, op: str, *, dst: greg_base, reg1: greg_base, reg2: greg_base) -> str:
     """
     dst = reg1 op reg2 - op add or sub. An add into a third register where
