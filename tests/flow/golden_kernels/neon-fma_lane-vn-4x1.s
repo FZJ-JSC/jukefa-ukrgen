@@ -409,15 +409,15 @@ add x2,x0,x6
 add x1,x2,x7
 st1 {v1.d}[1], [x1]
 add x8,x0,x6, LSL #1
-add x1,x8,x7
-st1 {v2.d}[1], [x1]
 add x9,x0,x6
+add x1,x8,x7
+st1 {v1.d}[0], [x9], x6
+st1 {v2.d}[1], [x1]
+st1 {v2.d}[0], [x9], x6
 st1 {v0.d}[0], [x0]
 add x10,x0,x6
 add x10,x10,x6, LSL #1
 add x1,x10,x7
-st1 {v1.d}[0], [x9], x6
-st1 {v2.d}[0], [x9], x6
 st1 {v3.d}[0], [x9]
 st1 {v3.d}[1], [x1]
 b .ukr0_cases_end
@@ -434,17 +434,17 @@ add x9,x0,x6, LSL #1
 st1 {v5.d}[1], [x1]
 add x1,x2,x7
 st1 {v0.d}[1], [x1]
+st1 {v0.d}[0], [x8], x6
+st1 {v1.d}[0], [x8], x6
 st1 {v5.d}[0], [x0]
-fmul v2.2d,v3.2d,v4.2d
+fmul v0.2d,v3.2d,v4.2d
 add x1,x9,x7
 add x10,x0,x6
 st1 {v1.d}[1], [x1]
-st1 {v0.d}[0], [x8], x6
 add x10,x10,x6, LSL #1
 add x1,x10,x7
-st1 {v1.d}[0], [x8], x6
-st1 {v2.d}[0], [x8]
-st1 {v2.d}[1], [x1]
+st1 {v0.d}[0], [x8]
+st1 {v0.d}[1], [x1]
 b .ukr0_cases_end
 .ukr0_case8:
 mov x0,x3

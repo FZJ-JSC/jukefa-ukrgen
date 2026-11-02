@@ -94,8 +94,14 @@ class ldinc(lsc_irmod):
         return False
 
     @staticmethod
-    def post_increment(op, elements: int):
-        op.increment = sym.const(elements)
+    def post_increment(op, increment):
+        """
+        An access post-incrementing its address register: by elements, or by
+        a polynomial of them (a stride's register, an offset's) - the access
+        writes the register too, so the scheduler keeps the register's other
+        accesses in order around it
+        """
+        op.increment = increment if isinstance(increment, sym) else sym.const(increment)
         op.mods.add(ldst_modifier.postinc)
         if 0 not in op.writes:
             op.writes = sorted(op.writes + [0])
@@ -108,17 +114,22 @@ class ldinc(lsc_irmod):
             op = ops[i]
             nxt = ops[i + 1] if i + 1 < len(ops) else None
             terms = dict(op.delta.terms) if isinstance(op, lsc_addr_compute) else {}
+            # a walk's step adding a planned offset's register (cs - 3 rs): a
+            # register increment by it, its spelling kept for where the
+            # register was given up
+            st = (op.properties or {}).get("step") if isinstance(op, lsc_addr_compute) else None
+            by_offset = st is not None and "offset" == st[0]
             # a walk's step by one stride: a register increment (spelled steps)
             by_stride = 1 == len(terms) and all(len(f) == 1 and f[0].startswith("stride(") and 1 == c
                                                 for f, c in terms.items())
             if isinstance(op, lsc_addr_compute) and isinstance(nxt, (lsc_load, lsc_store)) \
-                    and (set(terms) <= {()} or by_stride) \
+                    and (set(terms) <= {()} or by_stride or by_offset) \
                     and nxt.indices[0].indices == op.indices[1].indices \
                     and nxt.indices[0].component == op.indices[1].component:
                 comp = op.indices[0].component
                 key = (comp, op.indices[1].indices[0])
                 src = op.indices[0].indices[0]
-                offset = None if by_stride else dict(op.delta.terms).get((), 0)
+                offset = None if by_stride or by_offset else dict(op.delta.terms).get((), 0)
                 prev = chains.get(key)
                 # a walk (a = a + c) moves by its own delta: that is the
                 # increment; a scratch computation (s = a + c) by the distance
@@ -134,9 +145,11 @@ class ldinc(lsc_irmod):
                 # a walk's step: the register's previous access, however the
                 # register was set (from another: x0 = x3 + 16), nothing else
                 # having used it since
-                if prev is not None and (walk or prev[2] == src) and by_stride:
+                if prev is not None and (walk or prev[2] == src) and (by_stride or by_offset):
                     if walk and at_reg and self.check_reg(prev[0]):
-                        prev[0].increment = op.delta
+                        self.post_increment(prev[0], op.delta)
+                        if by_offset:
+                            prev[0].properties["increment_step"] = st
                         out.append(nxt)
                         chains[key] = (nxt, None, src)
                         fused += 1

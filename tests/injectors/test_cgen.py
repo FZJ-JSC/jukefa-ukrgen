@@ -1275,6 +1275,45 @@ int main( void )
         for out in self.run_c(c.isa, src, [k], [[QEMU, "-cpu", "max"]], [f"-DUKR={k.symbol}", "-DWT=double"], cc=cc):
             self.assertIn("81 runs, 0 wrong", out, k.symbol)
 
+    def test_neon_offset_post_increment(self):
+        # C's strided case walks a column's lanes (+rs), then to the next
+        # column (cs - rs): with offset registers that move is one planned
+        # register, the column's last lane access post-incrementing by it
+        # (ldinc on an offset step; the step's spelling where the register was
+        # given up). The access writes its register: the scheduler kept a
+        # reordered load from the 1x4's beta case (it moved past a post-
+        # increment). The vm family under auto shorter than with 4 pointers,
+        # every size built; its 2x8 right under qemu
+        cc = ["aarch64-linux-gnu-gcc", "-static"]
+        count = lambda t: sum(1 for l in t.splitlines() if l.strip() and not l.strip().endswith(":")
+                              and not l.strip().startswith((".", "#", "//")))
+        c = configuration.from_files({("gemm", "FP64"): os.path.join(ROOT, "ukrconfig", "neon", "fma_lane", "dgemm.yaml")})
+        fam = next(f for f in c.families if "vm" == f.name)
+        totals, kernels = {}, {}
+        for label, extra in (("pointers", {"C-column-pointers": "4"}),
+                             ("auto", {"C-column-pointers": "0", "max-offset-registers": "auto"})):
+            f = copy.deepcopy(fam)
+            f.params.update(extra)
+            built, skipped = build_gemm(c.isa, c.name, f)
+            totals[label] = (len(built), sum(count(asm_source(k)) for k in built))
+            kernels[label] = {tuple(k.size): k for k in built}
+        self.assertEqual(totals["pointers"][0], totals["auto"][0], totals)
+        self.assertLess(totals["auto"][1], totals["pointers"][1], totals)
+        f = copy.deepcopy(fam)
+        f.sizes = {"m": [1], "n": [4]}
+        f.params.update({"C-column-pointers": "0", "max-offset-registers": "4"})
+        built, skipped = build_gemm(c.isa, c.name, f)
+        self.assertTrue(built, skipped)
+        k = kernels["auto"][(2, 8)]
+        if not (shutil.which(cc[0]) and shutil.which(QEMU)):
+            return
+        src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator(c.isa)) + gemm_wrapper(k) + \
+            f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, 'double', k.vl_fn)}; }}\n" \
+            f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, 'double', k.vl_fn)}; }}\n" + \
+            open(os.path.join(HERE, "wrapper_harness.c")).read()
+        for out in self.run_c(c.isa, src, [k], [[QEMU, "-cpu", "max"]], [f"-DUKR={k.symbol}", "-DWT=double"], cc=cc):
+            self.assertIn("81 runs, 0 wrong", out, k.symbol)
+
     def test_lanes_indexed_x86(self):
         # without column pointers a column's lanes are one register's, lane j
         # at (base, stride, j) - x86's index forms of vmovsd, vmovhpd (asmgen

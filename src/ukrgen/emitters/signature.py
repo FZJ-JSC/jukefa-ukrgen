@@ -1344,7 +1344,26 @@ class signature_emitter:
         if increment is not None:
             # a post-increment: the access at the register, then the register on
             strides = [f for f in dict(increment.terms) if f]
-            if strides:
+            inc_step = (op.properties or {}).get("increment_step")
+            if inc_step is not None:
+                # by an offset's register (a walk's offset step fused: ldinc),
+                # where this region still has it - else the access, then the
+                # step's spelling (the register given up for a needed value)
+                _, comp_o, amount_o, fallback = inc_step
+                inc_reg = None
+                if (str(amount_o), comp_o) in self.offset_plan:
+                    try:
+                        inc_reg = self.offset_value(amount_o, comp_o)
+                    except (IndexError, specialization_error):
+                        inc_reg = None
+                data = self.reg(op.indices[1], op.rtypes[1])
+                if inc_reg is not None:
+                    line = self._mem(op, data, areg, immediate, increment_reg=inc_reg)
+                else:
+                    line = self._mem(op, data, areg, immediate)
+                    if line is not None:
+                        line = "\n".join([line] + [l for sub in fallback for l in self.move_step(sub, areg, areg)])
+            elif strides:
                 # by a stride's register (a walk's step fused: ldinc)
                 line = self._mem(op, self.reg(op.indices[1], op.rtypes[1]), areg, immediate,
                                  increment_reg=self.stride_reg(strides[0][0]))
