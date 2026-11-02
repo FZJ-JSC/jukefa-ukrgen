@@ -239,6 +239,34 @@ class signature_specializer:
                   and ("adreg" not in s.operands or s.operands["adreg"].dt == dt)}
         return (factor, count) if count in scales else None
 
+    def plan_jumps(self, ops) -> dict:
+        """
+        --ldinc-imm-offsets last: runs of consecutive accesses one way (loads,
+        stores: their registers apart) to one column of a component that walks
+        and post-increments - their offsets alike but for the constant (a
+        column's rows) - each run's first access and how far its last row is
+        :return: id(first access) -> elements to the last row
+        """
+        out, runs = {}, {}
+        for op in ops:
+            if not isinstance(op, (lsc_load, lsc_store)) or op.offset is None:
+                continue
+            comp = op.indices[0].component
+            if 0 != self.column_pointers(comp) or not any(
+                    {"POSTINC"} == {m.name for m in s.modifiers} - {"MASK", "STRUCT"} for s in _sigs(op.sigs)):
+                continue
+            terms = dict(self.program.offsets.elements_offset(op.offset, self.program.strides.get(comp, {})).terms)
+            const = terms.pop((), 0)
+            key = (comp, isinstance(op, lsc_load))
+            column = tuple(sorted(terms.items()))
+            run = runs.get(key)
+            if run is not None and run["column"] == column and const > run["last"]:
+                run["last"] = const
+                out[id(run["first"])] = const - run["base"]
+                continue
+            runs[key] = {"column": column, "first": op, "base": const, "last": const}
+        return out
+
     def register_offset_form(self, op, comp: str) -> bool:
         """
         Whether the operation has a register offset form at the access's type
@@ -286,6 +314,8 @@ class signature_specializer:
         #: imm-offsets): all - by the immediate (ldr q's [x0, #16]); none - the
         #: register walks to it (where the access's forms post-increment)
         self.imm_offsets = "all"
+        #: --ldinc-imm-offsets last: id(first access) -> elements to its last row
+        self.jumps = {}
         # what's been placed and walked, the column pointers made on first use
         self.placed = set()
         self.walked_by = {}
@@ -587,6 +617,19 @@ class signature_specializer:
         # at its register exactly (no immediate): only such an access post-
         # increments (ld1/st1 take no offset; ldr q's immediate can't) - ldinc
         op.properties["at_register"] = 0 == immediate
+        jump = self.jumps.get(id(op)) if 0 == immediate else None
+        if jump:
+            # --ldinc-imm-offsets last: the register on to the column's last row
+            # right after its first (ldinc: ldr q0, [x0], #jump) - the rows
+            # between by negative immediates, the last at the register, the
+            # next column's walk from there (the remainder an offset)
+            step = lsc_addr_compute(comp, reg, reg, sym.const(jump), scalar_tile)
+            step.properties = {"jump": True}
+            self.positions[(comp, reg)] = self.positions[(comp, reg)] + sym.const(jump)
+            walked = self.walked_by
+            walked[(comp, reg)] = walked.get((comp, reg), sym.const(0)) + sym.const(jump)
+            self.walked_by = walked
+            return inserted + [op, step]
         return inserted + [op]
 
     def adapt_slices(self, op) -> list:
@@ -739,6 +782,9 @@ class signature_specializer:
         filled = [s for s in ("prologue", "body", "epilogue", "tail", "subtail") if getattr(block, s)]
         for section in ("prologue", "body", "epilogue", "tail", "subtail"):
             ops = []
+            # --ldinc-imm-offsets last: each column's first access jumps its
+            # register to the column's last row (plan_jumps)
+            self.jumps = self.plan_jumps(getattr(block, section)) if "last" == self.imm_offsets else {}
             for op in getattr(block, section):
                 ops += self.adapt(op)
             # registers walked in this section back where it found them: the

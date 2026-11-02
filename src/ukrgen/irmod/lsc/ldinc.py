@@ -37,12 +37,14 @@ class ldinc(lsc_irmod):
     #: how an access whose register walks reaches an immediate offset - the
     #: specializer reads it (ldinc-imm-offsets): the walk it asks for is
     #: decided before the moves are spelled and their offsets planned
-    params = [irmod_param(name="imm-offsets", default="all", choices=("all", "none"),
+    params = [irmod_param(name="imm-offsets", default="all", choices=("all", "none", "last"),
                           description="how an access whose register walks reaches an immediate offset (a "
                                       "column's rows): all - by the immediate (ldr q0, [x0, #16]); none - the "
                                       "register walks to it where the access post-increments (ld1 {v0.2d}, "
-                                      "[x0], #16; the column's change an offset register's post-increment). "
-                                      "Read when specializing")]
+                                      "[x0], #16; the column's change an offset register's post-increment); "
+                                      "last - a column's first access jumps to its last row (ldr q0, [x0], "
+                                      "#jump), the rows between by negative immediates, the last row "
+                                      "post-incrementing to the next column. Read when specializing")]
     constraints = ("consecutive accesses through one scratch address register set from "
                    "the same source, the distance between them a post-increment one of "
                    "the earlier access's signatures takes - where a signature states no "
@@ -66,7 +68,7 @@ class ldinc(lsc_irmod):
             return esize
         return None if self.ctx.gen.is_vla else self.ctx.gen.simd_size
 
-    def check(self, op, increment: int) -> bool:
+    def check(self, op, increment: int, jump: bool = False) -> bool:
         """
         Whether one of an access's signatures post-increments its address
         register by this many bytes - by its transfer size only: ld1/st1's
@@ -75,7 +77,7 @@ class ldinc(lsc_irmod):
         the immediate offset it replaces (two micro-ops, the register's write
         between the accesses around it): not fused here unasked.
         """
-        if increment != self.transfer_size(op):
+        if increment != self.transfer_size(op) and not jump:
             return False
         for sig in _sigs(op.sigs):
             if _masked(sig) or {m.name for m in sig.modifiers} - {"MASK"} != {"POSTINC"}:
@@ -134,6 +136,24 @@ class ldinc(lsc_irmod):
             # a walk's step by one stride: a register increment (spelled steps)
             by_stride = 1 == len(terms) and all(len(f) == 1 and f[0].startswith("stride(") and 1 == c
                                                 for f, c in terms.items())
+            # --ldinc-imm-offsets last: a column's jump to its last row fuses into
+            # the access before it on its register - whatever comes next (a load
+            # and a store of C interleave, their registers apart)
+            if isinstance(op, lsc_addr_compute) and (op.properties or {}).get("jump") \
+                    and "last" == self.values.get("imm-offsets") \
+                    and op.indices[0].indices == op.indices[1].indices and set(dict(op.delta.terms)) <= {()}:
+                comp = op.indices[0].component
+                key = (comp, op.indices[1].indices[0])
+                prev = chains.get(key)
+                elements = dict(op.delta.terms).get((), 0)
+                if prev is not None and prev[0].increment is None \
+                        and (prev[0].properties or {}).get("at_register") \
+                        and self.check(prev[0], elements * adt_size(self.ctx.component_dts[comp]), True):
+                    self.post_increment(prev[0], elements)
+                    chains[key] = (prev[0], None, prev[2])
+                    fused += 1
+                    i += 1
+                    continue
             if isinstance(op, lsc_addr_compute) and isinstance(nxt, (lsc_load, lsc_store)) \
                     and (set(terms) <= {()} or by_stride or by_offset) \
                     and nxt.indices[0].indices == op.indices[1].indices \
@@ -169,7 +189,10 @@ class ldinc(lsc_irmod):
                         continue
                 elif prev is not None and prev[2] == src and at_reg and (walk or prev[1] is not None):
                     gap = offset if walk else offset - prev[1]
-                    if self.check(prev[0], gap * adt_size(self.ctx.component_dts[comp])):
+                    # --ldinc-imm-offsets last: a column's jump to its last row
+                    # (the specializer's) any increment the access's forms take
+                    jump = "last" == self.values.get("imm-offsets") and (op.properties or {}).get("jump", False)
+                    if self.check(prev[0], gap * adt_size(self.ctx.component_dts[comp]), jump):
                         self.post_increment(prev[0], gap)
                         out.append(nxt)
                         chains[key] = (nxt, offset, src)

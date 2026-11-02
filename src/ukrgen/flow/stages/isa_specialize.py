@@ -51,7 +51,7 @@ class isa_specialize_stage(stage):
         # ldinc's parameter (irmod/lsc/ldinc.py): read here, the walk it asks for
         # decided before the moves are spelled and their offsets planned
         self.params["ldinc-imm-offsets"] = stage_param(
-                value=None, default="all", required=False, choices=["all", "none"],
+                value=None, default="all", required=False, choices=["all", "none", "last"],
                 description="ldinc: how an access whose register walks reaches an immediate offset "
                             "(read when specializing)")
         self.params["max-imm-offset"] = stage_param(
@@ -118,8 +118,8 @@ class isa_specialize_stage(stage):
                 sp = signature_specializer(self.context, program)
                 sp.max_imm_offset = self.imm_limit()
                 sp.imm_offsets = str(self.params["ldinc-imm-offsets"].value or "all")
-                if sp.imm_offsets not in ("all", "none"):
-                    raise stage_error(f"--ldinc-imm-offsets {sp.imm_offsets!r}: all or none")
+                if sp.imm_offsets not in ("all", "none", "last"):
+                    raise stage_error(f"--ldinc-imm-offsets {sp.imm_offsets!r}: all, none or last")
                 sp.assumed = self.assumed_state()
                 sp.program.offset_registers = self.offset_budget(self.context)
                 sp.specialize()

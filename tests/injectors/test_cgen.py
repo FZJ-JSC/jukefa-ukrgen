@@ -1419,6 +1419,36 @@ int main( void )
                               [f"-DUKR={k.symbol}", "-DWT=double"], cc=cc):
             self.assertIn("81 runs, 0 wrong", out, k.symbol)
 
+    def test_imm_offsets_last(self):
+        # --ldinc-imm-offsets last: a column's first access jumps its register
+        # to the column's last row (ldr/str q's post-index form, asmgen 0102),
+        # the rows between by negative immediates, the last row at the
+        # register - one register write a column, not one a row. NEON's
+        # fma_lane vm 3vx4 in knm (a column's three rows together), walking,
+        # auto: jumps and negative immediates there (two rows are none's: the
+        # jump the transfer, nothing between); right under qemu
+        cc = ["aarch64-linux-gnu-gcc", "-static"]
+        c = configuration.from_files({("gemm", "FP64"): os.path.join(ROOT, "ukrconfig", "neon", "fma_lane", "dgemm.yaml")})
+        f = copy.deepcopy(next(x for x in c.families if "vm" == x.name))
+        f.sizes = {"m": [3], "n": [4]}
+        f.params.update({"order": "knm", "C-column-pointers": "0", "max-offset-registers": "auto",
+                         "ldinc-imm-offsets": "last"})
+        built, skipped = build_gemm(c.isa, c.name, f)
+        self.assertTrue(built, skipped)
+        k = built[0]
+        lines = [l.strip() for l in asm_source(k).splitlines()]
+        self.assertTrue([l for l in lines if l.startswith(("ldr q", "str q")) and "], #" in l], k.symbol)
+        self.assertTrue([l for l in lines if l.startswith(("ldr q", "str q", "ldur q", "stur q")) and "#-" in l],
+                        k.symbol)
+        if not (shutil.which(cc[0]) and shutil.which(QEMU)):
+            return
+        src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator(c.isa)) + gemm_wrapper(k) + \
+            f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, 'double', k.vl_fn)}; }}\n" \
+            f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, 'double', k.vl_fn)}; }}\n" + \
+            open(os.path.join(HERE, "wrapper_harness.c")).read()
+        for out in self.run_c(c.isa, src, [k], [[QEMU, "-cpu", "max"]], [f"-DUKR={k.symbol}", "-DWT=double"], cc=cc):
+            self.assertIn("81 runs, 0 wrong", out, k.symbol)
+
     def test_lanes_indexed_x86(self):
         # without column pointers a column's lanes are one register's, lane j
         # at (base, stride, j) - x86's index forms of vmovsd, vmovhpd (asmgen
