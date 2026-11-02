@@ -69,11 +69,14 @@ class ldinc(lsc_irmod):
     def check(self, op, increment: int) -> bool:
         """
         Whether one of an access's signatures post-increments its address
-        register by this many bytes. asmgen's NEON signatures don't constrain
-        the increment, though AArch64's structure loads (ld1r, ld1) only take
-        their transfer size while ldr takes a range: without a stated
-        constraint only the transfer size is assumed.
+        register by this many bytes - by its transfer size only: ld1/st1's
+        own increment. asmgen takes other immediates too (ldr/str q's post-
+        index form, -256..255), but such a post-increment can cost more than
+        the immediate offset it replaces (two micro-ops, the register's write
+        between the accesses around it): not fused here unasked.
         """
+        if increment != self.transfer_size(op):
+            return False
         for sig in _sigs(op.sigs):
             if _masked(sig) or {m.name for m in sig.modifiers} - {"MASK"} != {"POSTINC"}:
                 continue
