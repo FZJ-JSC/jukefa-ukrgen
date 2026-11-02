@@ -4,7 +4,7 @@ Tests for the projection-based tiling generator
 
 import unittest
 
-from ukrgen.generators.tiling import generate_tiling
+from ukrgen.generators.tiling import generate_tiling, split_levels
 from ukrgen.flow.stages.ukr import gemm_composition, pack_composition
 
 
@@ -76,3 +76,54 @@ class test_lanes(unittest.TestCase):
                        tile_offsets=[[0, 0], [0, 0], [0, 0]], subindices=[0, 1, 0], opstr="fma")
         self.assertEqual(str(op), str(op))
         self.assertEqual([[0, 0], [0, 0], [0, 0]], op.tile_offsets)
+
+    # two-level orders (the old mm generator's MmNnKk): an uppercase index its
+    # registers, the lowercase the lanes within one
+
+    def test_split_levels(self):
+        self.assertEqual([("k", None), ("n", "reg"), ("m", None), ("n", "lane")],
+                         split_levels(("k", "N", "m", "n")))
+        self.assertEqual([("k", None), ("m", None), ("n", None)], split_levels(("k", "m", "n")))
+
+    def _mn(self, ops):
+        return [op.coord("AB") for op in ops]
+
+    def test_two_levels_map_back(self):
+        # B's register holds two columns: kNmn multiplies per B register, per A
+        # vector, per lane - n = 2 N + lane; the same points as kmn's
+        mm = gemm_composition.get_sto("mm")
+        ops = generate_tiling(order=("k", "N", "m", "n"), counts={"m": 3, "n": 8, "k": 1},
+                              operands=mm.operand_indices, factors={"n": 2})
+        mn = self._mn(ops)
+        self.assertEqual([(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (0, 2), (0, 3)], mn[:8])
+        plain = generate_tiling(order=("k", "m", "n"), counts={"m": 3, "n": 8, "k": 1},
+                                operands=mm.operand_indices)
+        self.assertEqual(sorted(self._mn(plain)), sorted(mn))
+        self.assertEqual(24, len(mn))
+
+    def test_two_levels_from_lanes(self):
+        # an operand used a lane at a time (lane_axes) gives the same levels
+        mm = gemm_composition.get_sto("mm")
+        args = dict(order=("k", "N", "m", "n"), counts={"m": 2, "n": 4, "k": 1}, operands=mm.operand_indices)
+        self.assertEqual(self._mn(generate_tiling(factors={"n": 2}, **args)),
+                         self._mn(generate_tiling(lanes={"B": ("n", 2)}, **args)))
+
+    def test_two_levels_without_lanes(self):
+        # where no operand's lanes run along n (a store of C) the uppercase
+        # iterates once, the lowercase the whole index in its place: kNmn is kmn
+        mm = gemm_composition.get_sto("mm")
+        args = dict(counts={"m": 2, "n": 3, "k": 1}, operands=mm.operand_indices)
+        self.assertEqual(self._mn(generate_tiling(order=("k", "m", "n"), **args)),
+                         self._mn(generate_tiling(order=("k", "N", "m", "n"), **args)))
+
+    def test_two_levels_past_the_count(self):
+        # 5 columns, 2 a register: the third register's second lane is past
+        # the count - skipped
+        mm = gemm_composition.get_sto("mm")
+        ops = generate_tiling(order=("k", "N", "m", "n"), counts={"m": 2, "n": 5, "k": 1},
+                              operands=mm.operand_indices, factors={"n": 2})
+        mn = self._mn(ops)
+        self.assertEqual(10, len(mn))
+        self.assertEqual({(m, n) for m in range(2) for n in range(5)}, set(mn))
+        self.assertEqual([(0, 4), (1, 4)], mn[-2:])
+

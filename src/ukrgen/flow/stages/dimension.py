@@ -50,7 +50,11 @@ class dimension_stage(stage):
                 value=",".join(default),
                 default=",".join(default),
                 description="Tiling order, outermost index first, comma separated "
-                            "(single-letter indices may be run together: kmn)",
+                            "(single-letter indices may be run together: kmn). An index in "
+                            "two levels where its uppercase letter stands too (kNmn): the "
+                            "uppercase the registers of an operand whose lanes run along it, "
+                            "the lowercase the lanes within one - where no operand's lanes "
+                            "do (a store), the lowercase the whole index in its place",
                 required=False)
 
     def progress(self):
@@ -78,8 +82,12 @@ class dimension_stage(stage):
 
         raw = self.params["order"].value
         order = raw.split(",") if "," in raw else list(raw)
-        if sorted(order) != sorted(self.indices):
-            raise stage_error(f"--order must list each of {self.indices} once, got {raw}")
+        uppers = [o for o in order if 1 == len(o) and o.isupper()]
+        lowers = [o for o in order if o not in uppers]
+        if sorted(lowers) != sorted(self.indices) or \
+                any(u.lower() not in lowers or uppers.count(u) > 1 for u in uppers):
+            raise stage_error(f"--order must list each of {self.indices} once - for two levels an "
+                              f"index's uppercase letter too, once, anywhere (kNmn) - got {raw}")
 
         self.context.dims = dims
         self.context.order = tuple(order)

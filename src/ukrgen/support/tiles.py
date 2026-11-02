@@ -189,6 +189,45 @@ def lane_axes(gen: asmgen,
     return found
 
 
+def lane_factors(gen: asmgen,
+                 impl: resolved_operation_chain,
+                 req: ast_node,
+                 layouts: dict[str, str | None] | None = None) -> dict[str, int]:
+    """
+    How many of an index's elements one register of an operand holds where
+    the implementation takes the operand a lane at a time - an order's two
+    levels (kNmn: N the registers, n the lanes). lane_axes' operands (use_lane,
+    SVE's bc_block) and bc_lanes': a vector of the operand loaded, each FMA
+    one lane of it (NEON's fma_lane B; the lanefuse irmod fuses the loads -
+    its register tiles stay as they are)
+    :return: index -> lanes per register
+    """
+    layouts = layouts or {}
+    out: dict[str, int] = {}
+    for axis, count in lane_axes(gen, impl, req, layouts).values():
+        out[axis] = max(out.get(axis, 1), count)
+    if gen.is_vla:
+        return out
+    leaves = {leaf.name: [i for i in leaf.indices if i is not None]
+              for leaf in for_each_operand(req, lambda x: x)}
+    for res, step in zip(impl.resolved_chain, impl.math_chain):
+        sig = res.compute_sg.representative
+        for hw_name, math_name in step.name_mapping.items():
+            shape = sig.operands.get(hw_name)
+            strat = res.operand_strategies.get((hw_name, dmd.IN))
+            if shape is None or strat is None or not leaves.get(math_name):
+                continue
+            if "bc_lanes" != strat.rsln.unique_tag:
+                continue
+            count = gen.simd_size // adt_size(shape.dt)
+            axis = layouts.get(math_name)
+            if axis not in leaves[math_name]:
+                axis = leaves[math_name][-1]
+            if count > 1:
+                out[axis] = max(out.get(axis, 1), count)
+    return out
+
+
 def register_tiles(tiles: dict[str, tile], lanes: dict[str, tuple[str, int]],
                    req: ast_node) -> dict[str, tile]:
     """

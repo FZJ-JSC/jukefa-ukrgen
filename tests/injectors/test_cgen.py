@@ -1354,6 +1354,45 @@ int main( void )
         for out in self.run_c(c.isa, src, [k], [[QEMU, "-cpu", "max"]], [f"-DUKR={k.symbol}", "-DWT=double"], cc=cc):
             self.assertIn("81 runs, 0 wrong", out, k.symbol)
 
+    def test_two_level_orders(self):
+        # --order with an index's two levels (kNmn): N the registers of B, whose
+        # lanes fma_lane takes one at a time (bc_lanes: lane_factors), n its
+        # lanes. The 3vx8's k loop is knm's (one B register live at a time:
+        # under kmn the 3vx8 finds no register for B), its C stored as under
+        # kmn; right under qemu. An uppercase letter needs its lowercase, once
+        cc = ["aarch64-linux-gnu-gcc", "-static"]
+        c = configuration.from_files({("gemm", "FP64"): os.path.join(ROOT, "ukrconfig", "neon", "fma_lane", "dgemm.yaml")})
+        fam = next(f for f in c.families if "vm" == f.name)
+        def kernel(order, m=3, n=8):
+            f = copy.deepcopy(fam)
+            f.sizes = {"m": [m], "n": [n]}
+            f.params["order"] = order
+            return build_gemm(c.isa, c.name, f)
+        def k_loop(asm):
+            lines = [l.strip() for l in asm.splitlines() if l.strip()]
+            i = next(j for j, l in enumerate(lines) if l.endswith("_loop:"))
+            j = next(j for j in range(i + 1, len(lines)) if lines[j].endswith(lines[i][:-1]) and not lines[j].endswith(":"))
+            return lines[i + 1:j + 1]
+        built, skipped = kernel("kNmn")
+        self.assertTrue(built, skipped)
+        knm, _ = kernel("knm")
+        # the same loop - as long, the same instructions - in another order
+        import collections
+        mix = lambda body: collections.Counter(l.split()[0] for l in body)
+        self.assertEqual(mix(k_loop(asm_source(knm[0]))), mix(k_loop(asm_source(built[0]))))
+        for bad in ("kMn", "kNNmn"):
+            _, skipped = kernel(bad, 1, 4)
+            self.assertTrue(skipped and "--order must list" in str(skipped[0][-1]), (bad, skipped))
+        k = built[0]
+        if not (shutil.which(cc[0]) and shutil.which(QEMU)):
+            return
+        src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator(c.isa)) + gemm_wrapper(k) + \
+            f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, 'double', k.vl_fn)}; }}\n" \
+            f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, 'double', k.vl_fn)}; }}\n" + \
+            open(os.path.join(HERE, "wrapper_harness.c")).read()
+        for out in self.run_c(c.isa, src, [k], [[QEMU, "-cpu", "max"]], [f"-DUKR={k.symbol}", "-DWT=double"], cc=cc):
+            self.assertIn("81 runs, 0 wrong", out, k.symbol)
+
     def test_lanes_indexed_x86(self):
         # without column pointers a column's lanes are one register's, lane j
         # at (base, stride, j) - x86's index forms of vmovsd, vmovhpd (asmgen

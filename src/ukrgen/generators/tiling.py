@@ -21,6 +21,25 @@ from ..components.tile import tile, dimension_properties as dimp, dimension_type
 _ONE = dimp(dt=dimt.fixed, size=1)
 
 
+def split_levels(order) -> list[tuple[str, str | None]]:
+    """
+    An order's entries as (index, level): level None for an index in one
+    level, "reg" for an uppercase letter whose lowercase stands too (the
+    registers of an operand whose lanes run along it), "lane" for that
+    lowercase (its lanes)
+    """
+    upper = {o.lower() for o in order if 1 == len(o) and o.isupper()}
+    out = []
+    for o in order:
+        if 1 == len(o) and o.isupper():
+            out.append((o.lower(), "reg"))
+        elif o in upper:
+            out.append((o, "lane"))
+        else:
+            out.append((o, None))
+    return out
+
+
 def generate_tiling(*,
                     order: tuple[str, ...],
                     counts: dict[str, int],
@@ -29,11 +48,20 @@ def generate_tiling(*,
                     tiles: dict[str, tile] | None = None,
                     io: dict[str, tuple[bool, bool]] | None = None,
                     lanes: dict[str, tuple[str, int]] | None = None,
-                    opstr: str = "") -> list[operation]:
+                    opstr: str = "",
+                    factors: dict[str, int] | None = None) -> list[operation]:
     """
     Every point of an iteration space, with each operand's coordinate
 
-    :param order: indices of the iteration space, outermost first
+    :param order: indices of the iteration space, outermost first - an index
+                  in two levels where its uppercase letter stands too (kNmn):
+                  the uppercase the registers of an operand whose lanes run
+                  along it, the lowercase the lanes within one (the old mm
+                  generator's MmNnKk orders). Where no operand's lanes run
+                  along the index (a store of C) the uppercase iterates once
+                  and the lowercase the whole index, in its own place: kNmn
+                  multiplies per B register, per A vector, per lane, and
+                  stores C in kmn
     :param counts: number of extents along each index
     :param operands: each operand's indices, None for an axis it doesn't vary along
     :param offset: shift along indices by name, e.g. {"k": 1} for the same
@@ -50,8 +78,10 @@ def generate_tiling(*,
     :raises ValueError: if an operand uses an index outside the iteration space
     """
     offset = offset or {}
+    levels = split_levels(order)
+    plain = [i for i, _ in levels]
     for name, indices in operands.items():
-        stray = [i for i in indices if i is not None and i not in order]
+        stray = [i for i in indices if i is not None and i not in plain]
         if stray:
             raise ValueError(f"{name} varies along {stray}, outside {order}")
 
@@ -60,9 +90,36 @@ def generate_tiling(*,
     lanes = lanes or {}
     io = io or {n: (True, i == 0) for i, n in enumerate(names)}
 
+    # an index's lane count: the lanes of an operand that runs them along it
+    along = {}
+    for axis, count in lanes.values():
+        if axis is not None and count > 1:
+            along[axis] = max(along.get(axis, 1), count)
+    # or a register holding several of the index's extents (the STO's factors)
+    for axis, count in (factors or {}).items():
+        if count > 1:
+            along[axis] = max(along.get(axis, 1), count)
+    def span(index, level):
+        lanes_along = along.get(index, 1)
+        if level is None:
+            return counts[index]
+        if "reg" == level:
+            return -(-counts[index] // lanes_along) if lanes_along > 1 else 1
+        return lanes_along if lanes_along > 1 else counts[index]
     ops = []
-    for position in itertools.product(*(range(counts[i]) for i in order)):
-        point = {i: p + offset.get(i, 0) for i, p in zip(order, position)}
+    for position in itertools.product(*(range(span(i, lvl)) for i, lvl in levels)):
+        point, regs = {}, {}
+        for (i, lvl), p in zip(levels, position):
+            if "reg" == lvl:
+                regs[i] = p
+            else:
+                point[i] = p
+        for i, r in regs.items():
+            lanes_along = along.get(i, 1)
+            point[i] = r * lanes_along + point[i] if lanes_along > 1 else point[i]
+        if any(point[i] >= counts[i] for i in regs):
+            continue                # a register past the index's count
+        point = {i: p + offset.get(i, 0) for i, p in point.items()}
         offsets, lane_pos = [], []
         for name in names:
             axis, count = lanes.get(name, (None, 1))

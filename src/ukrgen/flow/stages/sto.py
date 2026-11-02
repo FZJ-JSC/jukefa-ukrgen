@@ -12,7 +12,7 @@ from ...components.tile import tile, dimension_properties as dimp, dimension_typ
 from ...lsc_model.addressing import sym
 from ...components.operation import operation
 from ...generators.tiling import generate_tiling, generators
-from ...support.tiles import index_extents, kernel_groups, operand_tiles, lane_axes, register_tiles, ONE
+from ...support.tiles import lane_factors, index_extents, kernel_groups, operand_tiles, lane_axes, register_tiles, ONE
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
@@ -193,14 +193,21 @@ class sto_stage(stage):
                         whole = op in resident_components(impl)
                         left[op] = (tile(VLA_ONE, VLA_ONE) if whole else tiles[op], operands[op])
 
-            sto_order = tuple(i for i in order if i in extents)
+            # an uppercase entry (an index's register level, kNmn) stays where
+            # its index does
+            sto_order = tuple(i for i in order
+                              if (i.lower() if 1 == len(i) and i.isupper() else i) in extents)
+            # an index's lanes per register (an order's two levels, kNmn): from
+            # the implementation, where it takes an operand a lane at a time
+            factors = lane_factors(gen, impl, sto.req, self.context.component_layouts) \
+                if sto_kind.COMPUTE == sto.kind else {}
             ops = generate(order=sto_order, counts=counts, operands=operands,
-                           tiles=registers, io=io, lanes=lanes, opstr=opstr)
+                           tiles=registers, io=io, lanes=lanes, opstr=opstr, factors=factors)
             tilings[name] = sto_tiling(sto=name, order=sto_order, extents=extents,
                                        tiles=tiles, ops=ops, registers=registers,
                                        counts=dict(counts),
                                        generate_args=dict(generate=generate,
-                                                          operands=operands,
+                                                          factors=factors, operands=operands,
                                                           tiles=registers, io=io,
                                                           lanes=lanes, opstr=opstr))
             if sto_kind.COMPUTE == sto.kind and slice_loop is not None:
