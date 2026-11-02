@@ -471,7 +471,7 @@ class solve_stage(stage):
     def candidates_key(self) -> tuple:
         """
         What all_candidates' answer is a function of: the hardware and its
-        features, the composition the flow chose, the data types and layouts the
+        features, the composition the flow chose (its storage branches), the data types and layouts the
         STOs see, the tile operations asked of them, the hooks - and not the
         size, which the dimension stage decides after this one has run
         """
@@ -482,7 +482,10 @@ class solve_stage(stage):
             return (v,) if isinstance(v, str) else tuple(map(str, v))
         return (
             str(ctx.params["isa"].value), str(ctx.params["ukr"].value),
-            tuple(values(ctx.params["C-storage"].value)),
+            # the composition's storage branches - alias component and storage,
+            # in their order (a store is offered for what cases before it could
+            # leave) - whatever component they branch, not C's parameter
+            tuple((alias, str(storage)) for alias, storage in ctx.composition.storage_aliases.items()),
             tuple(values(ctx.params["hooks"].value)),
             tuple(sorted((c, dt.name) for c, dt in ctx.component_dts.items())),
             tuple(sorted(ctx.component_layouts.items())),
