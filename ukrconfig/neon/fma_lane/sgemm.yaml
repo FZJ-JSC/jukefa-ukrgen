@@ -6,6 +6,8 @@ families:
   preset: gemm_fma_lane
   vectorize: m
   unroll: 4
+  loop-order: knm           # fma_lane's k loop wants the vectorized dimension innermost: under kmn
+                            # all of B's lane vectors are live at once, the 3x8 (24 accumulators) has none left
   c-storage: [col, any]     # contiguous columns, and strided C
   m: 1..4
   n: [4, 6, 8]

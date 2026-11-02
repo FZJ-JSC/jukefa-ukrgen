@@ -1208,34 +1208,42 @@ int main( void )
             self.assertGreaterEqual(len(moved), 5, sorted(moved))
         self.run_k3_trans14(k)
 
-    def test_avx512_configs_walk(self):
-        # the AVX-512 configurations walk C (column-pointers: {C: 0}): each
-        # gemm family as configured, its default size or its first, right
-        # natively - vn through the storage harness, vm the wrapper's
-        if "avx512f" not in open("/proc/cpuinfo").read():
-            self.skipTest("needs AVX-512")
-        cc = ["gcc", "-mavx512f", "-mavx512dq", "-mfma"]
-        for cfg in ("fma_bc_blocks", "fma_bc_vindex"):
-            for dt, name, wt in (("FP64", "dgemm", "double"), ("FP32", "sgemm", "float")):
-                c = configuration.from_files({("gemm", dt): os.path.join(ROOT, "ukrconfig", "avx512", cfg, f"{name}.yaml")})
-                for fam in c.families:
-                    with self.subTest(cfg=cfg, gemm=name, family=fam.name):
-                        self.assertEqual("0", str(fam.params.get("C-column-pointers")), fam.params)
-                        f = copy.deepcopy(fam)
-                        f.sizes = {"m": [8 if "vn" == fam.name else 2], "n": [3 if "vn" == fam.name else 8]}
-                        built, skipped = build_gemm(c.isa, c.name, f)
-                        self.assertTrue(built, skipped)
-                        k = built[0]
-                        if "vn" == fam.name:
-                            outs = self.run_storage_kernel(c.isa, k, cc, [[]], wt=wt)
-                        else:
-                            src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator(c.isa)) + gemm_wrapper(k) + \
-                                f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, wt, k.vl_fn)}; }}\n" \
-                                f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, wt, k.vl_fn)}; }}\n" + \
-                                open(os.path.join(HERE, "wrapper_harness.c")).read()
-                            outs = self.run_c(c.isa, src, [k], [[]], [f"-DUKR={k.symbol}", f"-DWT={wt}"], cc=cc)
-                        for out in outs:
-                            self.assertIn(" 0 wrong", out, k.symbol)
+    def test_x86_configs_walk(self):
+        # the x86 configurations walk C (column-pointers: {C: 0}) through their
+        # strided case too ([col, any], [row, any]): each gemm family as
+        # configured, at its winning size - AVX2's 4x3v and 3vx4 (12 of 16
+        # vector registers; its strided case's column pointers took 10 of 16
+        # general registers), AVX-512's 8x3v and 2vx8 - right natively
+        cpu = open("/proc/cpuinfo").read()
+        runs = [("avx2", "avx2", ["-mavx2", "-mfma"], ("fma_bc_blocks",), {"vn": (4, 3), "vm": (3, 4)}),
+                ("avx512", "avx512f", ["-mavx512f", "-mavx512dq", "-mfma"], ("fma_bc_blocks", "fma_bc_vindex"),
+                 {"vn": (8, 3), "vm": (2, 8)})]
+        for isa_dir, flag, flags, cfgs, sizes in runs:
+            if flag not in cpu:
+                continue
+            cc = ["gcc"] + flags
+            for cfg in cfgs:
+                for dt, name, wt in (("FP64", "dgemm", "double"), ("FP32", "sgemm", "float")):
+                    c = configuration.from_files({("gemm", dt): os.path.join(ROOT, "ukrconfig", isa_dir, cfg, f"{name}.yaml")})
+                    for fam in c.families:
+                        with self.subTest(cfg=f"{isa_dir}/{cfg}", gemm=name, family=fam.name):
+                            self.assertEqual("0", str(fam.params.get("C-column-pointers")), fam.params)
+                            f = copy.deepcopy(fam)
+                            f.sizes = {"m": [sizes[fam.name][0]], "n": [sizes[fam.name][1]]}
+                            built, skipped = build_gemm(c.isa, c.name, f)
+                            self.assertTrue(built, skipped)
+                            k = built[0]
+                            if "vn" == fam.name:
+                                outs = self.run_storage_kernel(c.isa, k, cc, [[]], wt=wt)
+                            else:
+                                src = "#include \"blis_stub.h\"\n" + vl_helpers([k], make_generator(c.isa)) + \
+                                    gemm_wrapper(k) + \
+                                    f"\ndim_t MR_OF( void ) {{ return {c_expr(k.mr, wt, k.vl_fn)}; }}\n" \
+                                    f"dim_t NR_OF( void ) {{ return {c_expr(k.nr, wt, k.vl_fn)}; }}\n" + \
+                                    open(os.path.join(HERE, "wrapper_harness.c")).read()
+                                outs = self.run_c(c.isa, src, [k], [[]], [f"-DUKR={k.symbol}", f"-DWT={wt}"], cc=cc)
+                            for out in outs:
+                                self.assertIn(" 0 wrong", out, k.symbol)
 
     def test_neon_walks_post_increment(self):
         # without column pointers C's registers walk; on NEON a walk's step is
