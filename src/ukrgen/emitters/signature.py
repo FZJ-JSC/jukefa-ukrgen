@@ -49,7 +49,7 @@ from ..models.lsc.index import lsc_reg_index
 
 
 from ..specializers.signature import (
-    specialization_error, _sigs, _masked, _offset_forms, _accepts, _all_true, _usable, _vl_form, _takes, slice_columns, slice_walkers,
+    specialization_error, _sigs, _masked, _offset_forms, _accepts, _all_true, _usable, _vl_form, _takes, slice_columns, slice_walkers, slice_placements,
 )
 
 @dataclass
@@ -856,7 +856,6 @@ class signature_emitter:
 
         # the plan's registers walk themselves: where each stands, as an offset
         # from its home at this iteration's first slice
-        current = {key: sym.const(0) for key in plan} if plan else {}
         walk_of = {w: key for key, p in (plan or {}).items() for w in p["walks"]}
         # within the general registers allowed (--loop-gregs), a pointer per
         # access column - an offset's part beside vector lengths; tiles a
@@ -881,24 +880,11 @@ class signature_emitter:
                 # its column's own pointer, the vector lengths an immediate
                 _, name, vectors = column_of[w]
                 return [], pointer_regs[(key, name)], vectors
-            rest = dict((target - current[key]).terms)
-            if not rest:
-                return [], self.aregs[key], None
-            vectors = rest.get(("VL",))
-            if vectors and any(_vl_form(sig) and _accepts(sig, "voffset", vectors)
-                               for sig in _sigs(b.sigs)):
-                # the register moved by the rest alone (another column), the
-                # vector lengths an immediate
-                others = {f: c for f, c in rest.items() if ("VL",) != f}
-                out = []
-                if others:
-                    move = sym._make(others)
-                    out = self.add_bytes(self.aregs[key], self.bytes_of(comp, move), comp)
-                    current[key] = current[key] + move
-                return out, self.aregs[key], vectors
-            out = self.add_bytes(self.aregs[key], self.bytes_of(comp, target - current[key]), comp)
-            current[key] = target
-            return out, self.aregs[key], None
+            # the specializer's placement (slice_placements): the move before
+            # it, the vector lengths an immediate
+            _, move, vectors = placed[id(b)]
+            out = self.add_bytes(self.aregs[key], self.bytes_of(comp, move), comp) if move is not None else []
+            return out, self.aregs[key], vectors
         def step_on(slices):
             # every register to the next iteration's home, slices on
             out = []
@@ -908,10 +894,9 @@ class signature_emitter:
                     out += self.add_bytes(ptr, self.bytes_of(key[0], step), key[0])
                 return out
             for key, p in (plan or {}).items():
-                move = sym._make({f: c * slices for f, c in dict(p["step"].terms).items()}) - current[key]
+                move = sym._make({f: c * slices for f, c in dict(p["step"].terms).items()}) - end[key]
                 if dict(move.terms):
                     out += self.add_bytes(self.aregs[key], self.bytes_of(key[0], move), key[0])
-                current[key] = sym.const(0)
             return out
         def release_pointers():
             for (key, name), ptr in pointer_regs.items():
@@ -1038,6 +1023,11 @@ class signature_emitter:
                 out = [asmops.add(self.gen, dst=w, reg1=w, reg2=d)
                        for w, d in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values()]
             return out + [asmops.add_imm(self.gen, reg=index, imm=unroll)]
+        mem = lambda ops: [b for b in ops if isinstance(b, (lsc_load, lsc_store))]
+        if plan and not pointers:
+            order = mem([b for b in op.block if early(b)] + [b for b in op.block if not early(b)]) \
+                if preload else mem(op.block)
+            placed, end = slice_placements(order, plan, walk_of)
         if preload:
             first = [b for b in op.block if early(b)]
             rest = [b for b in op.block if not early(b)]

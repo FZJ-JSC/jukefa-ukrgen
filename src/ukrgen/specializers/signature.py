@@ -141,6 +141,46 @@ def _vl_form(sig) -> bool:
     return {m.name for m in sig.modifiers} - {"MASK"} == {"VOFFSET"} and "voffset" in sig.operands
 
 
+def slice_placements(order: list, plan: dict, walk_of: dict) -> tuple[dict, dict]:
+    """
+    A loop over slices' moves, its walk plan's registers walking (no column
+    pointers): each access of an iteration, from the registers' homes in the
+    order emitted (the block's; preloading, the first copy's loads first), at
+    its plan register - moved there first, or by the rest alone with the
+    vector lengths an immediate where a signature takes them ([x, #n, MUL
+    VL]) - and where the order leaves each register. Every copy (or the
+    iteration) ends at the next home, so an access is placed alike wherever
+    it's emitted
+    :param order: the iteration's loads and stores in the order emitted
+    :return: (placed, end): placed id(access) -> (plan key, the move before
+             it or None, vector lengths an immediate or None); end plan key ->
+             its register's offset from home after the order
+    """
+    current = {key: sym.const(0) for key in plan}
+    placed = {}
+    for b in order:
+        w = b.properties.get("walk", 0)
+        key = walk_of[w]
+        target = plan[key]["walks"][w]
+        rest = dict((target - current[key]).terms)
+        if not rest:
+            placed[id(b)] = (key, None, None)
+            continue
+        vectors = rest.get(("VL",))
+        if vectors and any(_vl_form(sig) and _accepts(sig, "voffset", vectors) for sig in _sigs(b.sigs)):
+            # the register moved by the rest alone (another column), the vector
+            # lengths an immediate
+            others = {f: c for f, c in rest.items() if ("VL",) != f}
+            move = sym._make(others) if others else None
+            if move is not None:
+                current[key] = current[key] + move
+            placed[id(b)] = (key, move, vectors)
+            continue
+        placed[id(b)] = (key, target - current[key], None)
+        current[key] = target
+    return placed, current
+
+
 def slice_walkers(op, program, component_dts) -> list[dict]:
     """
     A loop over slices without a walk plan (a run-time count: a masked tile's
