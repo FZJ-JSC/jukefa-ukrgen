@@ -141,6 +141,42 @@ def _vl_form(sig) -> bool:
     return {m.name for m in sig.modifiers} - {"MASK"} == {"VOFFSET"} and "voffset" in sig.operands
 
 
+def slice_columns(op, plan: dict, loop_gregs) -> tuple:
+    """
+    A loop over slices' access columns: within the general registers allowed
+    (--loop-gregs), a pointer per access column - an offset's part beside
+    vector lengths; tiles a vector length apart share one, the rest an
+    immediate - set before the loop, stepped once an iteration: no moves
+    between tiles. The first column of a plan register is that register
+    :return: (columns, pointers, column_of): columns (plan key, column text)
+             -> (key, column); pointers the same keys -> the column (None:
+             the plan register itself), empty without room; column_of a walk
+             -> (key, column text, vector lengths an immediate or None)
+    """
+    columns, pointers, column_of = {}, {}, {}
+    accesses = {}
+    for b in op.block:
+        if isinstance(b, (lsc_load, lsc_store)):
+            accesses.setdefault(b.properties.get("walk", 0), []).append(b)
+    for key, p in plan.items():
+        for w, offset in p["walks"].items():
+            vectors = dict(offset.terms).get(("VL",))
+            # the vector lengths an immediate only where every access of the
+            # walk takes them
+            folds = vectors and all(any(_vl_form(sig) and _accepts(sig, "voffset", vectors)
+                                        for sig in _sigs(b.sigs))
+                                    for b in accesses.get(w, []))
+            column = sym._make({f: c for f, c in dict(offset.terms).items()
+                                if not (folds and ("VL",) == f)})
+            column_of[w] = (key, str(column), dict(offset.terms).get(("VL",)) if folds else None)
+            columns.setdefault((key, str(column)), (key, column))
+    extra = len(columns) - len(plan)
+    if loop_gregs is None or 2 + extra <= loop_gregs:
+        for (key, name), (_, column) in columns.items():
+            pointers[(key, name)] = None if not dict(column.terms) else column
+    return columns, pointers, column_of
+
+
 def _takes(sig, immediate: int, limit: int | None = None) -> bool:
     """
     Whether a load or store signature takes an access at this immediate offset
@@ -323,6 +359,8 @@ class signature_specializer:
         self.imm_offsets = "all"
         #: --ldinc-imm-offsets last: id(first access) -> elements to its last row
         self.jumps = {}
+        #: --loop-gregs (the emit stage's too): a loop over slices' pointers
+        self.loop_gregs = None
         # what's been placed and walked, the stride pointers made on first use
         self.placed = set()
         self.walked_by = {}
@@ -693,6 +731,8 @@ class signature_specializer:
                 back.append(lsc_addr_compute(comp, reg, reg, sym.const(0) - walk, scalar_tile))
             self.positions[(comp, reg)] = p["home"]
         op.walk_plan = plan
+        # its access columns planned here (the emitter allocates and emits)
+        op.info["slice_columns"] = slice_columns(op, plan, self.loop_gregs) if plan else None
         # it moves them: the scheduler keeps what addresses through them after
         # it, after it
         op.refresh()

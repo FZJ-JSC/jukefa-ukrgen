@@ -49,7 +49,7 @@ from ..models.lsc.index import lsc_reg_index
 
 
 from ..specializers.signature import (
-    specialization_error, _sigs, _masked, _offset_forms, _accepts, _all_true, _usable, _vl_form, _takes,
+    specialization_error, _sigs, _masked, _offset_forms, _accepts, _all_true, _usable, _vl_form, _takes, slice_columns,
 )
 
 @dataclass
@@ -863,29 +863,12 @@ class signature_emitter:
         # vector length apart share one, the rest an immediate - set before
         # the loop, stepped once an iteration: no moves between tiles. The
         # first column of a plan register is that register
-        columns, pointers, column_of = {}, {}, {}
-        if plan:
-            accesses = {}
-            for b in op.block:
-                if isinstance(b, (lsc_load, lsc_store)):
-                    accesses.setdefault(b.properties.get("walk", 0), []).append(b)
-            for key, p in plan.items():
-                for w, offset in p["walks"].items():
-                    vectors = dict(offset.terms).get(("VL",))
-                    # the vector lengths an immediate only where every access
-                    # of the walk takes them
-                    folds = vectors and all(any(_vl_form(sig) and _accepts(sig, "voffset", vectors)
-                                                for sig in _sigs(b.sigs))
-                                            for b in accesses.get(w, []))
-                    column = sym._make({f: c for f, c in dict(offset.terms).items()
-                                        if not (folds and ("VL",) == f)})
-                    column_of[w] = (key, str(column), dict(offset.terms).get(("VL",)) if folds else None)
-                    columns.setdefault((key, str(column)), (key, column))
-            extra = len(columns) - len(plan)
-            budget = self.ctx.loop_gregs
-            if budget is None or 2 + extra <= budget:
-                for (key, name), (_, column) in columns.items():
-                    pointers[(key, name)] = None if not dict(column.terms) else column
+        # the specializer's plan of the access columns (slice_columns): which
+        # columns, which vector lengths immediates, pointers or not
+        planned = op.info.get("slice_columns")
+        if planned is None and plan:
+            planned = slice_columns(op, plan, self.ctx.loop_gregs)
+        columns, pointers, column_of = planned if planned else ({}, {}, {})
         def place(b):
             # the access where the register stands, or vector lengths past it
             # where a signature takes them ([x, #n, MUL VL]): no move; else the

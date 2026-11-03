@@ -54,6 +54,11 @@ class isa_specialize_stage(stage):
                 value=None, default="all", required=False, choices=["all", "none", "last"],
                 description="ldinc: how an access whose register walks reaches an immediate offset "
                             "(read when specializing)")
+        # the emit stage's: a loop over slices' pointers planned here
+        self.params["loop-gregs"] = stage_param(
+                value=None, default=None, required=False,
+                description="General registers a loop over slices may hold (the emit stage's; "
+                            "read when specializing: its access columns' pointers)")
         self.params["max-imm-offset"] = stage_param(
                 value=None, required=False,
                 description="Largest immediate offset in bytes, either sign, a load or store "
@@ -117,6 +122,8 @@ class isa_specialize_stage(stage):
             for program in self.context.programs:
                 sp = signature_specializer(self.context, program)
                 sp.max_imm_offset = self.imm_limit()
+                value = self.params["loop-gregs"].value
+                sp.loop_gregs = int(value) if value is not None else None
                 sp.imm_offsets = str(self.params["ldinc-imm-offsets"].value or "all")
                 if sp.imm_offsets not in ("all", "none", "last"):
                     raise stage_error(f"--ldinc-imm-offsets {sp.imm_offsets!r}: all, none or last")
