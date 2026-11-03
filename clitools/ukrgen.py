@@ -19,6 +19,7 @@ from ukrgen.flow.stages.sto import sto_stage
 from ukrgen.flow.stages.model import model_stage
 from ukrgen.flow.stages.isa_specialize import isa_specialize_stage
 from ukrgen.flow.stages.addresses import address_stage
+from ukrgen.flow.stages.loops import loop_stage
 from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage, post_specialize_irmod_stage
 from ukrgen.flow.stages.scheduling import schedule_stage
 from ukrgen.flow.stages.emit import emit_stage
@@ -138,6 +139,7 @@ def main():
         model_stage,
         pre_specialize_irmod_stage,
         isa_specialize_stage,
+        loop_stage,
         address_stage,
         post_specialize_irmod_stage,
         schedule_stage,
