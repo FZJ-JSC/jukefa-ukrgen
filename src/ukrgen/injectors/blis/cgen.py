@@ -88,6 +88,18 @@ def asm_source(k: kernel) -> str:
     return "\n".join(k.program.function(asm_symbol(k), align=boundary, offset=offset)) + "\n"
 
 
+def prefers_rows(k) -> bool:
+    """
+    Whether a gemm kernel prefers row-major C - BLIS's row preference, by
+    which it hands the kernel C transposed where it isn't: the first of its
+    storage branches (its fast case: a vn's [row, any] rows, a vm's [col,
+    any] columns), else its C layout. Its fallback storage (c_layout) said
+    neither: a [row, any] kernel was registered column-preferring and given
+    column-major C, its strided case, under ccc
+    """
+    return "row" == ((k.c_storages or [k.c_layout])[0])
+
+
 def gemm_wrapper(k: kernel) -> str:
     """
     BLIS's gemm microkernel around the kernel: the edge-case macros with the
@@ -99,7 +111,7 @@ def gemm_wrapper(k: kernel) -> str:
         raise ValueError(f"{k.symbol}: no BLIS argument for its parameters {unknown}")
     proto = ", ".join(GEMM_ARGS[p][0] for p in k.params)
     args = ", ".join(GEMM_ARGS[p][1].format(ctype=ctype) for p in k.params)
-    row = "true" if "row" == k.c_layout else "false"
+    row = "true" if prefers_rows(k) else "false"
     # the temporary tile: for edge cases only where the kernel takes any C (a
     # storage branch 'any', or both strides at run time); where it branches
     # on row- and column-major C, also when neither stride is 1
@@ -169,7 +181,7 @@ def gemm_table(dtype: str, kernels: list[kernel], default: tuple | None) -> str:
     for i, k in enumerate(mine):
         mv, me = split_size(k.mr)
         nv, ne = split_size(k.nr)
-        rows.append(f"\t{{ {mv}, {me}, {nv}, {ne}, {k.symbol}, {'true' if 'row' == k.c_layout else 'false'}, "
+        rows.append(f"\t{{ {mv}, {me}, {nv}, {ne}, {k.symbol}, {'true' if prefers_rows(k) else 'false'}, "
                     f"\"{k.family}_{k.symbol.rsplit('_', 1)[-1]}\", {k.vl_fn} }},")
         if default is not None and tuple(default) == tuple(k.size):
             fallback = i
