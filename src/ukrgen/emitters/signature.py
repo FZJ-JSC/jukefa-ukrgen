@@ -49,7 +49,7 @@ from ..models.lsc.index import lsc_reg_index
 
 
 from ..specializers.signature import (
-    specialization_error, _sigs, _masked, _offset_forms, _accepts, _all_true, _usable, _vl_form, _takes, slice_columns,
+    specialization_error, _sigs, _masked, _offset_forms, _accepts, _all_true, _usable, _vl_form, _takes, slice_columns, slice_walkers,
 )
 
 @dataclass
@@ -925,17 +925,15 @@ class signature_emitter:
                     {tuple(sorted(("VL",) + f)): c for f, c in dict(p["step"].terms).items()})
             return []
         walkers, deltas, steps, shared = [], [], {}, {}
-        for walk in ([] if plan else op.walks):
-            anchor = walk.anchor
-            wcomp, wreg = anchor.indices[0].component, anchor.indices[0].indices[0]
-            elements = self.program.offsets.elements_offset(
-                anchor.offset, self.program.strides.get(wcomp, {}))
-            terms = dict(walk.step.terms)
+        # the specializer's walkers (slice_walkers): which walks share a
+        # pointer, which a step register - allocated and set here
+        planned = op.info.get("slice_walkers")
+        if planned is None and not plan:
+            planned = slice_walkers(op, self.program, self.ctx.component_dts)
+        for w in ([] if plan else planned):
+            wcomp, wreg, elements, terms, key, start = (w["comp"], w["reg"], w["elements"], w["terms"],
+                                                        w["key"], w["start"])
             wdt = self.ctx.component_dts[wcomp]
-            key = (tuple(sorted(terms.items())), adt_size(wdt))
-            # a pointer shared by walks of one component from the same element
-            # by the same step: a tile's load and store of C
-            start = (wcomp, str(elements), key)
             if start in shared:
                 walkers.append(shared[start])
                 deltas.append(steps[key])

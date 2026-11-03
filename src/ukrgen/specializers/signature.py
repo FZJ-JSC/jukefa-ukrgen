@@ -141,6 +141,28 @@ def _vl_form(sig) -> bool:
     return {m.name for m in sig.modifiers} - {"MASK"} == {"VOFFSET"} and "voffset" in sig.operands
 
 
+def slice_walkers(op, program, component_dts) -> list[dict]:
+    """
+    A loop over slices without a walk plan (a run-time count: a masked tile's
+    rows): a walking pointer a walk - shared by walks of one component from
+    the same element by the same step (a tile's load and store of C) - and a
+    step register a step and element size
+    :return: per walk, in order: its component and register (comp, reg), its
+             start in elements, its step's terms, the step's key (a step
+             register shared) and the start's (a walker shared)
+    """
+    out = []
+    for walk in op.walks:
+        anchor = walk.anchor
+        wcomp, wreg = anchor.indices[0].component, anchor.indices[0].indices[0]
+        elements = program.offsets.elements_offset(anchor.offset, program.strides.get(wcomp, {}))
+        terms = dict(walk.step.terms)
+        key = (tuple(sorted(terms.items())), adt_size(component_dts[wcomp]))
+        out.append({"comp": wcomp, "reg": wreg, "elements": elements, "terms": terms, "key": key,
+                    "start": (wcomp, str(elements), key)})
+    return out
+
+
 def slice_columns(op, plan: dict, loop_gregs) -> tuple:
     """
     A loop over slices' access columns: within the general registers allowed
@@ -691,6 +713,7 @@ class signature_specializer:
         if op.info.get("count"):
             # a run-time count (a masked tile's rows): its walks copied into
             # registers of their own (the emitter's), its addresses not moving
+            op.info["slice_walkers"] = slice_walkers(op, self.program, self.ctx.component_dts)
             return [op]
         db = self.program.offsets
         order = []
