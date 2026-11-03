@@ -952,6 +952,52 @@ int main( void )
                 self.assertEqual([], built)
                 self.assertIn(said, str(skipped[0][2]))
 
+    def test_preload_counts(self):
+        """
+        --COMP-data-regs is a component's ring, --COMP-max-preload how many of
+        its registers' loads move ahead - into the prologue and the end of the
+        main loop's body, the last iteration without them. NEON fma_lane's
+        dgemm vn 8x3v (A through x1 - two lanes a register - B through x2)
+        """
+        import copy, re
+        from ukrgen.injectors.blis.families import configuration, build_gemm
+        from ukrgen.injectors.blis.cgen import asm_source
+        c = configuration.from_files({("gemm", "FP64"): "ukrconfig/neon/fma_lane/dgemm.yaml"})
+        base = next(x for x in c.families if "vn" == x.name)
+        comp = lambda l: {"x1": "A", "x2": "B"}.get((re.search(r"\[(x\d+)", l) or [None, ""])[1], "?")
+        reg = lambda l: re.sub(r"^q", "v", l.split()[1].strip(",{").split(".")[0])
+        load = lambda l: l.startswith(("ldr q", "ld1 "))
+        for (ra, rb, pa, pb), want in (((1, 1, 99, 99), (1, 1, 1, 1)), ((4, 3, 1, 1), (4, 3, 1, 1)),
+                                       ((2, 6, 2, 6), (2, 6, 2, 6))):
+            with self.subTest(regs=(ra, rb), preload=(pa, pb)):
+                fam = copy.deepcopy(base)
+                fam.sizes = {"m": [8], "n": [3]}
+                fam.params.update({"A-data-regs": str(ra), "B-data-regs": str(rb), "A-max-preload": str(pa),
+                                   "B-max-preload": str(pb), "max-offset-registers": "0"})
+                built, _ = build_gemm(c.isa, c.name, fam)
+                lines = [l.strip() for l in asm_source(built[0]).splitlines()
+                         if l.strip() and not l.strip().startswith(("#", "//"))]
+                li = next(j for j, l in enumerate(lines) if l.endswith("_loop:"))
+                le = next(j for j in range(li + 1, len(lines)) if lines[j].endswith(lines[li][:-1])
+                          and not lines[j].endswith(":"))
+                body = [l for l in lines[li + 1:le + 1] if not l.endswith(":")]
+                regs = {k: len({reg(l) for l in body if load(l) and k == comp(l)}) for k in "AB"}
+                before = {k: sum(1 for l in lines[:li] if load(l) and k == comp(l)) for k in "AB"}
+                # the body's loads first read past its back edge: the next iteration's
+                ahead = {"A": 0, "B": 0}
+                for n, l in enumerate(body):
+                    if load(l):
+                        d = next(d for d in range(1, 2 * len(body)) if not load(body[(n + d) % len(body)])
+                                 and re.search(rf"\b{reg(l)}\.", body[(n + d) % len(body)].split(",", 1)[-1]))
+                        ahead[comp(l)] += n + d >= len(body)
+                last = lines.index(next(l for l in lines if l.endswith("_last:")))
+                seg = [l for l in lines[last + 1:]][:next(j for j, l in enumerate(lines[last + 1:]) if l.endswith(":"))]
+                after = [l for l in seg[max(j for j, l in enumerate(seg) if l.startswith("fmla")) + 1:] if load(l)]
+                self.assertEqual((ra, rb), (regs["A"], regs["B"]))
+                self.assertEqual(want[2:], (before["A"], before["B"]))
+                self.assertEqual(want[2:], (ahead["A"], ahead["B"]))
+                self.assertEqual([], after)
+
     def test_packm_trans_configs(self):
         # the configs' shuffle cases, doubles and singles - their own params
         # (unroll, registers) - through BLIS's dispatch against the reference

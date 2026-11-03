@@ -101,8 +101,10 @@ class model_stage(stage):
                                 f"allow")
             self.params[f"{comp}-max-preload"] = stage_param(
                     value=None, required=False,
-                    description=f"At most this many loop iterations of {comp}'s tiles loaded "
-                                f"ahead: registers beyond its minimal ring, where fitted")
+                    description=f"At most this many of {comp}'s loads moved ahead - into the "
+                                f"prologue and the end of the loop's body (the last iteration "
+                                f"without them) - as far as its registers allow; without it a "
+                                f"step of the loop's (a k of gemm's). Registers: --{comp}-data-regs")
         for comp in self.memory:
             self.params[f"{comp}-subtiling"] = stage_param(
                     value=None, required=False,

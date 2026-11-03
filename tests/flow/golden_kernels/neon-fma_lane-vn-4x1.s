@@ -21,37 +21,38 @@ dup v2.2d,xzr
 dup v3.2d,xzr
 cbz x0,.ukr1_done
 ld1 {v4.2d}, [x1]
-ld1 {v5.2d}, [x2]
-add x1,x1,#16
+ldr q5, [x1, #16]
+ld1 {v6.2d}, [x2]
+add x1,x1,#32
 add x2,x2,#16
 add x0,x0,#-1
 cbz x0,.ukr1_last
 .ukr1_loop:
 add x0,x0,#-1
-ld1 {v6.2d}, [x1]
-fmla v0.2d,v5.2d,v4.d[0]
-fmla v1.2d,v5.2d,v4.d[1]
-ldr q7, [x1, #16]
-fmla v2.2d,v5.2d,v6.d[0]
-fmla v3.2d,v5.2d,v6.d[1]
+fmla v0.2d,v6.2d,v4.d[0]
+fmla v1.2d,v6.2d,v4.d[1]
+fmla v2.2d,v6.2d,v5.d[0]
+fmla v3.2d,v6.2d,v5.d[1]
+ld1 {v7.2d}, [x1]
 ld1 {v16.2d}, [x2]
-ldr q17, [x1, #32]
-ldr q18, [x1, #48]
+ldr q17, [x1, #16]
+ldr q18, [x1, #32]
 ldr q19, [x2, #16]
 fmla v0.2d,v16.2d,v7.d[0]
 fmla v1.2d,v16.2d,v7.d[1]
 fmla v2.2d,v16.2d,v17.d[0]
 fmla v3.2d,v16.2d,v17.d[1]
-ldr q20, [x1, #64]
+ldr q20, [x1, #48]
 fmla v0.2d,v19.2d,v18.d[0]
 fmla v1.2d,v19.2d,v18.d[1]
-ldr q21, [x1, #80]
+ldr q21, [x1, #64]
 fmla v2.2d,v19.2d,v20.d[0]
 fmla v3.2d,v19.2d,v20.d[1]
 ldr q22, [x2, #32]
-ldr q23, [x1, #96]
-ldr q4, [x1, #112]
-ldr q5, [x2, #48]
+ldr q23, [x1, #80]
+ldr q4, [x1, #96]
+ldr q5, [x1, #112]
+ldr q6, [x2, #48]
 fmla v0.2d,v22.2d,v21.d[0]
 fmla v1.2d,v22.2d,v21.d[1]
 fmla v2.2d,v22.2d,v23.d[0]
@@ -60,29 +61,28 @@ add x1,x1,#128
 add x2,x2,#64
 cbnz x0,.ukr1_loop
 .ukr1_last:
-ld1 {v6.2d}, [x1]
-fmla v0.2d,v5.2d,v4.d[0]
-fmla v1.2d,v5.2d,v4.d[1]
-ldr q7, [x1, #16]
-fmla v2.2d,v5.2d,v6.d[0]
-fmla v3.2d,v5.2d,v6.d[1]
+fmla v0.2d,v6.2d,v4.d[0]
+fmla v1.2d,v6.2d,v4.d[1]
+fmla v2.2d,v6.2d,v5.d[0]
+fmla v3.2d,v6.2d,v5.d[1]
+ld1 {v7.2d}, [x1]
 ld1 {v16.2d}, [x2]
-ldr q17, [x1, #32]
-ldr q18, [x1, #48]
+ldr q17, [x1, #16]
+ldr q18, [x1, #32]
 ldr q19, [x2, #16]
 fmla v0.2d,v16.2d,v7.d[0]
 fmla v1.2d,v16.2d,v7.d[1]
 fmla v2.2d,v16.2d,v17.d[0]
 fmla v3.2d,v16.2d,v17.d[1]
-ldr q20, [x1, #64]
+ldr q20, [x1, #48]
 fmla v0.2d,v19.2d,v18.d[0]
 fmla v1.2d,v19.2d,v18.d[1]
-ldr q21, [x1, #80]
+ldr q21, [x1, #64]
 fmla v2.2d,v19.2d,v20.d[0]
 fmla v3.2d,v19.2d,v20.d[1]
 ldr q22, [x2, #32]
-ldr q23, [x1, #96]
-add x1,x1,#112
+ldr q23, [x1, #80]
+add x1,x1,#96
 add x2,x2,#48
 fmla v0.2d,v22.2d,v21.d[0]
 fmla v1.2d,v22.2d,v21.d[1]
@@ -93,12 +93,12 @@ cbz x9,.ukr1_taildone
 .ukr1_tail:
 add x9,x9,#-1
 ld1 {v4.2d}, [x1]
-ld1 {v5.2d}, [x2]
-ldr q6, [x1, #16]
-fmla v0.2d,v5.2d,v4.d[0]
-fmla v1.2d,v5.2d,v4.d[1]
-fmla v2.2d,v5.2d,v6.d[0]
-fmla v3.2d,v5.2d,v6.d[1]
+ld1 {v6.2d}, [x2]
+ldr q5, [x1, #16]
+fmla v0.2d,v6.2d,v4.d[0]
+fmla v1.2d,v6.2d,v4.d[1]
+fmla v2.2d,v6.2d,v5.d[0]
+fmla v3.2d,v6.2d,v5.d[1]
 add x1,x1,#32
 add x2,x2,#16
 cbnz x9,.ukr1_tail

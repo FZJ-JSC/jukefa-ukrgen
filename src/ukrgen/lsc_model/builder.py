@@ -329,16 +329,14 @@ class program_builder:
                     raise model_error(
                         f"{held} of {budget} vector registers{' beside ' + str(fixed) + ' given' if fixed else ''}"
                         f": {left} left for {', '.join(free)}, at least one each - a smaller microtile fits")
-                # an input's ceiling: the tiles it has, --COMP-max-data-regs, and its
-                # minimal ring plus --COMP-max-preload iterations of its tiles
+                # an input's ceiling: the tiles it has and --COMP-max-data-regs
+                # (--COMP-max-preload limits loads moved ahead, not registers)
                 minimal = {c: self.minimal_ring(c) for c in free}
                 caps = {}
                 for c in free:
                     cap = len(self.coords[c])
                     if c in self.max_data_regs:
                         cap = min(cap, int(self.max_data_regs[c]))
-                    if c in self.max_preload:
-                        cap = min(cap, minimal[c] + int(self.max_preload[c]) * self.tiles_per_step(c))
                     caps[c] = max(1, cap)
                 if sum(caps[c] for c in free) <= left:
                     return {c: caps[c] for c in free if caps[c] < len(self.coords[c])}
@@ -1285,8 +1283,8 @@ class program_builder:
             # without them. The first n loads must go to distinct registers
             # (two ahead into one would overwrite each other): n stops
             # before a register's second occupancy, counts a register's
-            # lanes whole, and asks for a step of k (--COMP-max-preload
-            # steps), as far as that allows.
+            # lanes whole, and is at most --COMP-max-preload loads (a step
+            # of k's without it), as far as that allows.
             streams: dict[str, list[int]] = {}
             for pos, item in enumerate(items):
                 if isinstance(item, access_group) and item.streamed:
@@ -1329,18 +1327,16 @@ class program_builder:
                 else:
                     q = len(stream)
                 limit = q if bounds else 0
-                # a step of k's loads (tiles_per_step counts the unrolled
-                # iteration's), --COMP-max-preload steps of them
+                # --COMP-max-preload registers' loads at most; without it a step
+                # of k's (tiles_per_step counts the unrolled iteration's)
                 steps = max(1, int(self.ctx.dims.get(block.loop_index, 1) or 1))
                 per_step = max(1, -(-self.tiles_per_step(comp) // steps))
-                want = per_step * int(self.max_preload.get(comp, 1))
-                # whole occupancies up to what's asked
+                want = int(self.max_preload[comp]) if comp in self.max_preload else per_step
+                # whole occupancies - a register's lanes one - --COMP-max-preload
+                # of them at most (0: none ahead), as many as are distinct
                 ends = [b for b in bounds[1:]] + [limit]
-                n = 0
-                for end in ends:
-                    if end <= max(want, ends[0]) and end <= limit:
-                        n = end
-                shift[comp] = n
+                taken = min(want, len(ends)) if bounds else 0
+                shift[comp] = ends[taken - 1] if taken > 0 else 0
             out.preload_shift = dict(shift)
             ahead_pos = {pos for comp, stream in streams.items() for pos in stream[:shift[comp]]}
             for comp, stream in streams.items():
