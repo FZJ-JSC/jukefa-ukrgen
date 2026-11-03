@@ -841,8 +841,11 @@ class signature_specializer:
             walked = self.walked_by
             advances = self.loop_advances(block) if section in ("body", "epilogue") else {}
             # a case's last section: moving its registers back is dead - the
-            # kernel returns after it (phase+rotate's walks, C's walked columns)
-            if self.final_block and filled and section == filled[-1] and not advances:
+            # kernel returns after it (phase+rotate's walks, C's walked columns) -
+            # unless it repeats: a loop's tail runs once a step left (packm's
+            # 2-wide transposed panel walked its x1 to row 1 for good)
+            repeats = "tail" == section and block.loop_index is not None
+            if self.final_block and filled and section == filled[-1] and not advances and not repeats:
                 for key, moved in walked.items():
                     self.positions[key] = self.positions[key] - moved
                 walked = {}
