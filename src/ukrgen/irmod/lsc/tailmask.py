@@ -169,7 +169,8 @@ class tailmask(lsc_irmod):
         # a ZA case's last tile (tile + mask): its loop moving rows in counted
         # tail(m) - the rows left, A has no more - its column stores under the
         # mask of the first tail(m) elements
-        tiled = [op for block, section in blocks_and_sections(program)
+        from .vectorize import loop_of
+        tiled = [loop_of(op) for block, section in blocks_and_sections(program)
                  for op in getattr(block, section) or [] if slice_loop(op)]
         if tiled:
             # every chunk's last tile, by its place along m - its accesses'

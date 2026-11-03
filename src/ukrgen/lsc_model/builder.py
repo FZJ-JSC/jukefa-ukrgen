@@ -749,9 +749,10 @@ class program_builder:
         access = lambda: cls(memory, data.index, addr.reg, None, None,
                              self.reg_tile(tiling, data), set(), data=_index(data), rsln=tag,
                              step=step, sigs=sigs, offset=addr.offset, rtypes=[None, data.rtype])
-        return [self.element_loop([access()], access(), memory, second if col else first, 1,
-                                  {"direction": step.op, "kind": "slices",
-                                   "axis": "col" if col else "row"})]
+        # the tile's access stands for the loop until the loop stage makes it
+        loop = self.element_loop([access()], access(), memory, second if col else first, 1,
+                                 {"direction": step.op, "kind": "slices", "axis": "col" if col else "row"})
+        return [self.virtual(loop.walks[0].anchor, loop)]
 
     def move_vla(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
         """

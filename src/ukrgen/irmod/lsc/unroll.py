@@ -76,10 +76,16 @@ class unroll_loops(lsc_irmod):
 
 
 def slice_loops(program):
+    from .vectorize import loop_of
+    seen = set()
     for block, section in blocks_and_sections(program):
         for op in getattr(block, section) or []:
-            if isinstance(op, lsc_loop) and "slices" == op.info.get("kind"):
-                yield op
+            # a loop over slices, or the tile access standing for one: its loop,
+            # once
+            loop = loop_of(op)
+            if loop is not None and "slices" == loop.info.get("kind") and id(loop) not in seen:
+                seen.add(id(loop))
+                yield loop
 
 
 def immediates_take(loop, factor: int) -> bool:

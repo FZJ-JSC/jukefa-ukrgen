@@ -7,13 +7,18 @@ from asmgen.asmblocks.op import register_type as rgt
 
 from ...models.load_store_operations import lsc_load, lsc_store, lsc_move, lsc_loop
 from .base import irmod_param, irmod_placement, lsc_irmod, blocks_and_sections
+from .vectorize import loop_of
 
 
 SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
 
 
 def slice_loop(op) -> bool:
-    return isinstance(op, lsc_loop) and "slices" == op.info.get("kind")
+    # a loop over slices, or the tile access standing for one until the loop
+    # stage makes it (program_builder.virtual): the passes take its loop
+    from .vectorize import loop_of
+    loop = loop_of(op)
+    return loop is not None and "slices" == loop.info.get("kind")
 
 
 def tiles_of(loop) -> set:
@@ -95,9 +100,11 @@ class fuse_slices(lsc_irmod):
                     second = ops[j]
                     # a later loop over the same tiles moves up to the first,
                     # past what it doesn't depend on, and joins it
-                    if slice_loop(second) and self.compatible(first, second, self.values["across_tiles"]) and \
+                    if slice_loop(second) and self.compatible(loop_of(first), loop_of(second),
+                                                              self.values["across_tiles"]) and \
                             all(self.independent(program, second, between) for between in ops[i + 1:j]):
-                        ops[i] = first = self.fuse(first, second)
+                        # fused, a loop: no one tile operation stands for it
+                        ops[i] = first = self.fuse(loop_of(first), loop_of(second))
                         absorbed.add(id(second))
                         done.add(id(first))
                         del ops[j]
@@ -174,9 +181,9 @@ class forward_slices(lsc_irmod):
         for block, section in blocks_and_sections(program):
             for op in getattr(block, section) or []:
                 # each loop once, whichever sections share it
-                if slice_loop(op) and id(op) not in seen:
-                    seen.add(id(op))
-                    forwarded += self.forward(op) + self.store_vectors(op)
+                if slice_loop(op) and id(loop_of(op)) not in seen:
+                    seen.add(id(loop_of(op)))
+                    forwarded += self.forward(loop_of(op)) + self.store_vectors(loop_of(op))
         # a tile written only to be stored, its stores now from the vectors:
         # the writes go - dead where nothing on the same path reads the tile
         # later (the cases of a dispatch are separate paths)
@@ -187,7 +194,7 @@ class forward_slices(lsc_irmod):
         def reads_of(ops):
             out = set()
             for op in ops:
-                for o in (op.block if isinstance(op, lsc_loop) else [op]):
+                for o in (loop_of(op).block if loop_of(op) is not None else [op]):
                     out |= _read(o)
             return out
         everywhere = reads_of(common + [op for path in paths[1:] for op in path])
@@ -195,6 +202,7 @@ class forward_slices(lsc_irmod):
             for pos, op in enumerate(path):
                 if not slice_loop(op):
                     continue
+                op = loop_of(op)
                 later = reads_of(path[pos + 1:]) if n else everywhere
                 inside = reads_of([op])
                 dead = [b for b in op.block if isinstance(b, lsc_move) and "slice" in b.properties
@@ -292,10 +300,11 @@ class hoist_slices(lsc_irmod):
             out = []
             for op in getattr(block, section) or []:
                 if slice_loop(op):
-                    if id(op) not in before:
-                        before[id(op)] = self.hoist(op)
-                        hoisted += len(before[id(op)])
-                    out += before[id(op)]
+                    loop = loop_of(op)
+                    if id(loop) not in before:
+                        before[id(loop)] = self.hoist(loop)
+                        hoisted += len(before[id(loop)])
+                    out += before[id(loop)]
                 out.append(op)
             setattr(block, section, out)
         return hoisted
