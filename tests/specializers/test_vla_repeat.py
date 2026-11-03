@@ -111,7 +111,15 @@ class test_vla_repeat(unittest.TestCase):
         cc, qemu = "riscv64-linux-gnu-gcc", "qemu-riscv64-static"
         if not (shutil.which(cc) and shutil.which(qemu)):
             self.skipTest(f"needs {cc} and {qemu}")
-        ctx, res = run()
+        # as is, unrolled (the loop stage's copies, a scalar each), unrolled
+        # with two scalars in flight
+        for extra in ({}, {"pre-specialize-irmods": ["+unroll_loops"]},
+                      {"pre-specialize-irmods": ["+unroll_loops"], "unroll_loops-registers": "2"}):
+            with self.subTest(**{k.replace("-", "_"): str(v) for k, v in extra.items()}):
+                self.check_runs(cc, qemu, **extra)
+
+    def check_runs(self, cc, qemu, **extra):
+        ctx, res = run(**extra)
         self.assertEqual(["k", "base(A)", "base(B)", "base(C)", "stride(A,m)", "stride(C,n)"],
                          list(ctx.emitted[0].params))
         with tempfile.TemporaryDirectory() as d:

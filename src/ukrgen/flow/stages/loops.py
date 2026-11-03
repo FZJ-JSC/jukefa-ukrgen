@@ -7,16 +7,26 @@ from .stage import stage, stage_error
 from ...specializers.signature import specialization_error
 
 
+def _scalar_of(idx, e):
+    """A copy's scalar: the template's tile, numbered by its copy"""
+    import copy as _copy
+    new = _copy.copy(idx)
+    new.indices = [e] + list(idx.indices[1:])
+    return new
+
+
 def copies(loop) -> None:
     """
     A loop over a vector's elements, its copies made: one element's operations
     once a copy (the loop's unroll), in the order the loop runs them - a batch
     of loads (as many as its scalars' registers), then their fills; or an
     extract, the shift and the store an element - each with its copy number
-    and its role (load, fill; extract, shift, store). The emitter's loop emits
-    the body as it is; the scheduler leaves it so while the copies' scalars
-    rotate through the registers asked (ADDRESSING_PLAN 6.3: next, virtual
-    tiles of their own, renamed)
+    and its role (load, fill; extract, shift, store), its scalar a virtual tile
+    of its own. As many loads ahead of their fills as the registers asked
+    (--...-subtiling registers, unroll_loops' registers): a cap on the scalars
+    in flight. The emitter's loop emits the body as it is; the scheduler leaves
+    its order (each access's element is the walker's steps before it - not IR
+    steps yet: ADDRESSING_PLAN 6.4)
     """
     from ...lsc_model.builder import _clone
     if "slices" == loop.info.get("kind") or loop.info.get("copies") \
@@ -25,8 +35,15 @@ def copies(loop) -> None:
     unroll = loop.subtiling.unroll
     count = max(1, min(loop.subtiling.registers, unroll))
 
+    # the scalar an element passes through (a load's data, an extract's): a
+    # virtual tile of each copy's own - S0, S1 - allocated as written, free
+    # after its last read (the emitter)
+    template = loop.block[0] if "load" == loop.info["direction"] else loop.block[1]
+    scalar = template.indices[1].component
+
     def copy_of(op, e, role):
         new = _clone(op)
+        new.indices = [_scalar_of(idx, e) if idx.component == scalar else idx for idx in new.indices]
         new.properties["copy"] = e
         new.properties["role"] = role
         return new

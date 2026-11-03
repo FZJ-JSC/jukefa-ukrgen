@@ -1159,12 +1159,14 @@ class signature_emitter:
         unroll = op.subtiling.unroll
         count = max(1, min(op.subtiling.registers, unroll))
         first = op.block[0]
-        scalars, extra = [self.reg(first.indices[1], first.rtypes[1])], []
-        for _ in range(count - 1):
-            tag = "freg" if rgt.FP == first.rtypes[1] else "greg"
-            number = self.rt.reserve_any_reg(tag)
-            extra.append((tag, number))
-            scalars.append(self.gen.freg(number, dt) if "freg" == tag else self.gen.greg(number))
+        scalars, extra = [], []
+        if not op.info.get("copies"):
+            scalars.append(self.reg(first.indices[1], first.rtypes[1]))
+            for _ in range(count - 1):
+                tag = "freg" if rgt.FP == first.rtypes[1] else "greg"
+                number = self.rt.reserve_any_reg(tag)
+                extra.append((tag, number))
+                scalars.append(self.gen.freg(number, dt) if "freg" == tag else self.gen.greg(number))
 
         def access(step, data):
             line = self._mem(step, data, walker, 0)
@@ -1175,9 +1177,19 @@ class signature_emitter:
 
         if op.info.get("copies"):
             # the loop stage's copies (flow/stages/loops.py copies), in its
-            # order: each copy's scalar its register in the rotation
-            for b in op.block:
-                scalar = scalars[b.properties["copy"] % count]
+            # order: each copy's scalar a virtual tile of its own, its register
+            # taken as it's written and free after its last read
+            scalar_of = {}
+            last = {}
+            for i, b in enumerate(op.block):
+                p = 1 if b.properties["role"] in ("load", "extract", "store") else 0
+                if b.properties["role"] in ("load", "extract", "fill", "store"):
+                    idx, rtype = b.indices[p], b.rtypes[p]
+                    scalar_of[id(b)] = (idx, rtype)
+                    last[(idx.component, idx.indices[0], rtype)] = i
+            for i, b in enumerate(op.block):
+                held = scalar_of.get(id(b))
+                scalar = self.reg(*held) if held is not None else None
                 role = b.properties["role"]
                 if role in ("load", "store"):
                     lines.append(access(b, scalar))
@@ -1188,6 +1200,8 @@ class signature_emitter:
                     lines.append(self.move(b, dst=scalar))
                 else:
                     lines.append(self.move(b))
+                if held is not None and last.get((held[0].component, held[0].indices[0], held[1])) == i:
+                    self.release((held[0].component, held[0].indices[0], held[1]))
         elif "load" == op.info["direction"]:
             # a batch of loads into different registers, then their fills in
             # order: the loads don't wait for the fills
