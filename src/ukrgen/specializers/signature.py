@@ -459,16 +459,10 @@ class signature_specializer:
         comp, reg = op.indices[0].component, op.indices[0].indices[0]
         assigned = reg
         db, strides = self.program.offsets, self.program.strides.get(comp, {})
-        sigs = _sigs(op.sigs)
-        # a last vector's access (tailmask) under the mask the emitter sets
-        # up from tail(<index>): its masked forms usable without an all-true
-        # predicate (RVV's v0.t)
-        tail = op.properties.get("tail") is not None
-        usable = [s for s in sigs if tail or _usable(self.ctx, s)]
-        if sigs and not usable:
-            raise specialization_error(
-                f"every {op.step.op} signature for {db[op.offset]} needs a governing "
-                f"predicate the ISA doesn't set up")
+        # its forms (forms(): the usable ones, whatever its address)
+        if "usable" not in op.properties:
+            self.forms(op)
+        usable = op.properties["usable"]
         rel = dict((db.elements_offset(op.offset, strides) - self.positions[(comp, reg)]).terms)
         vl = rel.pop(("VL",), 0)
         inserted = []
@@ -801,26 +795,37 @@ class signature_specializer:
         op.refresh()
         return inserted + [op] + back
 
-    def adapt(self, op) -> list:
-        if isinstance(op, lsc_loop) and "slices" == op.info.get("kind"):
-            return self.adapt_slices(op)
+    def forms(self, op) -> None:
+        """
+        What an operation's signatures allow whatever its address - the forms
+        the ISA takes (a tail's masked ones without an all-true predicate);
+        an access's kept with it (properties["usable"], copies of it too) for
+        placing its address (adapt). ADDRESSING_PLAN 6.2: the forms of every
+        operation first, the addresses after - a loop's copies made between
+        """
         if isinstance(op, lsc_loop):
-            # each walk's anchor addressed like any access, its address
-            # computations before the loop
-            inserted = []
-            for walk in op.walks:
-                done = self.adapt_access(walk.anchor)
-                walk.anchor = done[-1]
-                inserted += done[:-1]
-            op.refresh()
-            return inserted + [op]
+            if "slices" != op.info.get("kind"):
+                for walk in op.walks:
+                    self.forms(walk.anchor)
+            return
         if isinstance(op, lsc_store) and "shuffle" == op.rsln:
             raise specialization_error(
                 f"{op.indices[1]}: a shuffle store is a row of a transpose in registers, "
                 f"which shufflenet makes of blocks of as many rows as a vector has lanes - "
                 f"these rows aren't; alone it would store the row contiguously")
         if isinstance(op, (lsc_load, lsc_store)):
-            return self.adapt_access(op)
+            sigs = _sigs(op.sigs)
+            # a last vector's access (tailmask) under the mask the emitter sets
+            # up from tail(<index>): its masked forms usable without an all-true
+            # predicate (RVV's v0.t)
+            tail = op.properties.get("tail") is not None
+            usable = [s for s in sigs if tail or _usable(self.ctx, s)]
+            if sigs and not usable:
+                raise specialization_error(
+                    f"every {op.step.op} signature for {self.program.offsets[op.offset]} needs a "
+                    f"governing predicate the ISA doesn't set up")
+            op.properties["usable"] = usable
+            return
         if isinstance(op, lsc_transformation):
             sigs = _sigs(op.resolution.compute_sg)
             if sigs and not any(_usable(self.ctx, s) for s in sigs):
@@ -835,6 +840,22 @@ class signature_specializer:
                     "set up")
             if not sigs:
                 raise specialization_error(f"the ISA has no move for {op.rsln}")
+
+    def adapt(self, op) -> list:
+        if isinstance(op, lsc_loop) and "slices" == op.info.get("kind"):
+            return self.adapt_slices(op)
+        if isinstance(op, lsc_loop):
+            # each walk's anchor addressed like any access, its address
+            # computations before the loop
+            inserted = []
+            for walk in op.walks:
+                done = self.adapt_access(walk.anchor)
+                walk.anchor = done[-1]
+                inserted += done[:-1]
+            op.refresh()
+            return inserted + [op]
+        if isinstance(op, (lsc_load, lsc_store)):
+            return self.adapt_access(op)
         return [op]
 
     def rebase(self, block: ir_block, rebased: dict) -> list:
@@ -1001,6 +1022,12 @@ class signature_specializer:
             setattr(block, section, out)
 
     def specialize(self) -> ir_program:
+        # every operation's forms first (whatever its address), then the
+        # addresses, block by block
+        for block in list(self.program.blocks) + [b for case in self.program.cases for b in case.blocks]:
+            for section in ("prologue", "body", "epilogue", "tail", "subtail"):
+                for op in getattr(block, section) or []:
+                    self.forms(op)
         for block in self.program.blocks:
             self.adapt_block(block)
         start = dict(self.positions)
