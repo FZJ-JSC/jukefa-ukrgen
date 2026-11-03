@@ -180,6 +180,30 @@ in the IR, in order.
       instructions, right under qemu.
    Setup values as an IR setup block, after.
 
+   **Loops, from here** (after 0309-0323: the VLA element loops wholly the
+   IR's but their counter; SME's tile slice loops standing operations):
+   - **An STO as a virtual tile operation of a higher-level STO.** What a
+     loop over slices does to a tile (slice_compute: a slice moved out, its
+     arithmetic and accesses, moved back) is an STO; the higher-level STO's
+     operation on the whole tile stands in the IR for the loop of it - the
+     standing operations' general form (a VLA fill or a tile's load: an STO
+     of one access an element). Fusion where adjacent virtual tile
+     operations over one tile and its slices are made one loop; recursive.
+   - **The renamer in a loop's body**: copies' temporaries virtual tiles
+     renamed within the registers the enclosing section leaves - a value
+     carried across the back edge one register, a preload loaded at the
+     body's end into the register the next iteration's start reads - the
+     emitter only applying it (the element loops' scalars, allocated by the
+     emitter since 0315, and the slice loops' register sets too).
+   - **Preloading by the mm STO's mechanism**: the builder's preload shift
+     (prologue, shifted copies at the body's end, the last iteration
+     without) for a nested loop's block as for the k loop - one code.
+   - **Constrained virtual registers**: a virtual register's file narrowed
+     to what its operands' signatures allow (asmgen's operand_values) - SME's
+     slice index (a slice access's _rowreg/_colreg: w12-w15), SVE's governing
+     predicates (p0-p7) - the renamer allocating from that set; no register
+     type of asmgen's (its gen.valid_rcregs unused).
+
 7. **Data offsets, resolved late** (later): carry only what each data
    register must hold at each point - the data's offsets - and resolve them
    into loads, stores, address bumps and pointers where everything is known:
