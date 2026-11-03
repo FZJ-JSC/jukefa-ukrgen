@@ -114,6 +114,10 @@ class loop_stage(stage):
                                 if sp is not None:
                                     sp.forms(loop)
                             made[id(loop)] = loop
+                            if loop.info.get("copies"):
+                                # its walker set up by the addresses stage, where
+                                # the anchor's walk leaves the register
+                                loop.info["walker"] = True
                             out.append(loop)
                         else:
                             out.append(op)

@@ -853,10 +853,32 @@ class signature_specializer:
                 walk.anchor = done[-1]
                 inserted += done[:-1]
             op.refresh()
+            if op.info.get("walker"):
+                # its copies' walker (flow/stages/loops.py): set up here, after
+                # the anchor's walk - from where the register is now to the
+                # anchor's element (a fill from the last element backwards from
+                # a vector length of steps on, one back)
+                inserted.append(self.walker_start(op))
             return inserted + [op]
         if isinstance(op, (lsc_load, lsc_store)):
             return self.adapt_access(op)
         return [op]
+
+    def walker_start(self, loop):
+        """
+        An element loop's walker set up: an address step from the component's
+        register to the anchor's element, as far as where the register is
+        """
+        from ..flow.stages.loops import WALKER
+        anchor = loop.walks[0].anchor
+        comp, reg = anchor.indices[0].component, anchor.indices[0].indices[0]
+        elements = self.program.offsets.elements_offset(anchor.offset, self.program.strides.get(comp, {}))
+        delta = elements - self.positions[(comp, reg)]
+        if loop.subtiling.order < 0:
+            terms = dict(loop.walks[0].step.terms)
+            delta = delta + sym._make({tuple(sorted(("VL",) + f)): c for f, c in terms.items()}) \
+                - loop.walks[0].step
+        return lsc_addr_compute(comp, reg, WALKER, delta, scalar_tile)
 
     def rebase(self, block: ir_block, rebased: dict) -> list:
         """

@@ -71,7 +71,7 @@ class test_vla_repeat(unittest.TestCase):
         self.assertTrue(r.subtiling.loop)
         self.assertEqual([1, 2], r.subtiling.count.count_unrolls(2))   # 16 bytes of doubles
         self.assertEqual(1, r.subtiling.order)
-        self.assertEqual({"component": "A", "index": "m", "direction": "load", "copies": True},
+        self.assertEqual({"component": "A", "index": "m", "direction": "load", "copies": True, "walker": True},
                          {k: v for k, v in r.info.items() if k not in ("stride", "explicit")})
 
     def test_virtual(self):

@@ -1128,9 +1128,16 @@ class signature_emitter:
         for s in op.block:
             for idx in s.indices:
                 self.dts.setdefault((idx.component, idx.indices[0]), dt)
-        walker, counter, delta = self.greg(), self.greg(), self.greg()
-        lines = [asmops.mov(self.gen, src=self.aregs[(comp, reg)], dst=walker)]
-        lines += self.add_bytes(walker, self.bytes_of(comp, start), comp)
+        from ..flow.stages.loops import WALKER
+        set_up = op.info.get("walker")
+        if set_up:
+            # set up before the loop (its walker_start address step)
+            walker, lines = self.aregs[(comp, WALKER)], []
+        else:
+            walker = self.greg()
+            lines = [asmops.mov(self.gen, src=self.aregs[(comp, reg)], dst=walker)]
+            lines += self.add_bytes(walker, self.bytes_of(comp, start), comp)
+        counter, delta = self.greg(), self.greg()
         lines.append(asmops.mov(self.gen, src=self.slice_count(op, dt), dst=counter))
         # the walk's step, the element stride in bytes - negative where a fill
         # shifts up (SVE insr, into lane 0): from the last element backwards
@@ -1146,7 +1153,7 @@ class signature_emitter:
                          else asmops.mov(self.gen, src=source, dst=delta))
         else:
             raise specialization_error(f"{op.rsln}: walking {comp} by {stride} elements")
-        if up:
+        if up and not set_up:
             # the last element: a vector length of strides on, one back
             lines += self.add_bytes(walker, self.bytes_of(comp, sym._make(
                 {tuple(sorted(("VL",) + f)): c for f, c in terms.items()})), comp)
@@ -1229,6 +1236,10 @@ class signature_emitter:
         lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
         for r in (walker, counter, delta):
             self.rt.unuse_reg("greg", r.idx)
+        if set_up:
+            # the walker dead after its loop
+            del self.aregs[(comp, WALKER)]
+            self.positions.pop((comp, WALKER), None)
         for tag, number in extra:
             self.rt.unuse_reg(tag, number)
         return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
