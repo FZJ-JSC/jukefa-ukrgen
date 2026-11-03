@@ -52,6 +52,9 @@ from ..specializers.signature import (
     specialization_error, _sigs, _masked, _offset_forms, _accepts, _all_true, _usable, _vl_form, _takes, slice_columns, slice_walkers, slice_placements,
 )
 
+SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
+
+
 @dataclass
 class emitted_block:
     """
@@ -531,6 +534,8 @@ class signature_emitter:
         self.regions_started = False
         self.region_loads: list[str] = []
         self.labels = iter(range(10**6))
+        #: whether a value lives outside the operation emitted (straight sets it)
+        self.outside = lambda k: True
         isa = self.gen.isa_setup()
         self.vector_length_kept = isa.predication().name == "IMPLICIT"
         self.strides_in: dict[str, object] = {}
@@ -1145,27 +1150,29 @@ class signature_emitter:
                 self.dts.setdefault((idx.component, idx.indices[0]), dt)
         counter = self.greg()
         frame = [asmops.mov(self.gen, src=self.slice_count(op, dt), dst=counter)]
-        # each copy's scalar a tile of its own: its register taken as it's
-        # written, free after its last read
-        scalar_of, last = {}, {}
+        # its body renamed as straight renames: a register taken as its value
+        # is written, free after its last read - unless the body reads it
+        # before writing it (carried across the back edge) or it lives outside
+        # the loop (the vector it fills, read after it)
+        carried, seen, last = set(), set(), {}
         for i, b in enumerate(op.block):
-            role = b.properties["role"]
-            if role in ("load", "extract", "fill", "store"):
-                p = 1 if role in ("load", "extract", "store") else 0
-                idx, rtype = b.indices[p], b.rtypes[p]
-                scalar_of[id(b)] = (idx, rtype)
-                last[(idx.component, idx.indices[0], rtype)] = i
+            for p, (idx, r) in enumerate(zip(b.indices, b.rtypes or [])):
+                if r not in (rgt.VEC, rgt.FP, rgt.TILE):
+                    continue
+                k = (idx.component, idx.indices[0], r)
+                if k not in seen and p in (b.reads or []):
+                    carried.add(k)
+                seen.add(k)
+                last[k] = i
         body = []
         for i, b in enumerate(op.block):
-            held = scalar_of.get(id(b))
-            if held is not None:
-                self.reg(*held)
             # every operation as any: its accesses at the walker (their
             # elements' offsets where its set-up and steps put it), its steps
             # (address), its fills, extracts and shifts (move)
             body += self.emit_op(b)
-            if held is not None and last.get((held[0].component, held[0].indices[0], held[1])) == i:
-                self.release((held[0].component, held[0].indices[0], held[1]))
+            for k in self.data_keys(b):
+                if last.get(k) == i and k not in carried and not self.outside(k):
+                    self.release(k)
         lines = frame + self.loop_code(emitted_block(
             name=f"elements of {comp}", loop_index=op.info.get("index") or "elements",
             sections={"body": body}, counters=(counter, None), step=op.subtiling.unroll,
@@ -1885,13 +1892,28 @@ class signature_emitter:
             prologue = list(block.prologue)
             # (and loads the hoist irmod moved out of the loop)
             first = lambda op: isinstance(op, lsc_zero) or op.properties.get("hoisted")
-            out.sections["init"] = [line for op in prologue if first(op)
-                                    for line in self.emit_op(op)]
-            out.sections["prologue"] = [line for op in prologue if not first(op)
-                                        for line in self.emit_op(op)]
-            for section in ("body", "epilogue", "tail", "subtail"):
-                out.sections[section] = [line for op in getattr(block, section)
-                                         for line in self.emit_op(op)]
+            # a loop block's own registers fixed (the model's rings): nothing
+            # released - but the loops in its sections rename their bodies,
+            # what's live after each of them known (the back edge: what the
+            # body and the tail read before writing live at their ends)
+            after = self.exposed([o for b in later for section in SECTIONS for o in getattr(b, section) or []])
+            parts = [("init", [op for op in prologue if first(op)]),
+                     ("prologue", [op for op in prologue if not first(op)])] + \
+                [(section, list(getattr(block, section))) for section in ("body", "epilogue", "tail", "subtail")]
+            following = set(after)
+            ends = {}
+            for name, ops in reversed(parts):
+                ends[name] = set(following) | (self.exposed(ops) if name in ("body", "tail") else set())
+                following = self.exposed(ops) | (following - {k for o in ops for k in self.reads_writes(o)[1]})
+            outside = self.outside
+            for name, ops in parts:
+                afters = self.live_afters(ops, ends[name])
+                lines = []
+                for pos, op in enumerate(ops):
+                    self.outside = lambda k, a=afters[pos]: k in a
+                    lines += self.emit_op(op)
+                out.sections[name] = lines
+            self.outside = outside
         else:
             out.sections["body"] = self.straight(block.body, later)
         return self._advances(block, out)
@@ -1903,12 +1925,7 @@ class signature_emitter:
         died - C those of AB in gemm's epilogue. Registers no later block reads
         are released when the block starts.
         """
-        def keys(op):
-            # data registers, tiles among them: an outer products' tile lives
-            # on into the operations reaching it slice by slice
-            return [(i.component, i.indices[0], r) for i, r in
-                    zip(op.indices, op.rtypes or [])
-                    if r in (rgt.VEC, rgt.FP, rgt.TILE)]
+        keys = self.data_keys
 
         needed_later = {k for b in later
                         for section in ("prologue", "body", "epilogue", "tail", "subtail")
@@ -1921,13 +1938,81 @@ class signature_emitter:
         for pos, op in enumerate(ops):
             for k in keys(op):
                 last[k] = pos
+        # what's live after each operation: read by a later one before it's
+        # written, or by a later block before it writes it - a loop's body keeps
+        # their registers (straight's own releases as they were: needed_later)
+        exposed, written = set(), set()
+        for b in later:
+            for section in ("prologue", "body", "epilogue", "tail", "subtail"):
+                for o in getattr(b, section) or []:
+                    reads, writes = self.reads_writes(o)
+                    exposed |= reads - written
+                    written |= writes
+        live, live_after = set(exposed), [None] * len(ops)
+        for pos in reversed(range(len(ops))):
+            live_after[pos] = set(live)
+            reads, writes = self.reads_writes(ops[pos])
+            live = (live - writes) | reads
         lines = []
+        outside = self.outside
         for pos, op in enumerate(ops):
+            self.outside = lambda k, after=live_after[pos]: k in after
             lines += self.emit_op(op)
             for k in keys(op):
                 if last[k] == pos and k not in needed_later:
                     self.release(k)
+        self.outside = outside
         return lines
+
+    def exposed(self, ops: list) -> set:
+        """
+        The data registers operations read before they write them (in order)
+        """
+        out, written = set(), set()
+        for op in ops:
+            reads, writes = self.reads_writes(op)
+            out |= reads - written
+            written |= writes
+        return out
+
+    def live_afters(self, ops: list, end: set) -> list:
+        """
+        What's live after each operation: read by a later one before it's
+        written, or at the end (end)
+        """
+        live, out = set(end), [None] * len(ops)
+        for pos in reversed(range(len(ops))):
+            out[pos] = set(live)
+            reads, writes = self.reads_writes(ops[pos])
+            live = (live - writes) | reads
+        return out
+
+    def reads_writes(self, op) -> tuple[set, set]:
+        """
+        The data registers an operation reads and writes - a loop's: what its
+        body reads before writing it (carried in), what it writes
+        """
+        def at(o, positions):
+            return {(o.indices[p].component, o.indices[p].indices[0], o.rtypes[p])
+                    for p in positions or [] if p < len(o.indices) and o.rtypes
+                    and o.rtypes[p] in (rgt.VEC, rgt.FP, rgt.TILE)}
+        if isinstance(op, lsc_loop):
+            reads, writes = set(), set()
+            for b in op.block:
+                reads |= at(b, b.reads) - writes
+                writes |= at(b, b.writes)
+            return reads, writes
+        return at(op, op.reads), at(op, op.writes)
+
+    def data_keys(self, op) -> list:
+        """
+        An operation's data registers - vectors, scalars, tiles (an outer
+        products' tile lives on into the operations reaching it slice by
+        slice): what the renamer (straight, a loop's body) gives registers to
+        """
+        return [(i.component, i.indices[0], r) for i, r in
+                zip(op.indices, op.rtypes or [])
+                if r in (rgt.VEC, rgt.FP, rgt.TILE)]
 
     def _advances(self, block: ir_block, out: emitted_block) -> emitted_block:
         db, strides = self.program.offsets, self.program.strides
