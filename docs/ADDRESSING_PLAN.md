@@ -131,27 +131,58 @@ in the IR, in order.
    counts (0303), its placements (0306: each access's move and immediate, an
    iteration's step on). The rest - register sets rotated across copies,
    temporaries freed after their last read, preloading - goes with the loop
-   itself into the IR: a loop over elements (`lsc_loop`: SME's slices, SVE's
-   lane fills and drains) is "a loop as an instruction", its block one
-   iteration's template, the emitter making the loop of it. As a block of the
-   IR it gets what the k loop has:
-   1. **A loop's block an `ir_block`**: sections (prologue, body, last
-      iteration, tail), its index (the elements', SME's slice index), step,
-      unroll, advance; the builder makes its copies - each copy's temporaries
-      virtual tiles of their own - and preloads it as the k loop's (the
-      preload shift: the first copies' loads into the prologue and the body's
-      end, `--COMP-max-preload`, `--COMP-data-regs`).
-   2. **The specializer's sections nested**: positions, walks, moves back,
-      advances as in any block - columns, walkers and placements its general
-      mechanisms (walks, offsets, stride pointers), the walk plan gone.
-   3. **The scheduler's renaming in a loop's body**: the copies' tiles into
-      the registers the enclosing section leaves (the inner budget it has) -
-      no register sets rotated, nothing freed by hand.
-   4. **The emitter's `block` for nested blocks**: the count, the index
-      register (SME's w12-w15: a register class), the slice operand its index
-      and the copy's immediate; `slices` and `loop` gone.
-   5. Measured: SME's, SMESVE's and SVE's lane-fill kernels - instructions,
-      right under qemu.
+   itself into the IR. `lsc_loop` was an actual loop - its block an IR
+   block, loops among its operations - and narrowed into a virtual
+   instruction for one tile: one iteration's template, the emitter making
+   the loop of it (SME's slices; the general VLA loops: `vla_lanes`' fills
+   and drains - RVV's fld + vfslide1down, vfmv.f.s + vslidedown + fsd; SVE's
+   insr). The builder makes the loop as it walks a resolution's steps
+   (`slice_loop` for a level of slices, `move_vla`/`drain_vla` for a count
+   known at run time only), so the IR never holds the operation the solver
+   chose. Back to a loop of the IR, made late:
+   1. **Tile operations until specialization.** The builder emits the
+      operation - an `lsc_load`, `lsc_store` or `lsc_transformation` of the
+      whole tile or vector (the loop's anchor: a vector access from its first
+      element) - with the resolution's per-element steps as its recipe. The
+      passes before specialization see tile operations: clustering, copy
+      propagation; `vectorize_loops` makes one a vector access, no loop of it
+      (it uses only what the loop records); `hoist_slices` needless (alpha's
+      and beta's broadcasts never inside a loop); `forward_slices` forwarding
+      at tile level beside `copyprop_tiles`. First attempt (RVV's
+      `vla_lanes`, the built loop kept with its anchor): the builder's own
+      k-loop work - the preload shift, offsets rebased, address groups - took
+      the anchor for a streamed load of A and moved its offset, its loop's
+      not: wrong results (the fill's walker an element short). The k loop's
+      building has to treat an operation standing for a loop as one - its
+      offset the loop's start - before it goes into the IR.
+   2. **Loops made at the start of specialization**: adjacent operations
+      over the same tile, orientation and count fused into one loop
+      (`fuse_slices`' condition, applied as the loop is made), each an
+      `ir_block`: its index (the elements'; SME's slice index), its count (a
+      vector's elements at run time, a tile's slices, a masked tile's rows),
+      its copies (the unroll; each copy's temporaries virtual tiles of their
+      own), its sections (prologue, body, last iteration, a tail where the
+      count needn't be a multiple of the unroll), its advance (the walks'
+      steps), preloaded as the k loop (the preload shift: per stream,
+      `--COMP-max-preload`, `--COMP-data-regs`) - a fused loop's preloads,
+      unrolls and data registers its streams', whatever operations they came
+      from. Recursive: a loop's block may hold loops.
+   3. **The specializer's sections nested**: positions, walks, moves back,
+      advances as in any block - the columns, walkers and placements its
+      general mechanisms (walks, offsets, stride pointers), the walk plan
+      gone.
+   4. **The scheduler in a loop's sections**: within the registers the
+      enclosing section leaves (the inner budget it has), the copies' tiles
+      renamed into them - no register sets rotated, nothing freed by hand.
+   5. **The emitter's `block` for nested blocks**: the count, the index (SME's
+      w12-w15: a register class; the slice operand its index and the copy's
+      immediate); `slices` and `loop` gone.
+   6. **General first**: the VLA element loops (RVV's `vla_lanes` fill and
+      drain - tests/specializers/test_vla_repeat.py, under qemu at two VLENs;
+      SVE's insr) before SME's slices (fused epilogues, ZA's index:
+      tests/stages/test_sme.py, the SME and SMESVE configurations) - nothing
+      of either special to the other. Measured: instructions, right under
+      qemu.
    Setup values as an IR setup block, after.
 
 ## Mixed precision
