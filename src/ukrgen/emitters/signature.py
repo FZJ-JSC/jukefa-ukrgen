@@ -69,6 +69,16 @@ class emitted_block:
     #: a loop's counters: iterations, then the tail's
     counters : tuple | None = None
     tail_advance : list[str] = field(default_factory=list)
+    #: what an iteration takes off its counter (an element loop's: its unroll)
+    step : int = 1
+    #: whether the count may be 0 - a branch past the loop first (a vector's
+    #: elements never are)
+    guarded : bool = True
+    #: a plain loop: its body only, counted down by its step (an element
+    #: loop's) - not software-pipelined, no last iteration of its own
+    plain : bool = False
+    #: its labels' kind (ukrN_loop; an element loop's ukrN_elements)
+    label : str = "loop"
 
 
 @dataclass
@@ -1162,8 +1172,14 @@ class signature_emitter:
             lines += self.add_bytes(walker, self.bytes_of(comp, sym._make(
                 {tuple(sorted(("VL",) + f)): c for f, c in terms.items()})), comp)
             lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
-        loop = f"ukr{next(self.labels)}_elements"
-        lines.append(self.gen.label(label=loop))
+        frame = lines
+        if set_up:
+            # its body apart, its frame - the counter's label, step and branch -
+            # loop_code's (a plain loop, its count never 0)
+            frame, lines = lines, []
+        else:
+            loop = f"ukr{next(self.labels)}_elements"
+            lines.append(self.gen.label(label=loop))
         # the body as often as an iteration takes elements, the pointer moved
         # after each; its scalar rotating through as many registers as asked,
         # so the elements' scalar loads and stores need not wait for each other
@@ -1244,8 +1260,16 @@ class signature_emitter:
                 lines.append(self.move(shift))
                 lines.append(access(store, scalar))
                 lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
-        lines.append(asmops.add_imm(self.gen, reg=counter, imm=-unroll))
-        lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
+        if set_up:
+            body = [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
+                    if l.strip()]
+            lines = frame + self.loop_code(emitted_block(
+                name=f"elements of {comp}", loop_index=op.info.get("index") or "elements",
+                sections={"body": body}, counters=(counter, None), step=unroll, guarded=False, plain=True,
+                label="elements"))
+        else:
+            lines.append(asmops.add_imm(self.gen, reg=counter, imm=-unroll))
+            lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
         for r in (walker, counter, delta):
             if r is not None:
                 self.rt.unuse_reg("greg", r.idx)
@@ -2486,6 +2510,65 @@ class signature_emitter:
             reg = self.aregs.pop(key)
             self.rt.unuse_reg("greg", reg.idx)
 
+    def loop_code(self, block: emitted_block) -> list[str]:
+        """
+        A block's code with its loop's control around its sections, branching
+        with cb - software-pipelined (control); a plain loop - a body only, no
+        prologue or last iteration (an element loop) - its body counted down
+        by the block's step, past it first only where the count may be 0
+        """
+        lines = lambda text: [l.strip() for l in text.splitlines() if l.strip()]
+        gen = self.gen
+        code: list[str] = []
+        ez, nz = comparison.EZ, comparison.NZ
+
+        def counted(reg, label, part, done, step=1, guarded=True):
+            # the count decremented first: the branch at the end reads a value
+            # an iteration old - no wait on the decrement before it (the body
+            # doesn't read the counter; every ISA's branch tests the register)
+            if guarded:
+                code.extend(lines(gen.cb(reg1=reg, reg2=None, cmp=ez, label=done)))
+            if self.ctx.loop_align:
+                # the loop's head on a boundary: nops padding, run once
+                code.extend(lines(gen.align(self.ctx.loop_align)))
+            code.extend(lines(gen.label(label=label)))
+            code.extend(lines(asmops.add_imm(gen, reg=reg, imm=-step)))
+            code.extend(part)
+            code.extend(lines(gen.cb(reg1=reg, reg2=None, cmp=nz, label=label)))
+            if guarded:
+                code.extend(lines(gen.label(label=done)))
+
+        code.extend(block.loads)
+        sec = block.sections
+        if block.loop_index is None:
+            for part in sec.values():
+                code.extend(part)
+            code.extend(block.advance + block.tail_advance)
+            return code
+        n, left = block.counters
+        n = n or self.params[block.loop_index]
+        tag = next(self.labels)
+        done = f"ukr{tag}_done"
+        if block.plain:
+            # a plain loop (an element loop): its body counted down by its step
+            counted(n, f"ukr{tag}_{block.label}", sec.get("body", []) + block.advance, done,
+                    step=block.step, guarded=block.guarded)
+            return code
+        code.extend(sec.get("init", []))
+        code.extend(lines(gen.cb(reg1=n, reg2=None, cmp=ez, label=done)))
+        code.extend(sec.get("prologue", []))
+        code.extend(lines(asmops.add_imm(gen, reg=n, imm=-1)))
+        counted(n, f"ukr{tag}_loop", sec.get("body", []) + block.advance, f"ukr{tag}_last")
+        code.extend(sec.get("epilogue", []) + block.advance)
+        code.extend(lines(gen.label(label=done)))
+        if sec.get("tail") and left is not None:
+            counted(left, f"ukr{tag}_tail", sec["tail"] + block.tail_advance,
+                    f"ukr{tag}_taildone")
+        if sec.get("subtail"):
+            raise specialization_error(
+                f"{block.name}: a tail below one operation's extent is not emitted yet")
+        return code
+
     def control(self, blocks, cases) -> list[str]:
         """
         The program's control flow around the blocks' sections, branching with
@@ -2504,45 +2587,8 @@ class signature_emitter:
         code: list[str] = []
         ez, nz = comparison.EZ, comparison.NZ
 
-        def counted(reg, label, part, done):
-            # the count decremented first: the branch at the end reads a value
-            # an iteration old - no wait on the decrement before it (the body
-            # doesn't read the counter; every ISA's branch tests the register)
-            code.extend(lines(gen.cb(reg1=reg, reg2=None, cmp=ez, label=done)))
-            if self.ctx.loop_align:
-                # the loop's head on a boundary: nops padding, run once
-                code.extend(lines(gen.align(self.ctx.loop_align)))
-            code.extend(lines(gen.label(label=label)))
-            code.extend(lines(asmops.add_imm(gen, reg=reg, imm=-1)))
-            code.extend(part)
-            code.extend(lines(gen.cb(reg1=reg, reg2=None, cmp=nz, label=label)))
-            code.extend(lines(gen.label(label=done)))
-
         def block_code(block):
-            code.extend(block.loads)
-            sec = block.sections
-            if block.loop_index is None:
-                for part in sec.values():
-                    code.extend(part)
-                code.extend(block.advance + block.tail_advance)
-                return
-            n, left = block.counters
-            n = n or self.params[block.loop_index]
-            tag = next(self.labels)
-            done = f"ukr{tag}_done"
-            code.extend(sec.get("init", []))
-            code.extend(lines(gen.cb(reg1=n, reg2=None, cmp=ez, label=done)))
-            code.extend(sec.get("prologue", []))
-            code.extend(lines(asmops.add_imm(gen, reg=n, imm=-1)))
-            counted(n, f"ukr{tag}_loop", sec.get("body", []) + block.advance, f"ukr{tag}_last")
-            code.extend(sec.get("epilogue", []) + block.advance)
-            code.extend(lines(gen.label(label=done)))
-            if sec.get("tail") and left is not None:
-                counted(left, f"ukr{tag}_tail", sec["tail"] + block.tail_advance,
-                        f"ukr{tag}_taildone")
-            if sec.get("subtail"):
-                raise specialization_error(
-                    f"{block.name}: a tail below one operation's extent is not emitted yet")
+            code.extend(self.loop_code(block))
 
         for block in blocks:
             block_code(block)
