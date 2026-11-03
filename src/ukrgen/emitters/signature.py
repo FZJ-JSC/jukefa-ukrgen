@@ -1173,7 +1173,22 @@ class signature_emitter:
                                            "element takes a plain address")
             return line
 
-        if "load" == op.info["direction"]:
+        if op.info.get("copies"):
+            # the loop stage's copies (flow/stages/loops.py copies), in its
+            # order: each copy's scalar its register in the rotation
+            for b in op.block:
+                scalar = scalars[b.properties["copy"] % count]
+                role = b.properties["role"]
+                if role in ("load", "store"):
+                    lines.append(access(b, scalar))
+                    lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
+                elif "fill" == role:
+                    lines.append(self.move(b, src=scalar))
+                elif "extract" == role:
+                    lines.append(self.move(b, dst=scalar))
+                else:
+                    lines.append(self.move(b))
+        elif "load" == op.info["direction"]:
             # a batch of loads into different registers, then their fills in
             # order: the loads don't wait for the fills
             load, fill = op.block

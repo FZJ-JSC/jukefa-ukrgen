@@ -7,6 +7,45 @@ from .stage import stage, stage_error
 from ...specializers.signature import specialization_error
 
 
+def copies(loop) -> None:
+    """
+    A loop over a vector's elements, its copies made: one element's operations
+    once a copy (the loop's unroll), in the order the loop runs them - a batch
+    of loads (as many as its scalars' registers), then their fills; or an
+    extract, the shift and the store an element - each with its copy number
+    and its role (load, fill; extract, shift, store). The emitter's loop emits
+    the body as it is; the scheduler leaves it so while the copies' scalars
+    rotate through the registers asked (ADDRESSING_PLAN 6.3: next, virtual
+    tiles of their own, renamed)
+    """
+    from ...lsc_model.builder import _clone
+    if "slices" == loop.info.get("kind") or loop.info.get("copies") \
+            or loop.info.get("direction") not in ("load", "store"):
+        return
+    unroll = loop.subtiling.unroll
+    count = max(1, min(loop.subtiling.registers, unroll))
+
+    def copy_of(op, e, role):
+        new = _clone(op)
+        new.properties["copy"] = e
+        new.properties["role"] = role
+        return new
+    body = []
+    if "load" == loop.info["direction"]:
+        load, fill = loop.block
+        for start in range(0, unroll, count):
+            batch = range(start, min(unroll, start + count))
+            body += [copy_of(load, e, "load") for e in batch]
+            body += [copy_of(fill, e, "fill") for e in batch]
+    else:
+        extract, store, shift = loop.block
+        for e in range(unroll):
+            body += [copy_of(extract, e, "extract"), copy_of(shift, e, "shift"), copy_of(store, e, "store")]
+    loop.block = body
+    loop.info["copies"] = True
+    loop.refresh()
+
+
 class loop_stage(stage):
     """
     Each operation standing for a loop (a vector filled or drained element by
@@ -35,8 +74,10 @@ class loop_stage(stage):
                     for op in ops:
                         loop = loop_of(op)
                         if loop is not None and loop is not op:
-                            if sp is not None and id(loop) not in made:
-                                sp.forms(loop)
+                            if id(loop) not in made:
+                                copies(loop)
+                                if sp is not None:
+                                    sp.forms(loop)
                             made[id(loop)] = loop
                             out.append(loop)
                         else:

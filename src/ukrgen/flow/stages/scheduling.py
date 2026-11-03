@@ -200,7 +200,9 @@ class schedule_stage(stage):
                         # a loop's own block, as a loop body: a fused loop's
                         # tiles' chains, an unrolled one's copies, interleaved
                         for i, op in enumerate(order):
-                            if isinstance(op, lsc_loop) and op.block:
+                            # (a loop whose copies rotate through registers the
+                            # loop stage set: in its order - flow/stages/loops.py)
+                            if isinstance(op, lsc_loop) and op.block and not op.info.get("copies"):
                                 # within the registers the block left it: those
                                 # live across the loop - read after it, untouched
                                 # by it (gemm's other accumulators) - not its
