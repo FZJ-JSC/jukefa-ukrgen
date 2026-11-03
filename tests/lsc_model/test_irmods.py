@@ -69,9 +69,10 @@ class test_lanefuse(unittest.TestCase):
 
     def run_lanes(self, model_irmods, **extra):
         from ukrgen.flow.stages.isa_specialize import isa_specialize_stage
+        from ukrgen.flow.stages.addresses import address_stage
         import tests.specializers.test_signature as base
         saved = base.STAGES
-        base.STAGES = saved[:7] + [pre_specialize_irmod_stage, isa_specialize_stage,
+        base.STAGES = saved[:7] + [pre_specialize_irmod_stage, isa_specialize_stage, address_stage,
                                    post_specialize_irmod_stage, emit_stage]
         try:
             return base.mm(**{"mm-tileop": [self.LANE_FMA], "n": "4",

@@ -16,6 +16,7 @@ from ukrgen.flow.stages.dimension import dimension_stage
 from ukrgen.flow.stages.sto import sto_stage
 from ukrgen.flow.stages.model import model_stage
 from ukrgen.flow.stages.isa_specialize import isa_specialize_stage
+from ukrgen.flow.stages.addresses import address_stage
 from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage, post_specialize_irmod_stage
 from ukrgen.flow.stages.scheduling import schedule_stage
 from ukrgen.flow.stages.emit import emit_stage
@@ -27,7 +28,7 @@ from ukrgen.schedulers.list_scheduler import list_scheduler, dependencies
 from tests.specializers.test_signature import assembles
 
 STAGES = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage,
-          model_stage, pre_specialize_irmod_stage, isa_specialize_stage,
+          model_stage, pre_specialize_irmod_stage, isa_specialize_stage, address_stage,
           post_specialize_irmod_stage, schedule_stage, emit_stage]
 
 GEMM_NEON = {

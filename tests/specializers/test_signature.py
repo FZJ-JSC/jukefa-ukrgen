@@ -19,11 +19,12 @@ from ukrgen.flow.stages.dimension import dimension_stage
 from ukrgen.flow.stages.sto import sto_stage
 from ukrgen.flow.stages.model import model_stage
 from ukrgen.flow.stages.isa_specialize import isa_specialize_stage
+from ukrgen.flow.stages.addresses import address_stage
 from ukrgen.flow.stages.emit import emit_stage
 from ukrgen.models.load_store_operations import lsc_load, lsc_store, lsc_addr_compute
 
 STAGES = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage,
-          model_stage, isa_specialize_stage, emit_stage]
+          model_stage, isa_specialize_stage, address_stage, emit_stage]
 
 
 def mm(isa="neon", **extra):

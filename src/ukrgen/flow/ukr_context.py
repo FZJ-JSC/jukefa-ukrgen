@@ -66,6 +66,9 @@ class ukr_context:
         self.dims            : dict[str,int] = dict()
         # one LSC IR program per part, and its emitted assembly
         self.programs        : list = list()
+        #: the specializers isa_specialize made, their forms done - the addresses
+        #: stage places their programs' addresses
+        self.specializers    : list = list()
         self.emitted         : list = list()
         # per part: loop STO -> implementation for the loop's remainder below
         # one operation, and its tiling

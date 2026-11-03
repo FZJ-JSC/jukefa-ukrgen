@@ -22,6 +22,7 @@ from ...flow.stages.sto import sto_stage
 from ...flow.stages.model import model_stage
 from ...flow.stages.irmods import pre_specialize_irmod_stage, post_specialize_irmod_stage
 from ...flow.stages.isa_specialize import isa_specialize_stage
+from ...flow.stages.addresses import address_stage
 from ...flow.stages.scheduling import schedule_stage
 from ...emitters.signature import AUTO_OFFSET_REGISTERS
 from ...flow.stages.emit import emit_stage
@@ -29,7 +30,7 @@ from ...lsc_model.addressing import sym
 
 #: the flow as the command line runs it
 PIPELINE = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage,
-            model_stage, pre_specialize_irmod_stage, isa_specialize_stage,
+            model_stage, pre_specialize_irmod_stage, isa_specialize_stage, address_stage,
             post_specialize_irmod_stage, schedule_stage, emit_stage]
 
 #: BLIS's letter for a data type

@@ -1022,12 +1022,27 @@ class signature_specializer:
             setattr(block, section, out)
 
     def specialize(self) -> ir_program:
-        # every operation's forms first (whatever its address), then the
-        # addresses, block by block
+        """
+        The forms, then the addresses (the flow runs them as two stages:
+        isa_specialize, addresses - a loop's copies made between)
+        """
+        self.specialize_forms()
+        return self.place()
+
+    def specialize_forms(self) -> None:
+        """
+        Every operation's forms (forms: whatever its address)
+        """
         for block in list(self.program.blocks) + [b for case in self.program.cases for b in case.blocks]:
             for section in ("prologue", "body", "epilogue", "tail", "subtail"):
                 for op in getattr(block, section) or []:
                     self.forms(op)
+
+    def place(self) -> ir_program:
+        """
+        The addresses, block by block - positions, walks, moves, immediates,
+        offsets - then the processor state each access's forms need
+        """
         for block in self.program.blocks:
             self.adapt_block(block)
         start = dict(self.positions)

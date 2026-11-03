@@ -96,7 +96,7 @@ class test_spelled_addresses(unittest.TestCase):
         # the spelling is the post-specialize stage's (before scheduling): the
         # helper's pipeline with it, after the specialization
         stages = list(t.STAGES)
-        i = [x.__name__ for x in stages].index("isa_specialize_stage") + 1
+        i = [x.__name__ for x in stages].index("address_stage") + 1
         saved, t.STAGES = t.STAGES, stages[:i] + [post_specialize_irmod_stage] + stages[i:]
         try:
             ctx, res = gemm("rvv", **{"rvv-LMUL": "1"})

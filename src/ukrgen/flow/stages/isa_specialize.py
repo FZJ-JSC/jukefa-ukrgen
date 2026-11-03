@@ -118,6 +118,7 @@ class isa_specialize_stage(stage):
         return out
 
     def progress(self):
+        specializers = []
         try:
             for program in self.context.programs:
                 sp = signature_specializer(self.context, program)
@@ -129,13 +130,12 @@ class isa_specialize_stage(stage):
                     raise stage_error(f"--ldinc-imm-offsets {sp.imm_offsets!r}: all, none or last")
                 sp.assumed = self.assumed_state()
                 sp.program.offset_registers = self.offset_budget(self.context)
-                sp.specialize()
+                # the forms here; the addresses the next stage's (addresses) -
+                # a loop's copies made between (ADDRESSING_PLAN 6.2-6.4)
+                sp.specialize_forms()
+                specializers.append(sp)
         except specialization_error as err:
             raise stage_error(f"specializing for the ISA: {err}") from err
-        text = "\n\n".join(p.render() for p in self.context.programs)
-        if self.params["print-specialized-ir"].value:
-            raise early_exit(text)
-        for line in text.splitlines():
-            self.debug(line)
+        self.context.specializers = specializers
         self.context.params.update(self.params)
         return []
