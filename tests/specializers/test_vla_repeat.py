@@ -65,7 +65,9 @@ class test_vla_repeat(unittest.TestCase):
                  for op in getattr(b, s) if isinstance(op, lsc_loop)]
         self.assertTrue(loops)
         r = loops[0]
-        self.assertEqual(2, len(r.block))
+        # one element: its load at the walker, the walker's step (an address
+        # step of the IR), its fill
+        self.assertEqual(["load", "bump", "fill"], [b.properties.get("role") for b in r.block])
         self.assertTrue(r.subtiling.loop)
         self.assertEqual([1, 2], r.subtiling.count.count_unrolls(2))   # 16 bytes of doubles
         self.assertEqual(1, r.subtiling.order)

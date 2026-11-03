@@ -7,6 +7,10 @@ from .stage import stage, stage_error
 from ...specializers.signature import specialization_error
 
 
+#: the walking pointer's address register: no component's own
+WALKER = 1 << 20
+
+
 def _scalar_of(idx, e):
     """A copy's scalar: the template's tile, numbered by its copy"""
     import copy as _copy
@@ -47,17 +51,31 @@ def copies(loop) -> None:
         new.properties["copy"] = e
         new.properties["role"] = role
         return new
+    # the walking pointer the emitter sets up (from the anchor's element, the
+    # element count its counter): each access at it, then a step of it - an
+    # address step of the IR, so an access's element is the steps before it
+    # whatever the order the scheduler gives the rest
+    from ...models.load_store_operations import lsc_addr_compute, lsc_reg_index, scalar_tile
+    comp = loop.walks[0].anchor.indices[0].component
+
+    def at_walker(access, e, role):
+        new = copy_of(access, e, role)
+        new.indices = [lsc_reg_index(comp, [WALKER])] + list(new.indices[1:])
+        bump = lsc_addr_compute(comp, WALKER, WALKER, loop.walks[0].step, scalar_tile)
+        bump.properties["copy"] = e
+        bump.properties["role"] = "bump"
+        return [new, bump]
     body = []
     if "load" == loop.info["direction"]:
         load, fill = loop.block
         for start in range(0, unroll, count):
             batch = range(start, min(unroll, start + count))
-            body += [copy_of(load, e, "load") for e in batch]
+            body += [o for e in batch for o in at_walker(load, e, "load")]
             body += [copy_of(fill, e, "fill") for e in batch]
     else:
         extract, store, shift = loop.block
         for e in range(unroll):
-            body += [copy_of(extract, e, "extract"), copy_of(shift, e, "shift"), copy_of(store, e, "store")]
+            body += [copy_of(extract, e, "extract"), copy_of(shift, e, "shift")] + at_walker(store, e, "store")
     loop.block = body
     loop.info["copies"] = True
     loop.refresh()

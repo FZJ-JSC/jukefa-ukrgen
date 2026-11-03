@@ -1193,6 +1193,8 @@ class signature_emitter:
                 role = b.properties["role"]
                 if role in ("load", "store"):
                     lines.append(access(b, scalar))
+                elif "bump" == role:
+                    # the walker's step (an address step of the IR)
                     lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
                 elif "fill" == role:
                     lines.append(self.move(b, src=scalar))
