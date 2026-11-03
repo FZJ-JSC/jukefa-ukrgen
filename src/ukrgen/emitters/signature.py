@@ -1202,10 +1202,12 @@ class signature_emitter:
                 held = scalar_of.get(id(b))
                 scalar = self.reg(*held) if held is not None else None
                 role = b.properties["role"]
-                if role in ("load", "store") and set_up:
-                    # at the walker as any access: its element's offset where
-                    # the walker's set up and steps put it (address)
-                    lines += self._memory(b)
+                if set_up:
+                    # every operation as any: its accesses at the walker (their
+                    # elements' offsets where its set-up and steps put it), its
+                    # steps (address), its fills, extracts and shifts (move) - a
+                    # copy's scalar its own tile
+                    lines += self.emit_op(b)
                 elif role in ("load", "store"):
                     lines.append(access(b, scalar))
                 elif "bump" == role:
