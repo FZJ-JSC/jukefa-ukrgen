@@ -1121,164 +1121,60 @@ class signature_emitter:
     def loop(self, op) -> list[str]:
         """
         A loop over a vector's elements, as many as it has of its type at run
-        time: a walking pointer from the first element, one element's steps,
-        the pointer moved by the element stride
+        time. The loop stage made its copies (flow/stages/loops.py copies),
+        the addresses stage set up its walker (walker_start), its steps are
+        address steps: its counter here, then its body - each operation as
+        any, a copy's scalar freed after its last read - a plain loop of
+        loop_code, counted down by its unroll
         """
         if "slices" == op.info.get("kind"):
             return self.slices(op)
+        from ..flow.stages.loops import WALKER
         anchor = op.walks[0].anchor
-        comp, reg = anchor.indices[0].component, anchor.indices[0].indices[0]
+        comp = anchor.indices[0].component
         dt = self.ctx.component_dts[comp]
         if not op.subtiling.count.runtime or 1 != op.subtiling.count.size:
             raise specialization_error(f"{op.info.get('component')}: a loop of "
                                        f"{op.subtiling.count} iterations is not emitted yet")
-        elements = self.program.offsets.elements_offset(anchor.offset, self.program.strides.get(comp, {}))
-        start = elements - self.positions[(comp, reg)]
+        if not (op.info.get("copies") and op.info.get("walker")):
+            raise specialization_error(f"{op.info.get('component')}: an element loop without the loop "
+                                       f"stage's copies and walker (flow/stages/loops.py)")
         # the scratch scalars in the body hold the component's elements
         for s in op.block:
             for idx in s.indices:
                 self.dts.setdefault((idx.component, idx.indices[0]), dt)
-        from ..flow.stages.loops import WALKER
-        set_up = op.info.get("walker")
-        if set_up:
-            # set up before the loop (its walker_start address step)
-            walker, lines = self.aregs[(comp, WALKER)], []
-        else:
-            walker = self.greg()
-            lines = [asmops.mov(self.gen, src=self.aregs[(comp, reg)], dst=walker)]
-            lines += self.add_bytes(walker, self.bytes_of(comp, start), comp)
-        # a walker the addresses stage set up steps by its bumps (address
-        # steps): no stride register of the loop's own
-        counter, delta = self.greg(), (None if set_up else self.greg())
-        lines.append(asmops.mov(self.gen, src=self.slice_count(op, dt), dst=counter))
-        # the walk's step, the element stride in bytes - negative where a fill
-        # shifts up (SVE insr, into lane 0): from the last element backwards
-        stride = op.walks[0].step
-        terms = dict(stride.terms)
-        up = op.subtiling.order < 0
-        if delta is None:
-            pass
-        elif set(terms) == {()}:
-            nbytes = terms[()] * adt_size(dt)
-            lines.append(asmops.set_imm(self.gen, reg=delta, imm=-nbytes if up else nbytes))
-        elif 1 == len(terms) and 1 == len(next(iter(terms))) and 1 == next(iter(terms.values())):
-            source = self.stride_reg(next(iter(terms))[0])
-            lines.append(asmops.mul_imm(self.gen, src=source, dst=delta, factor=-1) if up
-                         else asmops.mov(self.gen, src=source, dst=delta))
-        else:
-            raise specialization_error(f"{op.rsln}: walking {comp} by {stride} elements")
-        if up and not set_up:
-            # the last element: a vector length of strides on, one back
-            lines += self.add_bytes(walker, self.bytes_of(comp, sym._make(
-                {tuple(sorted(("VL",) + f)): c for f, c in terms.items()})), comp)
-            lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
-        frame = lines
-        if set_up:
-            # its body apart, its frame - the counter's label, step and branch -
-            # loop_code's (a plain loop, its count never 0)
-            frame, lines = lines, []
-        else:
-            loop = f"ukr{next(self.labels)}_elements"
-            lines.append(self.gen.label(label=loop))
-        # the body as often as an iteration takes elements, the pointer moved
-        # after each; its scalar rotating through as many registers as asked,
-        # so the elements' scalar loads and stores need not wait for each other
-        unroll = op.subtiling.unroll
-        count = max(1, min(op.subtiling.registers, unroll))
-        first = op.block[0]
-        scalars, extra = [], []
-        if not op.info.get("copies"):
-            scalars.append(self.reg(first.indices[1], first.rtypes[1]))
-            for _ in range(count - 1):
-                tag = "freg" if rgt.FP == first.rtypes[1] else "greg"
-                number = self.rt.reserve_any_reg(tag)
-                extra.append((tag, number))
-                scalars.append(self.gen.freg(number, dt) if "freg" == tag else self.gen.greg(number))
-
-        def access(step, data):
-            line = self._mem(step, data, walker, 0)
-            if line is None:
-                raise specialization_error(f"{op.rsln}: no {step.step.op} of one {comp} "
-                                           "element takes a plain address")
-            return line
-
-        if op.info.get("copies"):
-            # the loop stage's copies (flow/stages/loops.py copies), in its
-            # order: each copy's scalar a virtual tile of its own, its register
-            # taken as it's written and free after its last read
-            scalar_of = {}
-            last = {}
-            for i, b in enumerate(op.block):
-                p = 1 if b.properties["role"] in ("load", "extract", "store") else 0
-                if b.properties["role"] in ("load", "extract", "fill", "store"):
-                    idx, rtype = b.indices[p], b.rtypes[p]
-                    scalar_of[id(b)] = (idx, rtype)
-                    last[(idx.component, idx.indices[0], rtype)] = i
-            for i, b in enumerate(op.block):
-                held = scalar_of.get(id(b))
-                scalar = self.reg(*held) if held is not None else None
-                role = b.properties["role"]
-                if set_up:
-                    # every operation as any: its accesses at the walker (their
-                    # elements' offsets where its set-up and steps put it), its
-                    # steps (address), its fills, extracts and shifts (move) - a
-                    # copy's scalar its own tile
-                    lines += self.emit_op(b)
-                elif role in ("load", "store"):
-                    lines.append(access(b, scalar))
-                elif "bump" == role:
-                    # the walker's step (an address step of the IR): the stride's
-                    # register or an immediate, back for a fill backwards
-                    lines += self.address(b) if delta is None else \
-                        [asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta)]
-                elif "fill" == role:
-                    lines.append(self.move(b, src=scalar))
-                elif "extract" == role:
-                    lines.append(self.move(b, dst=scalar))
-                else:
-                    lines.append(self.move(b))
-                if held is not None and last.get((held[0].component, held[0].indices[0], held[1])) == i:
-                    self.release((held[0].component, held[0].indices[0], held[1]))
-        elif "load" == op.info["direction"]:
-            # a batch of loads into different registers, then their fills in
-            # order: the loads don't wait for the fills
-            load, fill = op.block
-            for start in range(0, unroll, count):
-                batch = range(start, min(unroll, start + count))
-                for e in batch:
-                    lines.append(access(load, scalars[e - start]))
-                    lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
-                for e in batch:
-                    lines.append(self.move(fill, src=scalars[e - start]))
-        else:
-            # the extract and shift a chain on the vector; each extract into the
-            # next register, so it needn't wait for the store before
-            extract, store, shift = op.block
-            for e in range(unroll):
-                scalar = scalars[e % count]
-                lines.append(self.move(extract, dst=scalar))
-                lines.append(self.move(shift))
-                lines.append(access(store, scalar))
-                lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
-        if set_up:
-            body = [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
-                    if l.strip()]
-            lines = frame + self.loop_code(emitted_block(
-                name=f"elements of {comp}", loop_index=op.info.get("index") or "elements",
-                sections={"body": body}, counters=(counter, None), step=unroll, guarded=False, plain=True,
-                label="elements"))
-        else:
-            lines.append(asmops.add_imm(self.gen, reg=counter, imm=-unroll))
-            lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
-        for r in (walker, counter, delta):
-            if r is not None:
-                self.rt.unuse_reg("greg", r.idx)
-        if set_up:
-            # the walker dead after its loop
-            del self.aregs[(comp, WALKER)]
-            self.positions.pop((comp, WALKER), None)
-        for tag, number in extra:
-            self.rt.unuse_reg(tag, number)
+        counter = self.greg()
+        frame = [asmops.mov(self.gen, src=self.slice_count(op, dt), dst=counter)]
+        # each copy's scalar a tile of its own: its register taken as it's
+        # written, free after its last read
+        scalar_of, last = {}, {}
+        for i, b in enumerate(op.block):
+            role = b.properties["role"]
+            if role in ("load", "extract", "fill", "store"):
+                p = 1 if role in ("load", "extract", "store") else 0
+                idx, rtype = b.indices[p], b.rtypes[p]
+                scalar_of[id(b)] = (idx, rtype)
+                last[(idx.component, idx.indices[0], rtype)] = i
+        body = []
+        for i, b in enumerate(op.block):
+            held = scalar_of.get(id(b))
+            if held is not None:
+                self.reg(*held)
+            # every operation as any: its accesses at the walker (their
+            # elements' offsets where its set-up and steps put it), its steps
+            # (address), its fills, extracts and shifts (move)
+            body += self.emit_op(b)
+            if held is not None and last.get((held[0].component, held[0].indices[0], held[1])) == i:
+                self.release((held[0].component, held[0].indices[0], held[1]))
+        lines = frame + self.loop_code(emitted_block(
+            name=f"elements of {comp}", loop_index=op.info.get("index") or "elements",
+            sections={"body": body}, counters=(counter, None), step=op.subtiling.unroll,
+            guarded=False, plain=True, label="elements"))
+        self.rt.unuse_reg("greg", counter.idx)
+        # the walker dead after its loop
+        self.rt.unuse_reg("greg", self.aregs[(comp, WALKER)].idx)
+        del self.aregs[(comp, WALKER)]
+        self.positions.pop((comp, WALKER), None)
         return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
                 if l.strip()]
 
