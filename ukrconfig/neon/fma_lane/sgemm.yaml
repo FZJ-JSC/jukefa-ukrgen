@@ -6,12 +6,12 @@ families:
   preset: gemm_fma_lane
   vectorize: m
   unroll: 4
-  loop-order: knm           # fma_lane's k loop wants the vectorized dimension innermost: under kmn
-                            # all of B's lane vectors are live at once, the 3x8 (24 accumulators) has none left
+  loop-order: knm           # by instruction counts under auto (kNmn loses the 4x6 here)
   c-storage: [col, any]     # contiguous columns, and strided C
   m: 1..4
   n: [4, 6, 8]
   params:
+    max-offset-registers: auto   # an offset budget: the walks' column changes in registers
     A-layout: ['m:c', 'k:p']
     B-layout: ['n:c', 'k:p']
   schedule: ['RAW:data:vreg:::4']
@@ -20,11 +20,11 @@ families:
   preset: gemm_fma_lane
   vectorize: n
   unroll: 4
-  # loop order kept kmn: under knm the k loop holds all of A's lane vectors
-  # across n - the 8x3 (24 accumulators) has no vector register left for A
+  loop-order: kMnm          # by instruction counts under auto (per A register (M), its lanes (m) innermost; C stored as in knm)
   m: [4, 6, 8]
   n: 1..3
   params:
+    max-offset-registers: auto   # an offset budget: the walks' column changes in registers
     A-layout: ['m:c', 'k:p']
     B-layout: ['n:c', 'k:p']
   schedule: ['RAW:data:vreg:::4']
