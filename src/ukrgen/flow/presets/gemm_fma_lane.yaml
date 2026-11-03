@@ -23,7 +23,7 @@ alternatives:
   - bc_load
   - bc_lane
 tileops:
-  mm: fma($V.VEC:direct, $S.VEC:bc_lanes, AB.VEC){$K}
+  mm: fma[bdreg:ILANE]($V.VEC:direct, $S.VEC:use_lane, AB.VEC){$K}
   betascale: mul(C.VEC:$CL, beta.VEC:$SC, C.VEC){$T}
   alphascale: fma(AB.VEC, alpha.VEC:$SC, C.VEC){$T}
   store: C.VEC:$CS

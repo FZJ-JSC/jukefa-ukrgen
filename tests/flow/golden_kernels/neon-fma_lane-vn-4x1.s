@@ -3,10 +3,6 @@
 .type bli_dgemm_ukrgen_neon_vn_4x2_asm, %function
 bli_dgemm_ukrgen_neon_vn_4x2_asm:
 .cfi_startproc
-add sp,sp,#-16
-.cfi_adjust_cfa_offset 16
-str d8, [sp]
-.cfi_rel_offset d8, 0
 # x0 = k
 # x1 = base(A)
 # x2 = base(B)
@@ -15,7 +11,9 @@ str d8, [sp]
 # x5 = base(beta)
 # x6 = stride(C,m)
 # x7 = stride(C,n)
-and x8,x0,#3
+mov x8,x6
+sub x8,x8,x7
+and x9,x0,#3
 lsr x0,x0,#2
 dup v0.2d,xzr
 dup v1.2d,xzr
@@ -24,122 +22,86 @@ dup v3.2d,xzr
 cbz x0,.ukr1_done
 ld1 {v4.2d}, [x1]
 ld1 {v5.2d}, [x2]
-dup v6.2d,v4.d[0]
-dup v7.2d,v4.d[1]
-ldr q4, [x1, #16]
-add x1,x1,#32
-dup v16.2d,v4.d[0]
-dup v17.2d,v4.d[1]
+add x1,x1,#16
 add x2,x2,#16
 add x0,x0,#-1
 cbz x0,.ukr1_last
 .ukr1_loop:
 add x0,x0,#-1
-ld1 {v4.2d}, [x1]
-fmla v0.2d,v5.2d,v6.2d
-fmla v1.2d,v5.2d,v7.2d
-fmla v2.2d,v5.2d,v16.2d
-dup v18.2d,v4.d[0]
-dup v19.2d,v4.d[1]
-ldr q4, [x1, #16]
-fmla v3.2d,v5.2d,v17.2d
-ld1 {v20.2d}, [x2]
-ldr q21, [x2, #16]
-dup v22.2d,v4.d[0]
-dup v23.2d,v4.d[1]
-ldr q4, [x1, #32]
-fmla v0.2d,v20.2d,v18.2d
-fmla v1.2d,v20.2d,v19.2d
-fmla v2.2d,v20.2d,v22.2d
-dup v24.2d,v4.d[0]
-dup v25.2d,v4.d[1]
-ldr q4, [x1, #48]
-fmla v3.2d,v20.2d,v23.2d
-fmla v0.2d,v21.2d,v24.2d
-fmla v1.2d,v21.2d,v25.2d
-dup v26.2d,v4.d[0]
-dup v27.2d,v4.d[1]
-ldr q4, [x1, #64]
-ldr q28, [x2, #32]
-fmla v2.2d,v21.2d,v26.2d
-fmla v3.2d,v21.2d,v27.2d
-dup v29.2d,v4.d[0]
-dup v30.2d,v4.d[1]
-ldr q4, [x1, #80]
-ldr q5, [x2, #48]
-fmla v0.2d,v28.2d,v29.2d
-fmla v1.2d,v28.2d,v30.2d
-dup v31.2d,v4.d[0]
-dup v8.2d,v4.d[1]
-ldr q4, [x1, #96]
-add x2,x2,#64
-fmla v2.2d,v28.2d,v31.2d
-fmla v3.2d,v28.2d,v8.2d
-dup v6.2d,v4.d[0]
-dup v7.2d,v4.d[1]
+ld1 {v6.2d}, [x1]
+fmla v0.2d,v5.2d,v4.d[0]
+fmla v1.2d,v5.2d,v4.d[1]
+ldr q7, [x1, #16]
+fmla v2.2d,v5.2d,v6.d[0]
+fmla v3.2d,v5.2d,v6.d[1]
+ld1 {v16.2d}, [x2]
+ldr q17, [x1, #32]
+ldr q18, [x1, #48]
+ldr q19, [x2, #16]
+fmla v0.2d,v16.2d,v7.d[0]
+fmla v1.2d,v16.2d,v7.d[1]
+fmla v2.2d,v16.2d,v17.d[0]
+fmla v3.2d,v16.2d,v17.d[1]
+ldr q20, [x1, #64]
+fmla v0.2d,v19.2d,v18.d[0]
+fmla v1.2d,v19.2d,v18.d[1]
+ldr q21, [x1, #80]
+fmla v2.2d,v19.2d,v20.d[0]
+fmla v3.2d,v19.2d,v20.d[1]
+ldr q22, [x2, #32]
+ldr q23, [x1, #96]
 ldr q4, [x1, #112]
+ldr q5, [x2, #48]
+fmla v0.2d,v22.2d,v21.d[0]
+fmla v1.2d,v22.2d,v21.d[1]
+fmla v2.2d,v22.2d,v23.d[0]
+fmla v3.2d,v22.2d,v23.d[1]
 add x1,x1,#128
-dup v16.2d,v4.d[0]
-dup v17.2d,v4.d[1]
+add x2,x2,#64
 cbnz x0,.ukr1_loop
 .ukr1_last:
-ld1 {v4.2d}, [x1]
-fmla v0.2d,v5.2d,v6.2d
-fmla v1.2d,v5.2d,v7.2d
-fmla v2.2d,v5.2d,v16.2d
-dup v18.2d,v4.d[0]
-dup v19.2d,v4.d[1]
-ldr q4, [x1, #16]
-fmla v3.2d,v5.2d,v17.2d
-ld1 {v20.2d}, [x2]
-ldr q21, [x2, #16]
-dup v22.2d,v4.d[0]
-dup v23.2d,v4.d[1]
-ldr q4, [x1, #32]
-fmla v0.2d,v20.2d,v18.2d
-fmla v1.2d,v20.2d,v19.2d
-fmla v2.2d,v20.2d,v22.2d
-dup v24.2d,v4.d[0]
-dup v25.2d,v4.d[1]
-ldr q4, [x1, #48]
-fmla v3.2d,v20.2d,v23.2d
-fmla v0.2d,v21.2d,v24.2d
-fmla v1.2d,v21.2d,v25.2d
-dup v26.2d,v4.d[0]
-dup v27.2d,v4.d[1]
-ldr q4, [x1, #64]
-ldr q28, [x2, #32]
-fmla v2.2d,v21.2d,v26.2d
-fmla v3.2d,v21.2d,v27.2d
-dup v29.2d,v4.d[0]
-dup v30.2d,v4.d[1]
-ldr q4, [x1, #80]
-add x1,x1,#96
-fmla v0.2d,v28.2d,v29.2d
-fmla v1.2d,v28.2d,v30.2d
-dup v31.2d,v4.d[0]
-dup v8.2d,v4.d[1]
+ld1 {v6.2d}, [x1]
+fmla v0.2d,v5.2d,v4.d[0]
+fmla v1.2d,v5.2d,v4.d[1]
+ldr q7, [x1, #16]
+fmla v2.2d,v5.2d,v6.d[0]
+fmla v3.2d,v5.2d,v6.d[1]
+ld1 {v16.2d}, [x2]
+ldr q17, [x1, #32]
+ldr q18, [x1, #48]
+ldr q19, [x2, #16]
+fmla v0.2d,v16.2d,v7.d[0]
+fmla v1.2d,v16.2d,v7.d[1]
+fmla v2.2d,v16.2d,v17.d[0]
+fmla v3.2d,v16.2d,v17.d[1]
+ldr q20, [x1, #64]
+fmla v0.2d,v19.2d,v18.d[0]
+fmla v1.2d,v19.2d,v18.d[1]
+ldr q21, [x1, #80]
+fmla v2.2d,v19.2d,v20.d[0]
+fmla v3.2d,v19.2d,v20.d[1]
+ldr q22, [x2, #32]
+ldr q23, [x1, #96]
+add x1,x1,#112
 add x2,x2,#48
-fmla v2.2d,v28.2d,v31.2d
-fmla v3.2d,v28.2d,v8.2d
+fmla v0.2d,v22.2d,v21.d[0]
+fmla v1.2d,v22.2d,v21.d[1]
+fmla v2.2d,v22.2d,v23.d[0]
+fmla v3.2d,v22.2d,v23.d[1]
 .ukr1_done:
-cbz x8,.ukr1_taildone
+cbz x9,.ukr1_taildone
 .ukr1_tail:
-add x8,x8,#-1
+add x9,x9,#-1
 ld1 {v4.2d}, [x1]
 ld1 {v5.2d}, [x2]
-dup v6.2d,v4.d[0]
-dup v7.2d,v4.d[1]
-ldr q4, [x1, #16]
-fmla v0.2d,v5.2d,v6.2d
-fmla v1.2d,v5.2d,v7.2d
-dup v16.2d,v4.d[0]
-dup v17.2d,v4.d[1]
-fmla v2.2d,v5.2d,v16.2d
-fmla v3.2d,v5.2d,v17.2d
+ldr q6, [x1, #16]
+fmla v0.2d,v5.2d,v4.d[0]
+fmla v1.2d,v5.2d,v4.d[1]
+fmla v2.2d,v5.2d,v6.d[0]
+fmla v3.2d,v5.2d,v6.d[1]
 add x1,x1,#32
 add x2,x2,#16
-cbnz x8,.ukr1_tail
+cbnz x9,.ukr1_tail
 .ukr1_taildone:
 mov x0,x7
 add x0,x0,#-8
@@ -375,21 +337,12 @@ b .ukr0_cases_end
 mov x0,x3
 st1 {v0.d}[0], [x0]
 add x0,x0,x7
-st1 {v0.d}[1], [x0]
-add x0,x0,x6
-sub x0,x0,x7
-st1 {v1.d}[0], [x0]
-add x0,x0,x7
-st1 {v1.d}[1], [x0]
-add x0,x0,x6
-sub x0,x0,x7
-st1 {v2.d}[0], [x0]
-add x0,x0,x7
-st1 {v2.d}[1], [x0]
-add x0,x0,x6
-sub x0,x0,x7
-st1 {v3.d}[0], [x0]
-add x0,x0,x7
+st1 {v0.d}[1], [x0], x8
+st1 {v1.d}[0], [x0], x7
+st1 {v1.d}[1], [x0], x8
+st1 {v2.d}[0], [x0], x7
+st1 {v2.d}[1], [x0], x8
+st1 {v3.d}[0], [x0], x7
 st1 {v3.d}[1], [x0]
 b .ukr0_cases_end
 .ukr0_case7:
@@ -398,210 +351,125 @@ ld1r {v4.2d}, [x4]
 fmul v5.2d,v0.2d,v4.2d
 fmul v0.2d,v1.2d,v4.2d
 fmul v1.2d,v2.2d,v4.2d
+fmul v2.2d,v3.2d,v4.2d
 st1 {v5.d}[0], [x0]
 add x0,x0,x7
-st1 {v5.d}[1], [x0]
-add x0,x0,x6
-sub x0,x0,x7
-st1 {v0.d}[0], [x0]
-add x0,x0,x7
-st1 {v0.d}[1], [x0]
-add x0,x0,x6
-sub x0,x0,x7
-st1 {v1.d}[0], [x0]
-add x0,x0,x7
-fmul v0.2d,v3.2d,v4.2d
-st1 {v1.d}[1], [x0]
-add x0,x0,x6
-sub x0,x0,x7
-st1 {v0.d}[0], [x0]
-add x0,x0,x7
-st1 {v0.d}[1], [x0]
+st1 {v5.d}[1], [x0], x8
+st1 {v0.d}[0], [x0], x7
+st1 {v0.d}[1], [x0], x8
+st1 {v1.d}[0], [x0], x7
+st1 {v1.d}[1], [x0], x8
+st1 {v2.d}[0], [x0], x7
+st1 {v2.d}[1], [x0]
 b .ukr0_cases_end
 .ukr0_case8:
 mov x0,x3
 ld1 {v4.d}[0], [x0]
 add x0,x0,x7
-ld1 {v4.d}[1], [x0]
-add x0,x0,x6
-sub x0,x0,x7
-ld1 {v5.d}[0], [x0]
+ld1 {v4.d}[1], [x0], x8
+ld1 {v5.d}[0], [x0], x7
+ld1 {v5.d}[1], [x0], x8
+ld1 {v6.d}[0], [x0], x7
 fadd v4.2d,v0.2d,v4.2d
-add x0,x0,x7
-ld1 {v5.d}[1], [x0]
+ld1 {v6.d}[1], [x0], x8
+fadd v5.2d,v1.2d,v5.2d
 st1 {v4.d}[0], [x3]
 add x3,x3,x7
-st1 {v4.d}[1], [x3]
-add x0,x0,x6
-sub x0,x0,x7
-ld1 {v0.d}[0], [x0]
-fadd v5.2d,v1.2d,v5.2d
-add x0,x0,x7
+ld1 {v0.d}[0], [x0], x7
+fadd v6.2d,v2.2d,v6.2d
+st1 {v4.d}[1], [x3], x8
 ld1 {v0.d}[1], [x0]
-add x3,x3,x6
-sub x3,x3,x7
-st1 {v5.d}[0], [x3]
-add x3,x3,x7
-fadd v0.2d,v2.2d,v0.2d
-st1 {v5.d}[1], [x3]
-add x0,x0,x6
-sub x0,x0,x7
-ld1 {v1.d}[0], [x0]
-add x0,x0,x7
-ld1 {v1.d}[1], [x0]
-add x3,x3,x6
-sub x3,x3,x7
-st1 {v0.d}[0], [x3]
-add x3,x3,x7
-fadd v1.2d,v3.2d,v1.2d
+st1 {v5.d}[0], [x3], x7
+st1 {v5.d}[1], [x3], x8
+st1 {v6.d}[0], [x3], x7
+fadd v0.2d,v3.2d,v0.2d
+st1 {v6.d}[1], [x3], x8
+st1 {v0.d}[0], [x3], x7
 st1 {v0.d}[1], [x3]
-add x3,x3,x6
-sub x3,x3,x7
-st1 {v1.d}[0], [x3]
-add x3,x3,x7
-st1 {v1.d}[1], [x3]
 b .ukr0_cases_end
 .ukr0_case9:
 mov x0,x3
 ld1 {v4.d}[0], [x0]
 add x0,x0,x7
-ld1 {v4.d}[1], [x0]
+ld1 {v4.d}[1], [x0], x8
 ld1r {v5.2d}, [x4]
-add x0,x0,x6
-sub x0,x0,x7
-ld1 {v6.d}[0], [x0]
+ld1 {v6.d}[0], [x0], x7
+ld1 {v6.d}[1], [x0], x8
+ld1 {v7.d}[0], [x0], x7
 fmla v4.2d,v0.2d,v5.2d
-add x0,x0,x7
-ld1 {v6.d}[1], [x0]
+ld1 {v7.d}[1], [x0], x8
+fmla v6.2d,v1.2d,v5.2d
 st1 {v4.d}[0], [x3]
 add x3,x3,x7
-st1 {v4.d}[1], [x3]
-add x0,x0,x6
-sub x0,x0,x7
-ld1 {v0.d}[0], [x0]
-fmla v6.2d,v1.2d,v5.2d
-add x0,x0,x7
+ld1 {v0.d}[0], [x0], x7
+fmla v7.2d,v2.2d,v5.2d
+st1 {v4.d}[1], [x3], x8
 ld1 {v0.d}[1], [x0]
-add x3,x3,x6
-sub x3,x3,x7
-st1 {v6.d}[0], [x3]
-add x3,x3,x7
-fmla v0.2d,v2.2d,v5.2d
-st1 {v6.d}[1], [x3]
-add x0,x0,x6
-sub x0,x0,x7
-ld1 {v1.d}[0], [x0]
-add x0,x0,x7
-ld1 {v1.d}[1], [x0]
-add x3,x3,x6
-sub x3,x3,x7
-st1 {v0.d}[0], [x3]
-add x3,x3,x7
-fmla v1.2d,v3.2d,v5.2d
+st1 {v6.d}[0], [x3], x7
+st1 {v6.d}[1], [x3], x8
+st1 {v7.d}[0], [x3], x7
+fmla v0.2d,v3.2d,v5.2d
+st1 {v7.d}[1], [x3], x8
+st1 {v0.d}[0], [x3], x7
 st1 {v0.d}[1], [x3]
-add x3,x3,x6
-sub x3,x3,x7
-st1 {v1.d}[0], [x3]
-add x3,x3,x7
-st1 {v1.d}[1], [x3]
 b .ukr0_cases_end
 .ukr0_case10:
 mov x0,x3
 ld1 {v4.d}[0], [x0]
 add x0,x0,x7
-ld1 {v4.d}[1], [x0]
+ld1 {v4.d}[1], [x0], x8
 ld1r {v5.2d}, [x5]
-add x0,x0,x6
-sub x0,x0,x7
-ld1 {v6.d}[0], [x0]
+ld1 {v6.d}[0], [x0], x7
+ld1 {v6.d}[1], [x0], x8
+ld1 {v7.d}[0], [x0], x7
 fmla v0.2d,v4.2d,v5.2d
-add x0,x0,x7
-ld1 {v6.d}[1], [x0]
+ld1 {v7.d}[1], [x0], x8
+fmla v1.2d,v6.2d,v5.2d
 st1 {v0.d}[0], [x3]
 add x3,x3,x7
-st1 {v0.d}[1], [x3]
-add x0,x0,x6
-sub x0,x0,x7
-ld1 {v0.d}[0], [x0]
-fmla v1.2d,v6.2d,v5.2d
-add x0,x0,x7
-ld1 {v0.d}[1], [x0]
-add x3,x3,x6
-sub x3,x3,x7
-st1 {v1.d}[0], [x3]
-add x3,x3,x7
-fmla v2.2d,v0.2d,v5.2d
-st1 {v1.d}[1], [x3]
-add x0,x0,x6
-sub x0,x0,x7
-ld1 {v0.d}[0], [x0]
-add x0,x0,x7
-ld1 {v0.d}[1], [x0]
-add x3,x3,x6
-sub x3,x3,x7
-st1 {v2.d}[0], [x3]
-add x3,x3,x7
-fmla v3.2d,v0.2d,v5.2d
-st1 {v2.d}[1], [x3]
-add x3,x3,x6
-sub x3,x3,x7
-st1 {v3.d}[0], [x3]
-add x3,x3,x7
+ld1 {v4.d}[0], [x0], x7
+fmla v2.2d,v7.2d,v5.2d
+st1 {v0.d}[1], [x3], x8
+ld1 {v4.d}[1], [x0]
+st1 {v1.d}[0], [x3], x7
+st1 {v1.d}[1], [x3], x8
+st1 {v2.d}[0], [x3], x7
+fmla v3.2d,v4.2d,v5.2d
+st1 {v2.d}[1], [x3], x8
+st1 {v3.d}[0], [x3], x7
 st1 {v3.d}[1], [x3]
 b .ukr0_cases_end
 .ukr0_case11:
 mov x0,x3
 ld1 {v4.d}[0], [x0]
 add x0,x0,x7
-ld1 {v4.d}[1], [x0]
+ld1 {v4.d}[1], [x0], x8
 ld1r {v5.2d}, [x5]
-add x0,x0,x6
-sub x0,x0,x7
-ld1 {v6.d}[0], [x0]
-fmul v4.2d,v4.2d,v5.2d
+ld1 {v6.d}[0], [x0], x7
+ld1 {v6.d}[1], [x0], x8
 ld1r {v7.2d}, [x4]
-add x0,x0,x7
-ld1 {v6.d}[1], [x0]
-fmla v4.2d,v0.2d,v7.2d
+fmul v4.2d,v4.2d,v5.2d
+ld1 {v16.d}[0], [x0], x7
+ld1 {v16.d}[1], [x0], x8
 fmul v6.2d,v6.2d,v5.2d
+fmla v4.2d,v0.2d,v7.2d
+fmul v16.2d,v16.2d,v5.2d
+fmla v6.2d,v1.2d,v7.2d
 st1 {v4.d}[0], [x3]
 add x3,x3,x7
-st1 {v4.d}[1], [x3]
-add x0,x0,x6
-sub x0,x0,x7
-ld1 {v0.d}[0], [x0]
-add x0,x0,x7
+fmla v16.2d,v2.2d,v7.2d
+st1 {v4.d}[1], [x3], x8
+ld1 {v0.d}[0], [x0], x7
 ld1 {v0.d}[1], [x0]
-fmla v6.2d,v1.2d,v7.2d
-add x3,x3,x6
-sub x3,x3,x7
+st1 {v6.d}[0], [x3], x7
+st1 {v6.d}[1], [x3], x8
+st1 {v16.d}[0], [x3], x7
 fmul v0.2d,v0.2d,v5.2d
-st1 {v6.d}[0], [x3]
-add x3,x3,x7
-st1 {v6.d}[1], [x3]
-add x0,x0,x6
-sub x0,x0,x7
-ld1 {v1.d}[0], [x0]
-add x0,x0,x7
-ld1 {v1.d}[1], [x0]
-fmla v0.2d,v2.2d,v7.2d
-add x3,x3,x6
-sub x3,x3,x7
-fmul v1.2d,v1.2d,v5.2d
-st1 {v0.d}[0], [x3]
-add x3,x3,x7
+st1 {v16.d}[1], [x3], x8
+fmla v0.2d,v3.2d,v7.2d
+st1 {v0.d}[0], [x3], x7
 st1 {v0.d}[1], [x3]
-fmla v1.2d,v3.2d,v7.2d
-add x3,x3,x6
-sub x3,x3,x7
-st1 {v1.d}[0], [x3]
-add x3,x3,x7
-st1 {v1.d}[1], [x3]
 .ukr0_cases_end:
-ldr d8, [sp]
-.cfi_restore d8
-add sp,sp,#16
-.cfi_adjust_cfa_offset -16
 ret
 .cfi_endproc
 .size bli_dgemm_ukrgen_neon_vn_4x2_asm, .-bli_dgemm_ukrgen_neon_vn_4x2_asm
