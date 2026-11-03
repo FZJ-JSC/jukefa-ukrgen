@@ -238,13 +238,17 @@ def subtiling_listing(context, programs) -> list[str]:
     """
     from asmgen.registers import adt_size
     from ...models.load_store_operations import lsc_loop
+    from ...irmod.lsc.vectorize import loop_of
     from ...irmod.lsc.base import all_blocks
     lines, seen = [], set()
     for program in programs:
         for block in all_blocks(program):
             for section in ("prologue", "body", "epilogue", "tail"):
                 for op in getattr(block, section, None) or []:
-                    if not isinstance(op, lsc_loop):
+                    # a loop, or the operation standing for one until the
+                    # pre-specialize stage makes it (program_builder.virtual)
+                    op = loop_of(op)
+                    if op is None:
                         continue
                     comp, st = op.info.get("component"), op.subtiling
                     key = (comp, op.walks[0].anchor.rsln, op.info.get("direction"))

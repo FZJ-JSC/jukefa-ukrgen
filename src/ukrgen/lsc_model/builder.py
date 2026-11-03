@@ -678,6 +678,25 @@ class program_builder:
                     ops.append(op)
         return ops
 
+    @staticmethod
+    def virtual(anchor, loop):
+        """
+        A vector filled or drained element by element, as one operation of the
+        IR until specialization: its loop's anchor - the vector accessed from
+        its first element - the loop kept with it (properties["loop"], its
+        walk's anchor this operation) for the pre-specialize stage to put in
+        its place (ADDRESSING_PLAN 6.1) unless a pass makes it a vector access
+        (vectorize_loops). What the loop writes it writes: a drain's vector,
+        shifted out (vslidedown). Copies of it - a later iteration's, the last
+        iteration's - get copies of the loop (shifted, _clone)
+        """
+        anchor.add_property("loop", loop)
+        written = {str(loop.indices[p]) for p in loop.writes}
+        for p, idx in enumerate(anchor.indices):
+            if str(idx) in written and p not in anchor.writes:
+                anchor.writes.append(p)
+        return anchor
+
     def element_loop(self, block, anchor, memory, vidx, order, info) -> lsc_loop:
         """
         A loop over a vector's elements, as many as it has at run time: its
@@ -764,8 +783,8 @@ class program_builder:
                           self.reg_tile(tiling, vector), set(), data=_index(vector), rsln=tag,
                           step=load.step, sigs=load_sigs, offset=addr.offset,
                           rtypes=[None, vector.rtype])
-        return [self.element_loop(block, anchor, memory, self.vector_index(tiling, comp),
-                                  -1 if up else 1, {"direction": "load"})]
+        return [self.virtual(anchor, self.element_loop(block, anchor, memory, self.vector_index(tiling, comp),
+                                  -1 if up else 1, {"direction": "load"}))]
 
     def drain_vla(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
         """
@@ -806,8 +825,8 @@ class program_builder:
                            self.reg_tile(tiling, vector), set(), data=_index(vector), rsln=tag,
                            step=store.step, sigs=store_sigs, offset=addr.offset,
                            rtypes=[None, vector.rtype])
-        return [self.element_loop(block, anchor, memory, self.vector_index(tiling, comp), 1,
-                                  {"direction": "store"})]
+        return [self.virtual(anchor, self.element_loop(block, anchor, memory, self.vector_index(tiling, comp), 1,
+                                  {"direction": "store"}))]
 
     def move_lane_group(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
         """
@@ -1387,6 +1406,17 @@ class program_builder:
         new = _clone(op)
         if isinstance(op, (lsc_load, lsc_store)):
             new.offset = self.db.shifted(op.offset, index, amount)
+            loop = (op.properties or {}).get("loop")
+            if isinstance(loop, lsc_loop):
+                # an operation standing for a loop: the loop a later
+                # iteration's too - its anchor this copy, its block moved along
+                moved = copy.copy(loop)
+                moved.walks = [loop_walk(anchor=new if w.anchor is op else self.shifted(w.anchor, index, amount),
+                                         step=w.step) for w in loop.walks]
+                moved.block = [self.shifted(o, index, amount) for o in loop.block]
+                moved.info = dict(loop.info)
+                moved.refresh()
+                new.properties["loop"] = moved
         elif isinstance(op, lsc_loop):
             # a loop over elements a later iteration's: its walks' anchors and
             # its block's accesses moved along with it
@@ -1477,6 +1507,17 @@ def _clone(op: lsc_operation) -> lsc_operation:
     new.reg_types = list(op.reg_types)
     new.properties = dict(op.properties)
     new.mods = copy.copy(op.mods)
+    loop = new.properties.get("loop")
+    if isinstance(loop, lsc_loop) and not isinstance(op, lsc_loop):
+        # an operation standing for a loop (program_builder.virtual): a loop of
+        # its own, its anchor this copy - the anchor is the operation, a cycle
+        own = copy.copy(loop)
+        own.block = [_clone(o) for o in loop.block]
+        own.walks = [loop_walk(anchor=new if w.anchor is op else _clone(w.anchor), step=w.step)
+                     for w in loop.walks]
+        own.info = dict(loop.info)
+        own.refresh()
+        new.properties["loop"] = own
     if isinstance(op, lsc_loop):
         # a loop over slices owns what's in it: a copy of a loop (a loop's
         # last iteration's) shared its block's operations and its walks'

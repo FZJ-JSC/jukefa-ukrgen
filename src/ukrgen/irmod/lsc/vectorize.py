@@ -6,13 +6,29 @@ from ...models.load_store_operations import lsc_loop
 from .base import irmod_placement, lsc_irmod, blocks_and_sections
 
 
+def loop_of(op):
+    """
+    The loop an operation is (lsc_loop), or stands for until specialization -
+    a vector filled or drained element by element, its loop kept with it
+    (program_builder.virtual)
+    """
+    if isinstance(op, lsc_loop):
+        return op
+    loop = (op.properties or {}).get("loop") if op.properties is not None else None
+    return loop if isinstance(loop, lsc_loop) else None
+
+
 def repeats(program):
+    seen = set()
     for block, section in blocks_and_sections(program):
         for op in getattr(block, section) or []:
-            # loops over a vector's elements, filling or draining it
-            if isinstance(op, lsc_loop) and op.info.get("direction") in ("load", "store") \
-                    and "slices" != op.info.get("kind"):
-                yield op
+            # loops over a vector's elements, filling or draining it - as loops
+            # or as the operations they stand for: each once
+            loop = loop_of(op)
+            if loop is not None and loop.info.get("direction") in ("load", "store") \
+                    and "slices" != loop.info.get("kind") and id(loop) not in seen:
+                seen.add(id(loop))
+                yield loop
 
 
 def vector_sigs(gen, op, dt):
@@ -66,21 +82,25 @@ class vectorize_loops(lsc_irmod):
         for block, section in blocks_and_sections(program):
             out = []
             for op in getattr(block, section) or []:
-                if not (isinstance(op, lsc_loop) and op.info.get("direction") in ("load", "store")
-                        and "slices" != op.info.get("kind")):
+                loop = loop_of(op)
+                if not (loop is not None and loop.info.get("direction") in ("load", "store")
+                        and "slices" != loop.info.get("kind")):
                     out.append(op)
                     continue
-                dt = self.ctx.component_dts[op.info["component"]]
-                sigs = vector_sigs(self.ctx.gen, op, dt)
+                dt = self.ctx.component_dts[loop.info["component"]]
+                sigs = vector_sigs(self.ctx.gen, loop, dt)
                 if not sigs:
                     out.append(op)
                     continue
                 # the loop's anchor is an access of the vector from its first
-                # element: it does the loop's work through these signatures
-                access = op.walks[0].anchor
+                # element: it does the loop's work through these signatures -
+                # the operation the loop stood for, no loop made of it
+                access = loop.walks[0].anchor
                 access.sigs = sigs
                 if any("GSTRIDE" in {m.name for m in s.modifiers} for s in sigs):
-                    access.add_property("stride_index", op.info["index"])
+                    access.add_property("stride_index", loop.info["index"])
+                if access.properties and "loop" in access.properties:
+                    del access.properties["loop"]
                 out.append(access)
                 changed += 1
             setattr(block, section, out)

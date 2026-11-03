@@ -128,6 +128,18 @@ class pre_specialize_irmod_stage(irmod_stage_base):
     IR modifications on the model's IR, before specialization for the ISA
     """
     placement = irmod_placement.PRE_SPECIALIZE
+
+    def finish(self):
+        # an operation standing for a loop (a vector filled or drained element
+        # by element) its loop now, after whatever passes ran on it
+        # (ADDRESSING_PLAN 6.1): where the passes left it, in every section
+        from ...irmod.lsc.vectorize import loop_of
+        from ...irmod.lsc.base import blocks_and_sections
+        for program in self.context.programs or []:
+            for block, section in blocks_and_sections(program):
+                ops = getattr(block, section) or []
+                if any(loop_of(op) is not None and loop_of(op) is not op for op in ops):
+                    setattr(block, section, [loop_of(op) if loop_of(op) is not None else op for op in ops])
     option = "pre-specialize-irmods"
 
 

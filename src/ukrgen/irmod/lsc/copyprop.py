@@ -24,6 +24,7 @@ transpose's rows by the copy's registers (ZA's tiles have no shuffles).
 from asmgen.asmblocks.op import register_type as rgt
 
 from ...models.load_store_operations import lsc_loop, lsc_move
+from .vectorize import loop_of
 from ...models.lsc.index import lsc_reg_index
 from .base import irmod_placement, lsc_irmod, blocks_and_sections
 
@@ -73,6 +74,13 @@ def _rename(op, dst, src_index) -> None:
             _rename(inner, dst, src_index)
         op.refresh()
         return
+    # an operation standing for a loop (program_builder.virtual): its loop's
+    # block renamed with it - the fill's vector its own
+    loop = loop_of(op)
+    if loop is not None:
+        for inner in loop.block:
+            _rename(inner, dst, src_index)
+        loop.refresh()
     rtypes = op.rtypes or []
     for p in op.reads:
         if p < len(rtypes) and rtypes[p] in DATA and \

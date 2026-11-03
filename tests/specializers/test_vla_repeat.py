@@ -72,6 +72,34 @@ class test_vla_repeat(unittest.TestCase):
         self.assertEqual({"component": "A", "index": "m", "direction": "load"},
                          {k: v for k, v in r.info.items() if k not in ("stride", "explicit")})
 
+    def test_virtual(self):
+        # until specialization the IR holds the operation the solver chose - a
+        # vector loaded from its first element, its loop kept with it - and the
+        # pre-specialize stage puts the loops in their places, as many
+        import ukrgen.flow.stages.model as M
+        from ukrgen.irmod.lsc.vectorize import loop_of
+        stage = next(getattr(M, n) for n in dir(M) if n.endswith("_stage") and "model" in n)
+        seen = {}
+        progress = stage.progress
+
+        def recorded(self):
+            out = progress(self)
+            ops = [op for p in self.context.programs for b in p.blocks
+                   for s in ("prologue", "body", "epilogue", "tail") for op in getattr(b, s) or []]
+            seen["loops"] = sum(isinstance(op, lsc_loop) for op in ops)
+            seen["standing"] = sum(loop_of(op) is not None and not isinstance(op, lsc_loop) for op in ops)
+            return out
+        stage.progress = recorded
+        try:
+            ctx, res = run()
+        finally:
+            stage.progress = progress
+        after = sum(isinstance(op, lsc_loop) for p in ctx.programs for b in p.blocks
+                    for s in ("prologue", "body", "epilogue", "tail") for op in getattr(b, s) or [])
+        self.assertEqual(0, seen["loops"])
+        self.assertTrue(seen["standing"])
+        self.assertEqual(seen["standing"], after)
+
     def test_loop(self):
         ctx, res = run()
         body = ctx.emitted[0].blocks[0].sections["body"]

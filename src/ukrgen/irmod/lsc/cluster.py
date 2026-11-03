@@ -5,6 +5,7 @@ addresses are fixed
 
 from ...schedulers.list_scheduler import cluster as cluster_order
 from ...models.load_store_operations import lsc_loop
+from .vectorize import loop_of
 from .base import irmod_placement, lsc_irmod
 
 
@@ -41,10 +42,12 @@ class cluster(lsc_irmod):
             # after copy (each copy's load waits on the one before's reads),
             # before the next tile's (a fused slice loop: gemm's epilogue)
             for op in block.body:
-                if isinstance(op, lsc_loop) and len(op.block) > 1:
-                    inner = cluster_order(list(op.block), program.groups)
-                    if [id(o) for o in inner] != [id(o) for o in op.block]:
-                        op.block = inner
-                        op.refresh()
+                # a loop, or the operation standing for one (its loop's block)
+                loop = loop_of(op)
+                if loop is not None and len(loop.block) > 1:
+                    inner = cluster_order(list(loop.block), program.groups)
+                    if [id(o) for o in inner] != [id(o) for o in loop.block]:
+                        loop.block = inner
+                        loop.refresh()
                         changed += 1
         return changed
