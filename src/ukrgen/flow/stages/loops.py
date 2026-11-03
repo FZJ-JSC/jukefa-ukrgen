@@ -19,7 +19,7 @@ def _scalar_of(idx, e):
     return new
 
 
-def copies(loop) -> None:
+def copies(loop, program=None) -> None:
     """
     A loop over a vector's elements, its copies made: one element's operations
     once a copy (the loop's unroll), in the order the loop runs them - a batch
@@ -59,9 +59,17 @@ def copies(loop) -> None:
     from ...lsc_model.addressing import sym
     comp = loop.walks[0].anchor.indices[0].component
 
+    index = loop.info.get("index")
+    backwards = loop.subtiling.order < 0
+
     def at_walker(access, e, role):
         new = copy_of(access, e, role)
         new.indices = [lsc_reg_index(comp, [WALKER])] + list(new.indices[1:])
+        if program is not None and index is not None:
+            # its element's offset - the anchor's, e on along the loop's index
+            # (from the last back: VL - 1 - e) - where the walker's steps put it
+            amount = sym._make({("VL",): 1, (): -1 - e}) if backwards else sym.const(e)
+            new.offset = program.offsets.shifted(access.offset, index, amount)
         # the walk's step - back, for a fill from the last element (SVE's insr)
         step = loop.walks[0].step if loop.subtiling.order >= 0 else sym.const(0) - loop.walks[0].step
         bump = lsc_addr_compute(comp, WALKER, WALKER, step, scalar_tile)
@@ -113,7 +121,7 @@ class loop_stage(stage):
                         loop = loop_of(op)
                         if loop is not None and loop is not op:
                             if id(loop) not in made:
-                                copies(loop)
+                                copies(loop, program)
                                 if sp is not None:
                                     sp.forms(loop)
                             made[id(loop)] = loop

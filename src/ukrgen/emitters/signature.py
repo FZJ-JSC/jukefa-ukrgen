@@ -1202,7 +1202,11 @@ class signature_emitter:
                 held = scalar_of.get(id(b))
                 scalar = self.reg(*held) if held is not None else None
                 role = b.properties["role"]
-                if role in ("load", "store"):
+                if role in ("load", "store") and set_up:
+                    # at the walker as any access: its element's offset where
+                    # the walker's set up and steps put it (address)
+                    lines += self._memory(b)
+                elif role in ("load", "store"):
                     lines.append(access(b, scalar))
                 elif "bump" == role:
                     # the walker's step (an address step of the IR): the stride's
