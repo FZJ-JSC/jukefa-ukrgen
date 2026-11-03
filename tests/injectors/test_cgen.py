@@ -962,6 +962,8 @@ int main( void )
         configs = (("avx2/fma_bc_blocks", "avx256", ["gcc", "-mavx2", "-mfma"], [[]], cpu_has("avx2"), "vperm2f128"),
                    ("neon/fma_bc_lanes", "neon", neon_cc, [[QEMU, "-cpu", "max"]],
                     bool(shutil.which(neon_cc[0]) and shutil.which(QEMU)), "trn1"),
+                   ("neon/fma_lane", "neon", neon_cc, [[QEMU, "-cpu", "max"]],
+                    bool(shutil.which(neon_cc[0]) and shutil.which(QEMU)), "trn1"),
                    ("avx512/fma_bc_blocks", "avx512", ["gcc", "-mavx512f"], [[]], cpu_has("avx512f"), "vshuff64x2"))
         root = os.path.join(HERE, "..", "..", "ukrconfig")
         for path, isa, cc, runners, available, inst in configs:
@@ -969,7 +971,10 @@ int main( void )
                 cfg = configuration.from_files({("packm", dt): os.path.join(root, path, name)})
                 base = next(f for f in cfg.families)
                 for kind, ms, params in base.cases:
-                    if "Y.VEC:shuffle" not in (params.get("store-tileop") or []):
+                    # a shuffle case: its store tileop, or its store: key (the
+                    # preset's YS alternative fixed - tileop-alternatives)
+                    if "Y.VEC:shuffle" not in (params.get("store-tileop") or []) and \
+                            "YS=shuffle" not in (params.get("tileop-alternatives") or []):
                         continue
                     for m in ms:
                         with self.subTest(config=path, dt=dt, m=m):

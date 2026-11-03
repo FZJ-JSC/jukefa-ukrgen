@@ -11,3 +11,16 @@ cases:
   params:
     X-layout: ['m:c', 'n:s']
     Y-layout: ['m:c', 'n:s']
+# A's or B's rows contiguous (the panel's index strided): rows loaded along
+# the panel, transposed in registers (trn1/trn2), stored contiguous - as
+# BLIS's armv8a packm (lda == 1); fma_bc_lanes' case
+- kind: trans
+  m: [4, 8, 12, 16]
+  preset: packm_bc
+  vectorize: n
+  store: shuffle
+  params:
+    X-layout: ['n:c', 'm:s']
+    Y-layout: ['m:c', 'n:p']
+    X-data-regs: '4'
+    Y-data-regs: '16'

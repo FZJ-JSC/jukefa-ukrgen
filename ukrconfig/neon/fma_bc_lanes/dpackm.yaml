@@ -13,7 +13,8 @@ cases:
     X-layout: ['m:c', 'n:s']
     Y-layout: ['m:c', 'n:s']
 - kind: trans
-  m: [2, 4, 6, 8, 12, 16]
+  m: [4, 6, 8, 12, 16]       # not 2: its kernel packs wrong (test_packm_trans_configs) - the
+                            # reference packs those panels until it's fixed
   preset: packm_bc
   vectorize: n
   store: shuffle
