@@ -1137,14 +1137,18 @@ class signature_emitter:
             walker = self.greg()
             lines = [asmops.mov(self.gen, src=self.aregs[(comp, reg)], dst=walker)]
             lines += self.add_bytes(walker, self.bytes_of(comp, start), comp)
-        counter, delta = self.greg(), self.greg()
+        # a walker the addresses stage set up steps by its bumps (address
+        # steps): no stride register of the loop's own
+        counter, delta = self.greg(), (None if set_up else self.greg())
         lines.append(asmops.mov(self.gen, src=self.slice_count(op, dt), dst=counter))
         # the walk's step, the element stride in bytes - negative where a fill
         # shifts up (SVE insr, into lane 0): from the last element backwards
         stride = op.walks[0].step
         terms = dict(stride.terms)
         up = op.subtiling.order < 0
-        if set(terms) == {()}:
+        if delta is None:
+            pass
+        elif set(terms) == {()}:
             nbytes = terms[()] * adt_size(dt)
             lines.append(asmops.set_imm(self.gen, reg=delta, imm=-nbytes if up else nbytes))
         elif 1 == len(terms) and 1 == len(next(iter(terms))) and 1 == next(iter(terms.values())):
@@ -1201,8 +1205,10 @@ class signature_emitter:
                 if role in ("load", "store"):
                     lines.append(access(b, scalar))
                 elif "bump" == role:
-                    # the walker's step (an address step of the IR)
-                    lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
+                    # the walker's step (an address step of the IR): the stride's
+                    # register or an immediate, back for a fill backwards
+                    lines += self.address(b) if delta is None else \
+                        [asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta)]
                 elif "fill" == role:
                     lines.append(self.move(b, src=scalar))
                 elif "extract" == role:
@@ -1235,7 +1241,8 @@ class signature_emitter:
         lines.append(asmops.add_imm(self.gen, reg=counter, imm=-unroll))
         lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
         for r in (walker, counter, delta):
-            self.rt.unuse_reg("greg", r.idx)
+            if r is not None:
+                self.rt.unuse_reg("greg", r.idx)
         if set_up:
             # the walker dead after its loop
             del self.aregs[(comp, WALKER)]

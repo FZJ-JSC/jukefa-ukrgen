@@ -56,12 +56,15 @@ def copies(loop) -> None:
     # address step of the IR, so an access's element is the steps before it
     # whatever the order the scheduler gives the rest
     from ...models.load_store_operations import lsc_addr_compute, lsc_reg_index, scalar_tile
+    from ...lsc_model.addressing import sym
     comp = loop.walks[0].anchor.indices[0].component
 
     def at_walker(access, e, role):
         new = copy_of(access, e, role)
         new.indices = [lsc_reg_index(comp, [WALKER])] + list(new.indices[1:])
-        bump = lsc_addr_compute(comp, WALKER, WALKER, loop.walks[0].step, scalar_tile)
+        # the walk's step - back, for a fill from the last element (SVE's insr)
+        step = loop.walks[0].step if loop.subtiling.order >= 0 else sym.const(0) - loop.walks[0].step
+        bump = lsc_addr_compute(comp, WALKER, WALKER, step, scalar_tile)
         bump.properties["copy"] = e
         bump.properties["role"] = "bump"
         return [new, bump]
