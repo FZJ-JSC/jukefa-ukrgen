@@ -114,19 +114,45 @@ in the IR, in order.
       one register - the scheduler free to place other work between them);
       no register free at the first, the last spells the run. Setup's own
       multiplies stay one step (emitted where made).
-4. **Stride pointers gone.**
-   1. Configurations on walks (`stride-pointers: {C: 0}`; the K1's sgemm vm
-      2x14 2161 -> 2047 instructions).
-   2. x86's lane walks no costlier than its lane walker.
-   3. The mechanism removed: walks over the pattern's registers
-      (`phase+rotate`, `phase+blocked:N`) everywhere.
+4. **Stride pointers gone** - done as a default.
+   1. Configurations on walks; none by default (0292: every shipped
+      configuration compared, no size lost - the K3's kept by its tuner's
+      measurement, RVV's walks dependent adds).
+   2. x86's lane walks no costlier than its lane walker (0274, 0275).
+   3. The mechanism stays, a user parameter: `stride-pointers` (0294 - kept
+      per component, base and strided term: a vn's rows as a vm's columns).
 5. **Spilling** (later): a general register saved to the stack in non-loop
    code and reloaded where needed - a user parameter, for x86's 16
    (fngen's frame its slots).
-6. **The emitter's other decisions** (later): `slices` (slice loops: the
-   register sets rotated across unrolled copies, preloads, the slices'
-   walks, temporaries freed) - a pass's duties; setup values as an IR setup
-   block.
+6. **The emitter's other decisions.** `slices` decided a slice loop's
+   addresses itself; moved to the specializer's module, the kernels byte for
+   byte the same: its access columns (0296: which columns, vector lengths as
+   immediates, a pointer each within `--loop-gregs`), its walkers for run-time
+   counts (0303), its placements (0306: each access's move and immediate, an
+   iteration's step on). The rest - register sets rotated across copies,
+   temporaries freed after their last read, preloading - goes with the loop
+   itself into the IR: a loop over elements (`lsc_loop`: SME's slices, SVE's
+   lane fills and drains) is "a loop as an instruction", its block one
+   iteration's template, the emitter making the loop of it. As a block of the
+   IR it gets what the k loop has:
+   1. **A loop's block an `ir_block`**: sections (prologue, body, last
+      iteration, tail), its index (the elements', SME's slice index), step,
+      unroll, advance; the builder makes its copies - each copy's temporaries
+      virtual tiles of their own - and preloads it as the k loop's (the
+      preload shift: the first copies' loads into the prologue and the body's
+      end, `--COMP-max-preload`, `--COMP-data-regs`).
+   2. **The specializer's sections nested**: positions, walks, moves back,
+      advances as in any block - columns, walkers and placements its general
+      mechanisms (walks, offsets, stride pointers), the walk plan gone.
+   3. **The scheduler's renaming in a loop's body**: the copies' tiles into
+      the registers the enclosing section leaves (the inner budget it has) -
+      no register sets rotated, nothing freed by hand.
+   4. **The emitter's `block` for nested blocks**: the count, the index
+      register (SME's w12-w15: a register class), the slice operand its index
+      and the copy's immediate; `slices` and `loop` gone.
+   5. Measured: SME's, SMESVE's and SVE's lane-fill kernels - instructions,
+      right under qemu.
+   Setup values as an IR setup block, after.
 
 ## Mixed precision
 
