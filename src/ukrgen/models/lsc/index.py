@@ -13,7 +13,7 @@ class lsc_reg_index:
     lane, i.e. v3.s[1] would mean indices=[3,1]. More than 2 elements in indices
     could be useful for an ISA with ND registers with addressable elements
     """
-    def __init__(self, component : str, indices : list[int]):
+    def __init__(self, component : str, indices : list[int], owner : tuple | None = None):
         if not isinstance(component, str):
             raise ValueError(f"Component {component} is not str")
         for i in indices:
@@ -21,6 +21,14 @@ class lsc_reg_index:
                 raise ValueError(f"Non-numeric element {i} in indices list")
         self.component = component
         self.indices = indices
+        #: the value's own register - (component, number) - where renaming put
+        #: it in another's (docs/REGISTER_ALLOCATION.md): its data type the
+        #: owner's; not part of equality (dependencies go by the register)
+        self.owner = owner
+
+    def value(self) -> tuple:
+        """The value's own register - its data type's key: the owner, else this"""
+        return self.owner if self.owner is not None else (self.component, self.indices[0])
     
 
     def __eq__(self, other):

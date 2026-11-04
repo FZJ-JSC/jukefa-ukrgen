@@ -67,7 +67,7 @@ class register_allocator:
                 e.phys[member] = e.gen.vreg(start + p)
                 e.numbers[member] = ("vreg", start + p)
         if key not in e.phys:
-            dt = e.dts.get((idx.component, idx.indices[0]))
+            dt = e.dts.get(idx.value())
             tag = "vreg"
             if rgt.VEC == rtype:
                 bound = e.bounds.get(key)

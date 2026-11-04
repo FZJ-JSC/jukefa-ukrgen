@@ -1768,12 +1768,10 @@ class signature_emitter:
             return [self.compute(op)]
         if isinstance(op, lsc_zero) and rgt.TILE == op.rtypes[0]:
             reg = self.reg(op.indices[0], op.rtypes[0])
-            return [asmops.zero(self.gen, reg=reg, dt=self.dts[(op.indices[0].component,
-                                                              op.indices[0].indices[0])])]
+            return [asmops.zero(self.gen, reg=reg, dt=self.dts[op.indices[0].value()])]
         if isinstance(op, lsc_zero):
             reg = self.reg(op.indices[0], op.rtypes[0])
-            return [asmops.zero(self.gen, reg=reg, dt=self.dts[(op.indices[0].component,
-                                                               op.indices[0].indices[0])])]
+            return [asmops.zero(self.gen, reg=reg, dt=self.dts[op.indices[0].value()])]
         if isinstance(op, lsc_addr_compute):
             return self.address(op)
         if isinstance(op, lsc_permute):
@@ -1789,7 +1787,7 @@ class signature_emitter:
         """
         regs = [self.reg(idx, rtype) for idx, rtype in zip(op.indices, op.rtypes)]
         first = op.indices[0]
-        dt = self.dts[(first.component, first.indices[0])]
+        dt = self.dts[first.value()]
         for sig in _sigs(op.sigs):
             call = dict(dregs=regs, dts=[dt] * 3, modifiers=set(sig.modifiers), **sig.structural_params)
             if self.gen.move.fits(**call):
@@ -1810,8 +1808,7 @@ class signature_emitter:
         dst = self.reg(op.indices[1], op.rtypes[1]) if dst is None else dst
         # the destination's type, or the source's where the destination is a
         # scratch (a drain loop's extract into a scalar)
-        dt = self.dts.get((op.indices[1].component, op.indices[1].indices[0])) or \
-            self.dts[(op.indices[0].component, op.indices[0].indices[0])]
+        dt = self.dts.get(op.indices[1].value()) or self.dts[op.indices[0].value()]
         for sig in sorted(_sigs(op.sigs), key=_masked):
             masks = {}
             if not self._predicate(sig, masks):
