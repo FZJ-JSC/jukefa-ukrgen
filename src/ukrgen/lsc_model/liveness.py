@@ -49,15 +49,18 @@ def keeps(op, slices: bool = False) -> bool:
     (no instruction copies a tile). Telling partial writes that together
     write a register whole needs more than one operation's view
     """
-    props = op.properties
-    if isinstance(op, lsc_load) and props.get("lane") is not None:
-        return not ("ZEROOTHERS" in _dest_mods(op) and 0 == props["lane"])
-    if isinstance(op, lsc_move) and props.get("block") is not None:
-        return "IBLOCK" in _dest_mods(op)
-    if slices and isinstance(op, lsc_move) and props.get("slice") is not None:
-        # for a register's release: a tile built slice by slice held whole
-        types = op.rtypes or []
-        return len(types) > 1 and rgt.TILE == types[1]
+    # a load or a move only: other operations (a scheduler's tests' state-only
+    # ones) have no lanes, blocks or slices to keep
+    if isinstance(op, lsc_load):
+        lane = op.properties.get("lane")
+        return lane is not None and not ("ZEROOTHERS" in _dest_mods(op) and 0 == lane)
+    if isinstance(op, lsc_move):
+        if op.properties.get("block") is not None:
+            return "IBLOCK" in _dest_mods(op)
+        if slices and op.properties.get("slice") is not None:
+            # for a register's release: a tile built slice by slice held whole
+            types = op.rtypes or []
+            return len(types) > 1 and rgt.TILE == types[1]
     return False
 
 
