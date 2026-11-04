@@ -112,6 +112,9 @@ class register_allocator:
                 tiles = e.gen.max_tregs(dt)
                 cap = e.ctx.params.get("max-tiles")
                 cap = int(cap.value or 0) if cap is not None else 0
+                from ..flow.stages.isaparam import register_cap
+                tregs = register_cap(e.ctx.params, "treg")
+                cap = min(cap, tregs) if cap and tregs else (cap or tregs)
                 tiles = min(tiles, cap) if cap > 0 else tiles
                 # the tracker's type of dt's tiles (asmgen's treg_tag: SME's by
                 # element size, sharing ZA's storage) - added where the

@@ -136,6 +136,13 @@ class schedule_stage(stage):
                             "there are - C's in the accumulators' after their stores - and "
                             "schedule it by dependencies alone (docs/REGISTER_ALLOCATION.md "
                             "step 3)")
+        self.params["rename-from"] = stage_param(
+                value="new", default="new", required=False,
+                description="With --rename: where a value looks first for a register - new "
+                            "(its own while there's room under the budget, then the dead "
+                            "one free longest), dead (the dead one freed last: the fewest "
+                            "registers), distance (the dead one free longest: the most room "
+                            "to load ahead)")
         self.params["mru-inflight"] = stage_param(
                 value=None, required=False,
                 description="With --mru: values loaded ahead of their use at most at once")
@@ -162,7 +169,10 @@ class schedule_stage(stage):
                    for k in [liveness.data_key(op, p)] if k is not None}
         held = {k for k in liveness.live_in(ops, end) & end if mine(k) and k not in touched}
         limit = max(1, budget.registers.get("vreg", 0) - len(held))
-        return rename_straight(ops, end, limit, _flexible(self.context, program.groups), tags)
+        prefer = str(self.params["rename-from"].value or "new")
+        if prefer not in ("new", "dead", "distance"):
+            raise ValueError(f"--rename-from {prefer}: new, dead or distance")
+        return rename_straight(ops, end, limit, _flexible(self.context, program.groups), tags, prefer)
 
     def progress(self):
         try:
@@ -215,8 +225,9 @@ class schedule_stage(stage):
                         # SVE's vindex 2vx14 loaded C ahead into alpha's
                         indexes = _index_vectors(block)
                         budget = register_budget(
-                            registers={"vreg": gen.max_vregs() - reserve - indexes,
-                                       "freg": gen.max_fregs() - reserve},
+                            # the files as the kernel may use them (--max-vregs)
+                            registers={"vreg": self.context.rt.max_regs["vreg"] - reserve - indexes,
+                                       "freg": self.context.rt.max_regs["freg"] - reserve},
                             inflight=None if inflight is None else int(inflight),
                             live_out=_read_before_written(later))
                     for si, section in enumerate(SECTIONS):

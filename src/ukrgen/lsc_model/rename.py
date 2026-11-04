@@ -59,7 +59,8 @@ def rename_temporaries(body: list, limit: int, types=(rgt.VEC,)) -> int:
     return renamed
 
 
-def rename_straight(ops: list, end: set, limit: int, flexible, tags: frozenset) -> int:
+def rename_straight(ops: list, end: set, limit: int, flexible, tags: frozenset,
+                    prefer: str = "new") -> int:
     """
     A straight-line section's flexible values onto at most limit names of a
     register file at once. A value whose life lies in the section - a full
@@ -69,8 +70,12 @@ def rename_straight(ops: list, end: set, limit: int, flexible, tags: frozenset) 
     another value's, dead - an accumulator after its store, C's value in
     AB's (its owner set: its data type its own) - the one free longest.
     flexible(key): a component the user didn't fix (data-regs); tags: the
-    file's register types (the tracker's pool). The reuse is a dependency the
-    scheduler keeps: no order it gives holds more.
+    file's register types (the tracker's pool). prefer: where a value looks
+    first - new (its own name while fewer than limit are in use, then the
+    dead name free longest), dead (the dead name freed last: the fewest
+    registers), distance (the dead name free longest: the most room to load
+    ahead) - a new name where no dead one fits. The reuse is a dependency
+    the scheduler keeps: no order it gives holds more.
     :return: the values renamed
     """
     mine = lambda k: k is not None and classes.TAGS.get(k[2]) in tags
@@ -112,11 +117,16 @@ def rename_straight(ops: list, end: set, limit: int, flexible, tags: frozenset) 
     for f, l, k in sorted(((f, l, k) for k, ss in spans.items() for f, l, m in ss if m),
                           key=lambda v: (v[0], v[1], order(v[2]))):
         free = sorted((n for n in in_use if n != k and n[2] == k[2] and clear(n, f, l)), key=order)
-        if k in in_use or len(in_use) < limit or not free:
+        own = k in in_use or ("new" == prefer and len(in_use) < limit)
+        if own or not free:
             in_use.add(k)
             taken.setdefault(k, []).append((f, l))
             continue
-        target = min(free, key=lambda n: (max((e for b, e in taken[n] if e < f), default=-2), order(n)))
+        freed = lambda n: max((e for b, e in taken[n] if e < f), default=-2)
+        if "dead" == prefer:
+            target = min(free, key=lambda n: (-freed(n), order(n)))
+        else:
+            target = min(free, key=lambda n: (freed(n), order(n)))
         taken[target].append((f, l))
         plan.append((k, f, l, target))
     for k, f, l, target in plan:

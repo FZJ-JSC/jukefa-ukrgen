@@ -4,6 +4,15 @@ from .stage import stage
 
 from asmgen.registers import reg_tracker
 
+def register_cap(params, tag: str) -> int:
+    """--max-{tag}s: at most this many registers of a file; 0 where not given"""
+    p = params.get(f"max-{tag}s")
+    try:
+        return int(p.value) if p is not None and p.value not in (None, "") else 0
+    except (TypeError, ValueError):
+        return 0
+
+
 class isaparam_stage(stage):
     def __init__(self, context : ukr_context):
         super().__init__(context)
@@ -28,6 +37,14 @@ class isaparam_stage(stage):
                     default=default_value,
                     description=f"{isa} parameter: {name}"
                     )
+        for tag, what in (("greg", "general"), ("freg", "floating-point"), ("vreg", "vector"),
+                          ("treg", "tile")):
+            self.params[f"max-{tag}s"] = stage_param(
+                    value=None, default=None, required=False,
+                    description=f"At most this many {what} registers in the kernel: the model "
+                                f"fits, the scheduler budgets, the renamer renames within them; "
+                                f"the emitter leaves out those it would hand out last (the "
+                                f"callee-saved ones: saved and restored otherwise)")
 
     def progress(self):
 
@@ -42,10 +59,14 @@ class isaparam_stage(stage):
 
         # (no tiles: their number is the element type's - eight of doubles, four
         # of singles on SME - and max-tiles'; the emitter's tracker counts them)
+        # the register files as the kernel may use them: --max-{g,f,v}regs
+        def capped(tag, size):
+            cap = register_cap(self.params, tag)
+            return min(size, cap) if cap else size
         self.context.rt = reg_tracker([
-            ('greg',self.context.gen.max_gregs()),
-            ('freg',self.context.gen.max_fregs()),
-            ('vreg',self.context.gen.max_vregs())])
+            ('greg', capped("greg", self.context.gen.max_gregs())),
+            ('freg', capped("freg", self.context.gen.max_fregs())),
+            ('vreg', capped("vreg", self.context.gen.max_vregs()))])
 
         self.context.params.update(self.params)
         return []

@@ -627,6 +627,27 @@ class signature_emitter:
                     bounds[key] = sorted(set(bounds.get(key, allowed)) & set(allowed))
         return bounds
 
+    def _register_caps(self):
+        """
+        --max-{g,f,v}regs: a file's registers beyond its cap reserved - those
+        the tracker would hand out last (by priority: the callee-saved ones
+        lowered, never saved then), the ones in use (arguments) counted -
+        never handed out, not saved
+        """
+        from ..flow.stages.isaparam import register_cap
+        for tag in ("greg", "freg", "vreg"):
+            cap = register_cap(self.ctx.params, tag)
+            if cap <= 0 or tag not in self.rt.registered_types:
+                continue
+            used = set(self.rt.get_used_regs(tag))
+            prio = self.rt.priorities.get(tag, {})
+            free = sorted((i for i in self.rt.available_regs[tag] if i not in used),
+                          key=lambda i: (-prio.get(i, 0), bool(self.rt._counterparts(tag, i)), i))
+            for i in free[max(0, cap - len(used)):]:
+                self.rt.reserve_specific_reg(tag, i)
+                for t, j in [(tag, i)] + self.rt._counterparts(tag, i):
+                    self.rt.clobbered_regs[t].discard(j)
+
     def _required_priorities(self):
         """
         Registers some instruction restricts an operand to - SME's slice index
@@ -2190,6 +2211,7 @@ class signature_emitter:
         self.fn = fngen(gen=self.gen, rt=self.rt)
         self.fn.init_cc(cc=self.cc)
         self.params = {n: self.gen.greg(self.rt.aliased_regs["greg"][n]) for n in names}
+        self._register_caps()
         for n in given:
             self.params.setdefault(n, self.params[canonical(n)])
         self.live_params = set(names)
