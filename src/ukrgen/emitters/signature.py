@@ -48,6 +48,7 @@ from ..models.load_store_operations import (lsc_state,
 from ..models.lsc.index import lsc_reg_index
 
 
+from .allocation import register_allocator
 from ..specializers.signature import (
     specialization_error, _sigs, _masked, _offset_forms, _accepts, _all_true, _usable, _vl_form, _takes, slice_columns, slice_walkers, slice_placements,
 )
@@ -487,6 +488,8 @@ class signature_emitter:
         # the generator's tracker keeps the stack pointer and the like out of
         # reach; older generators don't provide one
         self.rt = self.gen.get_reg_tracker()
+        #: every data register through one object (docs/REGISTER_ALLOCATION.md)
+        self.alloc = register_allocator(self)
         self.phys: dict[tuple, object] = {}
         self.dts: dict[tuple, object] = self._register_types()
         self.numbers: dict[tuple, int] = {}
@@ -572,111 +575,8 @@ class signature_emitter:
                 yield from getattr(block, section)
 
     def reg(self, idx, rtype):
-        """
-        The physical register for a virtual one. Vectors fill the vector file
-        from the bottom, scalars from the top: on ISAs where scalar FP registers
-        are the low parts of vector registers the two must not meet.
-        """
-        key = (idx.component, idx.indices[0], rtype)
-        group = self.program.groups.get(idx.component)
-        parts = group[2] if group is not None and len(group) > 2 else None
-        if key not in self.phys and parts is not None and rgt.VEC == rtype:
-            # a group's parts each a group of its own (structfuse): a part's
-            # registers consecutive wherever there's room, its rows wherever
-            # its first is; a register in none ungrouped
-            part = next(((s, n) for s, n in parts.items() if s <= idx.indices[0] < s + n), None)
-            if part is not None:
-                first, size = part
-                used = self.rt.get_used_regs("vreg")
-                start = next((s for s in range(0, self.gen.max_vregs() - size + 1)
-                              if not any(s + p in used for p in range(size))), None)
-                if start is None:
-                    raise specialization_error(f"no {size} consecutive vector registers left for "
-                                               f"{idx.component}{first}")
-                for p in range(size):
-                    self.rt.reserve_specific_reg("vreg", start + p)
-                    member = (idx.component, first + p, rtype)
-                    self.phys[member] = self.gen.vreg(start + p)
-                    self.numbers[member] = ("vreg", start + p)
-        elif key not in self.phys and group is not None and rgt.VEC == rtype:
-            # a group of registers: all of them at once, consecutive and
-            # starting at a multiple of their number (RVV's groups need that,
-            # SVE's structure loads and stores take consecutive ones)
-            ways = group[0]
-            first = idx.indices[0] - idx.indices[0] % ways
-            used = self.rt.get_used_regs("vreg")
-            start = next((s for s in range(0, self.gen.max_vregs() - ways + 1, ways)
-                          if not any(s + p in used for p in range(ways))), None)
-            if start is None:
-                raise specialization_error(f"no {ways} consecutive vector registers left for "
-                                           f"{idx.component}{first}")
-            for p in range(ways):
-                self.rt.reserve_specific_reg("vreg", start + p)
-                member = (idx.component, first + p, rtype)
-                self.phys[member] = self.gen.vreg(start + p)
-                self.numbers[member] = ("vreg", start + p)
-        if key not in self.phys:
-            dt = self.dts.get((idx.component, idx.indices[0]))
-            tag = "vreg"
-            if rgt.VEC == rtype:
-                bound = self.bounds.get(key)
-                if bound is None:
-                    if not self.rt.available("vreg"):
-                        raise specialization_error(
-                            f"{key[0]}: no vector register left - the accumulators, the data "
-                            f"registers and a loop's unrolled copies (unroll_loops' factor and "
-                            f"registers) take them all; scheduling (--mru) renames tiles "
-                            f"streamed through straight-line code into the registers free, "
-                            f"fewer register sets or data registers fit")
-                    number = self.rt.reserve_any_reg("vreg")
-                else:
-                    used = self.rt.get_used_regs("vreg")
-                    free = [i for i in bound if i not in used]
-                    if not free:
-                        raise specialization_error(
-                            f"none of the vector registers {bound} left for {key[0]}{key[1]}")
-                    number = free[0]
-                    self.rt.reserve_specific_reg("vreg", number)
-                self.phys[key] = self.gen.vreg(number)
-            elif rgt.FP == rtype and "freg" in self.rt.shared:
-                # the tracker knows which vector registers FP registers are
-                number = self.rt.reserve_any_reg("freg")
-                tag = "freg"
-                self.phys[key] = self.gen.freg(number, dt)
-            elif rgt.FP == rtype and "freg" in self.rt.registered_types:
-                # a file of its own (RVV)
-                number = self.rt.reserve_any_reg("freg")
-                tag = "freg"
-                self.phys[key] = self.gen.freg(number, dt)
-            elif rgt.FP == rtype:
-                # older trackers: from the top of the vector file, clear of vectors
-                used = self.rt.get_used_regs("vreg")
-                number = max(i for i in range(self.gen.max_vregs()) if i not in used)
-                self.rt.reserve_specific_reg("vreg", number)
-                tag = "vreg"
-                self.phys[key] = self.gen.freg(number, dt)
-            elif rgt.TILE == rtype:
-                # a tile (SME ZA): from its own file
-                # the element type's tiles, or fewer where max-tiles says so
-                tiles = self.gen.max_tregs(dt)
-                cap = self.ctx.params.get("max-tiles")
-                cap = int(cap.value or 0) if cap is not None else 0
-                tiles = min(tiles, cap) if cap > 0 else tiles
-                if "treg" not in self.rt.registered_types:
-                    self.rt.add_type("treg", tiles)
-                if not self.rt.available("treg"):
-                    raise specialization_error(
-                        f"{key[0]}: no tile left - {dt.name} has {self.gen.max_tregs(dt)} tiles"
-                        f"{f', max-tiles {cap}' if cap > 0 else ''}, "
-                        f"all taken; fusing the loops over slices (fuse_slices, forward_slices) "
-                        f"keeps tiles out of use, or a smaller microtile needs fewer")
-                number = self.rt.reserve_any_reg("treg")
-                tag = "treg"
-                self.phys[key] = self.gen.treg(number, dt)
-            else:
-                raise specialization_error(f"{rtype.name} registers are not specialized yet")
-            self.numbers[key] = (tag, number)
-        return self.phys[key]
+        """The physical register for a virtual one (register_allocator.take)"""
+        return self.alloc.take(idx, rtype)
 
     def _register_bounds(self) -> dict[tuple, list[int]]:
         """
@@ -760,16 +660,8 @@ class signature_emitter:
         return comps
 
     def release(self, key):
-        """
-        A virtual register's value is dead: its physical register is free again
-        (a group's registers stay: a lone member must not be handed out)
-        """
-        if key[0] in self.program.groups:
-            return
-        if key in self.phys:
-            tag, number = self.numbers.pop(key)
-            self.rt.unuse_reg(tag, number)
-            del self.phys[key]
+        """A virtual register's value is dead (register_allocator.free)"""
+        self.alloc.free(key)
 
     def placed_at_dispatch(self, name: str, args: tuple) -> bool:
         """
@@ -1073,10 +965,10 @@ class signature_emitter:
                     if k not in self.phys:
                         continue
                     if k not in sets[group]:
-                        n = self.rt.reserve_any_reg("vreg")
+                        n = self.alloc.reserve("vreg")
                         sets[group][k] = (n, self.gen.vreg(n))
                     saved[k] = self.phys[k]
-                    self.phys[k] = sets[group][k][1]
+                    self.alloc.bind(k, sets[group][k][1])
             for pos, b in enumerate(op.block):
                 if b in sliced:
                     b.properties.update(slice_reg=index,
@@ -1112,7 +1004,7 @@ class signature_emitter:
             self.phys.update(saved)
         for group in sets:
             for n, _ in group.values():
-                self.rt.unuse_reg("vreg", n)
+                self.alloc.unreserve("vreg", n)
         lines.append(asmops.add_imm(self.gen, reg=index, imm=unroll))
         lines.append(asmops.add_imm(self.gen, reg=counter, imm=-unroll))
         lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
@@ -1215,7 +1107,7 @@ class signature_emitter:
         """
         form = next(iter(self.gen.set.forms(modifiers={opset_modifier.MASKAVL}, dts={"dreg": dt})), None)
         if form is not None and rgt.VEC == form.operands["dreg"].rtype:
-            self.rt.reserve_specific_reg("vreg", 0)
+            self.alloc.reserve("vreg", 0)
             mreg = self.gen.vreg(0)
         else:
             # the lowest free mask register: a mask governs accesses, and a
@@ -1438,7 +1330,7 @@ class signature_emitter:
         """
         if rtype not in self.masks:
             if rgt.VEC == rtype:
-                self.masks[rtype] = self.gen.vreg(self.rt.reserve_any_reg("vreg"))
+                self.masks[rtype] = self.gen.vreg(self.alloc.reserve("vreg"))
             else:
                 self.masks[rtype] = self.gen.mreg(self.rt.reserve_any_reg("mreg"))
         return self.masks[rtype]
@@ -1455,7 +1347,7 @@ class signature_emitter:
             stride = self.stride_of(op)
             if stride is None:
                 return None
-            vreg = self.gen.vreg(self.rt.reserve_any_reg("vreg"))
+            vreg = self.gen.vreg(self.alloc.reserve("vreg"))
             call = dict(dreg=vreg, dt=self.ctx.component_dts[comp],
                         modifiers={opset_modifier.STINDEX}, streg=stride)
             why = self.gen.set.refusal(**call)
@@ -2374,7 +2266,7 @@ class signature_emitter:
         self.dispatch_tag = next(self.labels)
 
         def freg(dt):
-            return gen.freg(self.rt.reserve_any_reg("freg"), dt)
+            return gen.freg(self.alloc.reserve("freg"), dt)
 
         for i, c in enumerate(self.program.cases):
             following = f"ukr{self.dispatch_tag}_try{i + 1}"
@@ -2406,7 +2298,7 @@ class signature_emitter:
                     lines.append(asmops.bits_to_freg(gen, src=t, dst=k, dt=dt))
                 lines.append(gen.cb(reg1=v, reg2=k, cmp=comparison.NE, label=following, dt=dt, greg=t))
                 for r in (v, k):
-                    self.rt.unuse_reg("freg", r.idx)
+                    self.alloc.unreserve("freg", r.idx)
                 self.rt.unuse_reg("greg", t.idx)
             lines.append(gen.jump(label=f"ukr{self.dispatch_tag}_case{i}"))
             lines.append(gen.label(label=following))
@@ -2454,7 +2346,7 @@ class signature_emitter:
 
     def release_indexes(self, later: set):
         for key in [k for k in self.indexes if k not in later]:
-            self.rt.unuse_reg("vreg", self.indexes.pop(key).idx)
+            self.alloc.unreserve("vreg", self.indexes.pop(key).idx)
 
     def start_addresses(self, comps, later) -> list[str]:
         """
