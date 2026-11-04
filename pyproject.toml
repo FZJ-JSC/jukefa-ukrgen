@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jukefa-ukrgen"
-version = "0.2.1"
+version = "0.2.2"
 authors = [
   { name="linedot", email="linedot@linedot.org" },
 ]
@@ -40,3 +40,6 @@ ukrgen = "ukrgen.clitools.ukrgen:main"
 packages = [
   "src/ukrgen"
 ]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"ukrconfig" = "share/ukrgen/ukrconfig"
