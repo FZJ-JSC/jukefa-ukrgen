@@ -5,8 +5,6 @@ The analysis pass's register classes against what the emitter allocates
 
 import unittest
 
-from asmgen.registers import adt_size
-
 import ukrgen.emitters.allocation as A
 from ukrgen.lsc_model.classes import register_class_of
 
@@ -24,7 +22,7 @@ class test_register_classes(unittest.TestCase):
             fresh = key not in e.phys
             reg = take(alloc, idx, rtype)
             if fresh and key in e.numbers:
-                cls = register_class_of(key, e.program.groups, e.dts, e.bounds)
+                cls = register_class_of(key, e.program.groups, e.dts, e.bounds, e.gen.treg_tag)
                 tag, number = e.numbers[key]
                 seen.append(key)
                 if cls is None or cls.tag != tag:
@@ -37,8 +35,6 @@ class test_register_classes(unittest.TestCase):
                         start = e.numbers.get((key[0], first, rtype), (tag, None))[1]
                         if start is None or start % cls.align:
                             wrong.append((key, "align", cls.align, start))
-                elif cls.element is not None and cls.element != adt_size(e.dts[(key[0], key[1])]):
-                    wrong.append((key, "element", cls.element))
             return reg
         A.register_allocator.take = checked
         try:
@@ -72,26 +68,35 @@ if __name__ == "__main__":
 
 
 class test_units(unittest.TestCase):
-    def test_za_overlap(self):
-        from ukrgen.lsc_model.classes import register_class, units, fits
-        d, s, h, b = (register_class("treg", element=e) for e in (8, 4, 2, 1))
-        za = lambda cls, n: sorted(u[1] for u in units(cls, n))
-        self.assertEqual([5], za(d, 5))
-        self.assertEqual([0, 4], za(s, 0))
-        self.assertEqual([1, 3, 5, 7], za(h, 1))
-        self.assertEqual(list(range(8)), za(b, 0))
-        self.assertTrue(fits(s, 3))
-        self.assertFalse(fits(s, 5))
-        self.assertTrue(fits(d, 7))
+    """Units, fit and compatibility by the tracker's knowledge (asmgen's): no ISA's layout in ukrgen"""
+    def setUp(self):
+        from ukrgen.flow.isa_map import make_generator
+        self.rt = make_generator("sme").get_reg_tracker()
+
+    def test_tiles(self):
+        from ukrgen.lsc_model.classes import register_class, units, fits, compatible
+        d, s, h = register_class("treg64"), register_class("treg32"), register_class("treg16")
+        self.assertTrue(units(s, 0, self.rt) & units(h, 0, self.rt))
+        self.assertTrue(units(s, 1, self.rt) & units(d, 5, self.rt))
+        self.assertFalse(units(s, 0, self.rt) & units(s, 1, self.rt))
+        self.assertFalse(units(s, 1, self.rt) & units(h, 0, self.rt))
+        self.assertFalse(units(d, 0, self.rt) & units(d, 1, self.rt))
+        self.assertTrue(fits(s, 3, self.rt))
+        self.assertFalse(fits(s, 5, self.rt))
+        self.assertTrue(fits(d, 7, self.rt))
+        self.assertTrue(compatible(s, d, self.rt))
 
     def test_groups_and_files(self):
         from ukrgen.lsc_model.classes import register_class, units, fits, compatible
         g = register_class("vreg", size=2, align=2)
-        self.assertEqual([4, 5], sorted(u[1] for u in units(g, 4)))
-        self.assertFalse(fits(g, 3))
-        shared = frozenset({"vreg", "freg"})
+        self.assertEqual({("vreg", 4), ("vreg", 5)}, units(g, 4, self.rt))
+        self.assertFalse(fits(g, 3, self.rt))
         v, f = register_class("vreg"), register_class("freg")
-        self.assertEqual(units(v, 3, shared), units(f, 3, shared))
-        self.assertTrue(compatible(v, f, shared, shared))
-        self.assertFalse(compatible(v, register_class("vreg", size=2, align=2), shared, shared))
-        self.assertFalse(fits(register_class("vreg", allowed=(1, 2)), 3))
+        self.assertTrue(units(v, 3, self.rt) & units(f, 3, self.rt))
+        self.assertTrue(compatible(v, f, self.rt))
+        self.assertFalse(compatible(v, g, self.rt))
+        self.assertFalse(fits(register_class("vreg", allowed=(1, 2)), 3, self.rt))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -7,7 +7,6 @@ dead registers of a compatible class, the allocation assigns within it
 from dataclasses import dataclass
 
 from asmgen.asmblocks.op import register_type as rgt
-from asmgen.registers import adt_size
 
 #: a register type's tracker tag
 TAGS = {rgt.VEC: "vreg", rgt.FP: "freg", rgt.TILE: "treg"}
@@ -23,16 +22,16 @@ class register_class:
     align: int = 1
     #: the registers it may take - None: any of its file
     allowed: tuple | None = None
-    #: its element size in bytes where the file depends on it (ZA's tiles)
-    element: int | None = None
 
 
-def register_class_of(key: tuple, groups: dict, dts: dict, bounds: dict) -> register_class | None:
+def register_class_of(key: tuple, groups: dict, dts: dict, bounds: dict,
+                      tile_tag=None) -> register_class | None:
     """
     The class of a data register's value - key (component, number, register
     type), its data type by its value (dts: by the value's own register),
     groups (structfuse's parts, RVV's and SVE's consecutive groups), bounds (a
-    vector register's allowed ones)
+    vector register's allowed ones), tile_tag (asmgen's treg_tag: the
+    tracker's type of a data type's tiles)
     """
     comp, number, rtype = key
     tag = TAGS.get(rtype)
@@ -40,7 +39,7 @@ def register_class_of(key: tuple, groups: dict, dts: dict, bounds: dict) -> regi
         return None
     if rgt.TILE == rtype:
         dt = dts.get((comp, number))
-        return register_class(tag, element=adt_size(dt) if dt is not None else None)
+        return register_class(tile_tag(dt) if tile_tag is not None and dt is not None else tag)
     if rgt.VEC != rtype:
         return register_class(tag)
     group = groups.get(comp)
@@ -55,40 +54,33 @@ def register_class_of(key: tuple, groups: dict, dts: dict, bounds: dict) -> regi
     return register_class(tag, allowed=tuple(allowed) if allowed is not None else None)
 
 
-#: ZA's 64-bit tiles: a tile of element size e bytes is one of e, covering
-#: eight of them over e
-ZA_UNITS = 8
-
-
-def units(cls: register_class, number: int, pool: frozenset | None = None) -> frozenset:
+def units(cls: register_class, number: int, rt) -> frozenset:
     """
-    The physical units a register of a class occupies at a number - what must
-    be dead for a value to take it: a tile of element size e (one of e) the
-    64-bit tiles number + k*e (ZA's overlap: za0.s is za0.d and za4.d); a
-    group its consecutive registers; else the register - in its file (the
-    tracker's pool: SVE's FP registers the low parts of its vector registers,
-    one unit)
+    What a register of a class occupies at a number - what must be dead for a
+    value to take it: the tracker's storage of each register it takes (a
+    group's consecutive ones; SME's tiles: za0.s is za0.d and za4.d; SVE's
+    d3 is v3) - no ISA's layout here, the tracker's (asmgen); two values
+    conflict where their units meet
     """
-    file = pool if pool is not None else frozenset({cls.tag})
-    if "treg" == cls.tag and cls.element:
-        return frozenset((file, number + k * cls.element) for k in range(ZA_UNITS // cls.element))
-    return frozenset((file, number + k) for k in range(cls.size))
+    out = set()
+    for k in range(cls.size):
+        out |= rt.storage(cls.tag, number + k)
+    return frozenset(out)
 
 
-def fits(cls: register_class, number: int) -> bool:
+def fits(cls: register_class, number: int, rt) -> bool:
     """
     Whether a register number suits a class: one it may take, aligned to its
-    group, a tile there is for its element size (four of singles: no za5.s)
+    group, one of the registers its type has (the tracker's: four tiles of
+    singles - no za5.s)
     """
     if cls.allowed is not None and number not in cls.allowed:
         return False
     if cls.align > 1 and number % cls.align:
         return False
-    if "treg" == cls.tag and cls.element and number >= cls.element:
-        return False
-    return True
+    return 0 <= number and number + cls.size <= rt.max_regs.get(cls.tag, 0)
 
 
-def compatible(a: register_class, b: register_class, pool_a: frozenset, pool_b: frozenset) -> bool:
-    """Whether values of two classes can follow each other in a register: one file"""
-    return pool_a == pool_b and a.size == b.size and a.align == b.align
+def compatible(a: register_class, b: register_class, rt) -> bool:
+    """Whether values of two classes can follow each other in a register: one file (the tracker's pool), one group shape"""
+    return rt.pool(a.tag) == rt.pool(b.tag) and a.size == b.size and a.align == b.align

@@ -113,16 +113,20 @@ class register_allocator:
                 cap = e.ctx.params.get("max-tiles")
                 cap = int(cap.value or 0) if cap is not None else 0
                 tiles = min(tiles, cap) if cap > 0 else tiles
-                if "treg" not in e.rt.registered_types:
-                    e.rt.add_type("treg", tiles)
-                if not e.rt.available("treg"):
+                # the tracker's type of dt's tiles (asmgen's treg_tag: SME's by
+                # element size, sharing ZA's storage) - added where the
+                # generator declares none; max-tiles caps the tiles held
+                tag = e.gen.treg_tag(dt)
+                if tag not in e.rt.registered_types:
+                    e.rt.add_type(tag, tiles)
+                held = sum(1 for (t, n) in e.numbers.values() if t == tag)
+                if not e.rt.available(tag) or held >= tiles:
                     raise specialization_error(
                         f"{key[0]}: no tile left - {dt.name} has {e.gen.max_tregs(dt)} tiles"
                         f"{f', max-tiles {cap}' if cap > 0 else ''}, "
                         f"all taken; fusing the loops over slices (fuse_slices, forward_slices) "
                         f"keeps tiles out of use, or a smaller microtile needs fewer")
-                number = e.rt.reserve_any_reg("treg")
-                tag = "treg"
+                number = e.rt.reserve_any_reg(tag)
                 e.phys[key] = e.gen.treg(number, dt)
             else:
                 raise specialization_error(f"{rtype.name} registers are not specialized yet")
