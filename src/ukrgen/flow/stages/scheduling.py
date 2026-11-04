@@ -212,6 +212,10 @@ class schedule_stage(stage):
                                         registers={t: n - taken.get(t, 0) for t, n in budget.registers.items()},
                                         inflight=budget.inflight)
                                 # (no window: apart as far as those registers allow)
+                                # the order before: copies one after another (the
+                                # emitter's fallback where the registers there
+                                # are at the loop don't hold the copies overlapped)
+                                op.info["serial"] = list(op.block)
                                 inner, _ = scheduler(list(op.block), loop=True, budget=inner_budget,
                                                      groups=program.groups)
                                 op.block = inner

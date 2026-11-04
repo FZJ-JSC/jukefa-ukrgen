@@ -133,9 +133,9 @@ def expand_copies(program, loop):
     An unrolled loop over slices with its copies in its block: each copy's
     slice operations at its immediate (property copy), its memory accesses
     walking from its own first slice - shifted along the index the slices
-    iterate - and its own vector temporaries in register set copy mod
-    registers: a scheduler sees only the dependencies there are and
-    interleaves the copies. The emitter then emits the block once an
+    iterate - and its own vector temporaries, virtual registers of its own: a
+    scheduler sees only the dependencies there are and interleaves the
+    copies. The emitter then emits the block once an
     iteration, every pointer and the slice index stepping by the unroll
     """
     unroll, registers = loop.subtiling.unroll, max(1, loop.subtiling.registers)
@@ -157,8 +157,10 @@ def expand_copies(program, loop):
         b.add_property("copy", 0)
     block = list(base)
     for u in range(1, unroll):
-        group = u % registers
-        rename = {k: lsc_reg_index(k[0], [k[1] + 1000 * group]) for k in local} if group else {}
+        # each copy's temporaries virtual registers of its own: the scheduler
+        # sees no copy waiting on another's registers; the emitter emits the
+        # copies overlapped where registers allow, one after another where not
+        rename = {k: lsc_reg_index(k[0], [k[1] + 1000 * u]) for k in local}
         moved = {}
         for b in base:
             n = _clone(b)

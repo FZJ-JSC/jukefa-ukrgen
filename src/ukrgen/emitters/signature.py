@@ -56,6 +56,20 @@ from ..specializers.signature import (
 SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
 
 
+class _labels:
+    """The labels' numbers in order - copyable (a loop emitted on trial)"""
+
+    def __init__(self):
+        self.n = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        self.n += 1
+        return self.n - 1
+
+
 @dataclass
 class emitted_block:
     """
@@ -536,7 +550,7 @@ class signature_emitter:
         self.recipes: list[tuple[str, tuple, bool]] = []
         self.regions_started = False
         self.region_loads: list[str] = []
-        self.labels = iter(range(10**6))
+        self.labels = _labels()
         #: whether a value lives outside the operation emitted (straight sets it)
         self.outside = lambda k: True
         isa = self.gen.isa_setup()
@@ -725,6 +739,33 @@ class signature_emitter:
         return self.offsets.offset_value(*args, **kwargs)
 
     def slices(self, op) -> list[str]:
+        """
+        A loop over slices: its body as scheduled - copies overlapped as far as
+        the scheduler's budget let - if the registers there are at the loop
+        hold it, else its copies one after another (the order before the
+        scheduler's: info serial), which hold no more than one copy's
+        """
+        import copy as _copy
+        serial = op.info.get("serial")
+        if not serial or [id(b) for b in serial] == [id(b) for b in op.block]:
+            return self._slices(op)
+        state = (_copy.deepcopy(self.rt), dict(self.phys), dict(self.numbers), dict(self.positions),
+                 dict(self.aregs), _copy.copy(self.labels))
+        try:
+            return self._slices(op)
+        except specialization_error as err:
+            if "register" not in str(err):
+                raise
+            self.rt, phys, numbers, positions, aregs, self.labels = state
+            for target, saved in ((self.phys, phys), (self.numbers, numbers), (self.positions, positions),
+                                  (self.aregs, aregs)):
+                target.clear()
+                target.update(saved)
+            op.block = list(serial)
+            op.refresh()
+            return self._slices(op)
+
+    def _slices(self, op) -> list[str]:
         """
         A loop over a tile's slices, as many as it has rows or columns at run
         time: the slice index in a register every slice operand takes (SME:
