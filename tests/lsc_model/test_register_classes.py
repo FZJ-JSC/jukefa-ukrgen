@@ -69,3 +69,29 @@ class test_register_classes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class test_units(unittest.TestCase):
+    def test_za_overlap(self):
+        from ukrgen.lsc_model.classes import register_class, units, fits
+        d, s, h, b = (register_class("treg", element=e) for e in (8, 4, 2, 1))
+        za = lambda cls, n: sorted(u[1] for u in units(cls, n))
+        self.assertEqual([5], za(d, 5))
+        self.assertEqual([0, 4], za(s, 0))
+        self.assertEqual([1, 3, 5, 7], za(h, 1))
+        self.assertEqual(list(range(8)), za(b, 0))
+        self.assertTrue(fits(s, 3))
+        self.assertFalse(fits(s, 5))
+        self.assertTrue(fits(d, 7))
+
+    def test_groups_and_files(self):
+        from ukrgen.lsc_model.classes import register_class, units, fits, compatible
+        g = register_class("vreg", size=2, align=2)
+        self.assertEqual([4, 5], sorted(u[1] for u in units(g, 4)))
+        self.assertFalse(fits(g, 3))
+        shared = frozenset({"vreg", "freg"})
+        v, f = register_class("vreg"), register_class("freg")
+        self.assertEqual(units(v, 3, shared), units(f, 3, shared))
+        self.assertTrue(compatible(v, f, shared, shared))
+        self.assertFalse(compatible(v, register_class("vreg", size=2, align=2), shared, shared))
+        self.assertFalse(fits(register_class("vreg", allowed=(1, 2)), 3))
