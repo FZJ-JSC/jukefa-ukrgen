@@ -6,11 +6,11 @@ build-backend = "hatchling.build"
 name = "ukrgen"
 version = "0.2.0"
 authors = [
-  { name="linedot", email="linedot@linedot.org" }, 
+  { name="linedot", email="linedot@linedot.org" },
 ]
 description = "A microkernel generator"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 classifiers = [
   "Programming Language :: Python :: 3",
   "Operating System :: OS Independent",
@@ -20,20 +20,23 @@ dependencies = [
     "mako",
     "GitPython",
     "PyYAML",
-    "asmgen>=0.6.0"
+    "jukefa-asmgen>=0.6.0"
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 test = [
-    "parameterized"
+  "pytest>=8",
+  "parameterized",
+  "pytest-xdist"
 ]
+
+
 
 [project.scripts]
-blisgen = "clitools.blisgen:main"
-ukrgen = "clitools.ukrgen:main"
+blisgen = "ukrgen.clitools.blisgen:main"
+ukrgen = "ukrgen.clitools.ukrgen:main"
 
 [tool.hatch.build.targets.wheel]
 packages = [
-  "src/ukrgen",
-  "clitools"
+  "src/ukrgen"
 ]

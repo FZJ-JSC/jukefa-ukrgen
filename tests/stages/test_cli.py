@@ -27,7 +27,7 @@ CASES_STRIDED = [
 
 def cli(*args):
     env = dict(os.environ, PYTHONPATH=os.path.join(ROOT, "src"))
-    return subprocess.run([sys.executable, "-m", "clitools.ukrgen", *args], cwd=ROOT,
+    return subprocess.run([sys.executable, "-m", "ukrgen.clitools.ukrgen", *args], cwd=ROOT,
                           env=env, capture_output=True, text=True, timeout=600)
 
 

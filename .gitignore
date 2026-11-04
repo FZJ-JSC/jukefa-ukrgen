@@ -1,3 +1,4 @@
 gemmbench_*
 __pycache__
 .ccls-cache
+uv.lock
