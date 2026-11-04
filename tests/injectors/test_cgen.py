@@ -225,6 +225,7 @@ int main( void )
             # three full panels by the generated cases, three by the reference
             self.assertIn("6 runs, 3 by generated cases, 0 wrong", out)
 
+    @needs_tools
     def test_packm_masked_tail(self):
         # cdim = N*VL + M in one pass: N vectors and the last one masked to
         # the M rows left (SVE's whilelo, tail(m)) - cdim below VL too - the
@@ -1982,8 +1983,9 @@ int main( void )
                                      os.path.join(d, "t.c"), *objs, "-o", os.path.join(d, "run")],
                                capture_output=True, text=True)
             self.assertEqual(0, r.returncode, r.stderr)
-            out = subprocess.run([os.path.join(d, "run")], capture_output=True, text=True, timeout=60).stdout
-            self.assertIn("6 runs, 2 by generated cases, 0 wrong", out)
+            run = subprocess.run([os.path.join(d, "run")], capture_output=True, text=True, timeout=60)
+            self.assertIn("6 runs, 2 by generated cases, 0 wrong", run.stdout,
+                          f"exit {run.returncode}: {run.stderr[-500:]}")
 
     @unittest.skipUnless("avx512f" in open("/proc/cpuinfo").read() and shutil.which("gcc"),
                          "needs an AVX-512 CPU")

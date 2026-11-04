@@ -20,7 +20,8 @@ def assembles_for(isa, lines):
         return assembles(lines, arch="armv8-a+sve")
     if "rvv" == isa:
         if not shutil.which("riscv64-linux-gnu-as"):
-            return True, ""
+            # skipped, not passed, where the assembler isn't installed
+            raise unittest.SkipTest("needs riscv64-linux-gnu-as")
         with tempfile.TemporaryDirectory() as d:
             src = os.path.join(d, "k.s")
             with open(src, "w") as f:

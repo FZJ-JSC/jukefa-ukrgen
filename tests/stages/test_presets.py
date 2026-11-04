@@ -19,7 +19,8 @@ BASE = {"ukr": "gemm", "k": "1", "A-layout": ["m:c", "k:p"], "B-layout": ["n:c",
 
 def build(isa, preset, dt="FP64", c_layout=("m:c", "n:s"), m="2", n="2", **extra):
     p = dict(BASE, isa=isa, **{"tileop-preset": preset, "C-layout": list(c_layout), "m": m, "n": n})
-    for comp in ("A", "B", "C", "AB", "alpha", "beta"):
+    # (alpha's and beta's types are C's: no data type of their own)
+    for comp in ("A", "B", "C", "AB"):
         p[f"{comp}-data-type"] = dt
     p.update(extra)
     return run_flow(p)

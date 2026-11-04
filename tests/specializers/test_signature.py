@@ -49,6 +49,10 @@ def mm(isa="neon", **extra):
 
 
 def assembles(lines, arch="armv8-a"):
+    # skipped, not failed, where the assembler isn't installed
+    tool = "as" if "x86" == arch else "aarch64-linux-gnu-as"
+    if not shutil.which(tool):
+        raise unittest.SkipTest(f"needs {tool}")
     if "x86" == arch:
         # the host assembler, the inline-assembly escapes undone
         lines = [l.replace("%%", "%").replace("%=", "0") for l in lines]

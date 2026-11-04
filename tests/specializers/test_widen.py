@@ -141,7 +141,8 @@ class test_widen(unittest.TestCase):
         stages = list(t.STAGES)
         i = [s.__name__ for s in stages].index("model_stage") + 1
         saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
-        types = {f"{c}-data-type": wide for c in ("C", "AB", "alpha", "beta")}
+        # (alpha's and beta's types are C's: no data type of their own)
+        types = {f"{c}-data-type": wide for c in ("C", "AB")}
         types.update({"A-data-type": narrow, "B-data-type": narrow}, **FEATURES[isa])
         if "rvv" == isa:
             types["rvv-LMUL"] = "1"
