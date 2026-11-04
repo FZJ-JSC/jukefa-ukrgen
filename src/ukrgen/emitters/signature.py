@@ -49,6 +49,7 @@ from ..models.lsc.index import lsc_reg_index
 
 
 from .allocation import register_allocator
+from ..lsc_model import liveness
 from ..specializers.signature import (
     specialization_error, _sigs, _masked, _offset_forms, _accepts, _all_true, _usable, _vl_form, _takes, slice_columns, slice_walkers, slice_placements,
 )
@@ -945,12 +946,8 @@ class signature_emitter:
             types = b.rtypes or []
             return [(b.indices[p].component, b.indices[p].indices[0], types[p] if p < len(types) else None)
                     for p in positions]
-        local, read = [], set()
-        for b in op.block:
-            read |= set(keys(b, b.reads))
-            for k in keys(b, b.writes):
-                if rgt.VEC == k[2] and k not in read and k not in local:
-                    local.append(k)
+        # the block's own vector temporaries: written before read (lsc_model.liveness)
+        local = liveness.local(op.block)
         sets = [{} for _ in range(rotate)]
         # with one register set, a temporary is free again after its last use
         # in the iteration - the next tile's slice takes its register (cluster
@@ -1932,44 +1929,16 @@ class signature_emitter:
         return lines
 
     def exposed(self, ops: list) -> set:
-        """
-        The data registers operations read before they write them (in order)
-        """
-        out, written = set(), set()
-        for op in ops:
-            reads, writes = self.reads_writes(op)
-            out |= reads - written
-            written |= writes
-        return out
+        """The data registers operations read before they write them (lsc_model.liveness)"""
+        return liveness.exposed(ops)
 
     def live_afters(self, ops: list, end: set) -> list:
-        """
-        What's live after each operation: read by a later one before it's
-        written, or at the end (end)
-        """
-        live, out = set(end), [None] * len(ops)
-        for pos in reversed(range(len(ops))):
-            out[pos] = set(live)
-            reads, writes = self.reads_writes(ops[pos])
-            live = (live - writes) | reads
-        return out
+        """What's live after each operation (lsc_model.liveness)"""
+        return liveness.live_afters(ops, end)
 
     def reads_writes(self, op) -> tuple[set, set]:
-        """
-        The data registers an operation reads and writes - a loop's: what its
-        body reads before writing it (carried in), what it writes
-        """
-        def at(o, positions):
-            return {(o.indices[p].component, o.indices[p].indices[0], o.rtypes[p])
-                    for p in positions or [] if p < len(o.indices) and o.rtypes
-                    and o.rtypes[p] in (rgt.VEC, rgt.FP, rgt.TILE)}
-        if isinstance(op, lsc_loop):
-            reads, writes = set(), set()
-            for b in op.block:
-                reads |= at(b, b.reads) - writes
-                writes |= at(b, b.writes)
-            return reads, writes
-        return at(op, op.reads), at(op, op.writes)
+        """The data registers an operation reads and writes (lsc_model.liveness)"""
+        return liveness.reads_writes(op)
 
     def data_keys(self, op) -> list:
         """
@@ -1977,9 +1946,7 @@ class signature_emitter:
         products' tile lives on into the operations reaching it slice by
         slice): what the renamer (straight, a loop's body) gives registers to
         """
-        return [(i.component, i.indices[0], r) for i, r in
-                zip(op.indices, op.rtypes or [])
-                if r in (rgt.VEC, rgt.FP, rgt.TILE)]
+        return [k for p in range(len(op.indices)) for k in [liveness.data_key(op, p)] if k is not None]
 
     def _advances(self, block: ir_block, out: emitted_block) -> emitted_block:
         db, strides = self.program.offsets, self.program.strides

@@ -8,6 +8,7 @@ from dataclasses import replace
 from asmgen.registers import adt_size
 
 from ...support.sig_group import sig_group
+from ...lsc_model import liveness
 from .base import irmod_param, irmod_placement, lsc_irmod
 from .vectorize import repeats
 from .base import blocks_and_sections
@@ -142,16 +143,8 @@ def expand_copies(program, loop):
     if unroll < 2 or loop.info.get("unrolled"):
         return
     index = loop.info.get("index")
-    def keys(op, positions):
-        types = op.rtypes or []
-        return [(op.indices[p].component, op.indices[p].indices[0], types[p] if p < len(types) else None)
-                for p in positions]
-    local, read = [], set()
-    for b in loop.block:
-        read |= set(keys(b, b.reads))
-        for k in keys(b, b.writes):
-            if rgt.VEC == k[2] and k not in read and k not in local:
-                local.append(k)
+    # the block's own vector temporaries: written before read (lsc_model.liveness)
+    local = liveness.local(loop.block)
     base, walks = list(loop.block), list(loop.walks)
     for b in base:
         b.add_property("copy", 0)

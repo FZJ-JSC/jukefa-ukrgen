@@ -10,52 +10,42 @@ from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
 from ...models.lsc.reg import lsc_reg_type
 from ...schedulers.distance import distance_specification
+from ...lsc_model import liveness
 from ...schedulers.list_scheduler import list_scheduler, register_budget, _key, TAGS
 
 SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
 
 
+def _scheduler_key(groups=None):
+    """
+    The scheduler's register key for the liveness: the IR's register class, a
+    group's members its first (what touches a member touches the group) -
+    data registers only
+    """
+    return lambda op, p: _key(op, p, groups) if lsc_reg_type.data == op.reg_types[p] else None
+
+
 def _read_before_written(blocks) -> set:
     """
     Data registers the blocks read before writing them: alive into them
+    (lsc_model.liveness)
     """
-    seen, live = set(), set()
-    for block in blocks:
-        for section in SECTIONS:
-            for op in getattr(block, section):
-                for p in op.reads:
-                    k = _key(op, p)
-                    if lsc_reg_type.data == k[0] and k not in seen:
-                        live.add(k)
-                for p in op.writes:
-                    seen.add(_key(op, p))
-    return live
-
+    return liveness.read_before_written(blocks, _scheduler_key())
 
 
 def _across(order: list, pos: int, live_out: set, groups) -> dict:
     """
     The data registers live across order[pos] (a loop) it neither reads nor
     writes - read after it, in its section or the blocks after - per register
-    tag: held while it runs, not its iterations'
+    tag: held while it runs, not its iterations' (lsc_model.liveness)
     """
-    loop = order[pos]
-    own = {_key(loop, p, groups) for p in list(loop.reads) + list(loop.writes)}
-    across, written = set(), set()
-    for op in order[pos + 1:]:
-        for p in op.reads:
-            k = _key(op, p, groups)
-            if lsc_reg_type.data == op.reg_types[p] and k not in written and k not in own:
-                across.add(k)
-        for p in op.writes:
-            written.add(_key(op, p, groups))
-    across |= {k for k in live_out if lsc_reg_type.data == k[0] and k not in own}
     counts = {}
-    for k in across:
+    for k in liveness.across(order, pos, live_out, _scheduler_key(groups)):
         tag = TAGS.get(k[-1])
         if tag is not None:
             counts[tag] = counts.get(tag, 0) + 1
     return counts
+
 
 def _index_vectors(block) -> int:
     """
