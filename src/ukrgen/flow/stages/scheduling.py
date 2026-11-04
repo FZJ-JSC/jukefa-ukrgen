@@ -205,9 +205,6 @@ class schedule_stage(stage):
                                         registers={t: n - taken.get(t, 0) for t, n in budget.registers.items()},
                                         inflight=budget.inflight)
                                 # (no window: apart as far as those registers allow)
-                                # the order before: copies one after another (the
-                                # emitter's fallback where the registers there
-                                # are at the loop don't hold the copies overlapped)
                                 if inner_budget is not None and "vreg" in inner_budget.registers:
                                     # its own temporaries under as many names as
                                     # vector registers there are for them (the
@@ -218,7 +215,6 @@ class schedule_stage(stage):
                                     limit = max(1, inner_budget.registers["vreg"] - len(held))
                                     if rename_temporaries(op.block, limit):
                                         op.refresh()
-                                op.info["serial"] = list(op.block)
                                 inner, _ = scheduler(list(op.block), loop=True, budget=inner_budget,
                                                      groups=program.groups)
                                 op.block = inner

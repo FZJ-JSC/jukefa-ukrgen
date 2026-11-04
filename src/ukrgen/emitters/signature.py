@@ -743,23 +743,17 @@ class signature_emitter:
 
     def slices(self, op) -> list[str]:
         """
-        A loop over slices: its body as scheduled - copies overlapped as far as
-        the scheduler's budget let - if the values live at once in it
-        (peak_registers: the IR's liveness, back edge and all) fit the vector
-        file's room, else its copies one after another (the order before the
-        scheduler's: info serial, no more than one copy's at once)
+        A loop over slices, its body as scheduled - its temporaries renamed
+        within the registers there are for them (lsc_model.rename), no order
+        of the scheduler's holds more; the values live at once in it
+        (peak_registers) checked against the room there is all the same
         """
-        serial = op.info.get("serial")
-        if serial and [id(b) for b in serial] != [id(b) for b in op.block]:
-            if self.peak_registers(op.block, "vreg") > self.room("vreg"):
-                op.block = list(serial)
-                op.refresh()
         peak, room = self.peak_registers(op.block, "vreg"), self.room("vreg")
         if peak > room:
             raise specialization_error(
                 f"{op.info.get('component')}: {peak} values live at once in a loop over slices, "
-                f"{room} registers of their file there - its copies one after another too: fewer "
-                f"data registers or a smaller microtile fit")
+                f"{room} registers of their file there - fewer data registers or a smaller "
+                f"microtile fit")
         return self._slices(op)
 
     #: a value's register type, the tracker's tag for it
