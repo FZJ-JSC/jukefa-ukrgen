@@ -553,6 +553,8 @@ class signature_emitter:
         self.labels = _labels()
         #: whether a value lives outside the operation emitted (straight sets it)
         self.outside = lambda k: True
+        #: what's live after the operation emitted - None: not known
+        self.after = None
         isa = self.gen.isa_setup()
         self.vector_length_kept = isa.predication().name == "IMPLICIT"
         self.strides_in: dict[str, object] = {}
@@ -741,29 +743,52 @@ class signature_emitter:
     def slices(self, op) -> list[str]:
         """
         A loop over slices: its body as scheduled - copies overlapped as far as
-        the scheduler's budget let - if the registers there are at the loop
-        hold it, else its copies one after another (the order before the
-        scheduler's: info serial), which hold no more than one copy's
+        the scheduler's budget let - if the vector values live at once in it
+        (peak_vectors: the IR's liveness, back edge and all) fit the registers
+        there are at the loop, else its copies one after another (the order
+        before the scheduler's: info serial, no more than one copy's at once)
         """
-        import copy as _copy
         serial = op.info.get("serial")
-        if not serial or [id(b) for b in serial] == [id(b) for b in op.block]:
-            return self._slices(op)
-        state = (_copy.deepcopy(self.rt), dict(self.phys), dict(self.numbers), dict(self.positions),
-                 dict(self.aregs), _copy.copy(self.labels))
-        try:
-            return self._slices(op)
-        except specialization_error as err:
-            if "register" not in str(err):
-                raise
-            self.rt, phys, numbers, positions, aregs, self.labels = state
-            for target, saved in ((self.phys, phys), (self.numbers, numbers), (self.positions, positions),
-                                  (self.aregs, aregs)):
-                target.clear()
-                target.update(saved)
-            op.block = list(serial)
-            op.refresh()
-            return self._slices(op)
+        if serial and [id(b) for b in serial] != [id(b) for b in op.block]:
+            room = self.gen.max_vregs() - len(self.reserved_vregs())
+            if self.peak_vectors(op.block) > room:
+                op.block = list(serial)
+                op.refresh()
+        peak, room = self.peak_vectors(op.block), self.gen.max_vregs() - len(self.reserved_vregs())
+        if peak > room:
+            raise specialization_error(
+                f"{op.info.get('component')}: {peak} vector values live at once in a loop over slices, "
+                f"{room} vector registers there - its copies one after another too: fewer data "
+                f"registers or a smaller microtile fit")
+        return self._slices(op)
+
+    def reserved_vregs(self) -> set:
+        """Vector registers taken by no value: masks, index vectors, v0"""
+        by_values = {n for k, (t, n) in self.numbers.items() if t == "vreg"}
+        if "freg" in self.rt.shared:
+            by_values |= {n for k, (t, n) in self.numbers.items() if t == "freg"}
+        return set(self.rt.get_used_regs("vreg")) - by_values
+
+    def peak_vectors(self, ops: list) -> int:
+        """
+        The most vector values live at once in a loop's body in this order -
+        read later before written, carried across the back edge, read after
+        the loop (self.after), or held through it untouched - FP scalars too
+        where they are vector registers' low parts
+        """
+        classes = (rgt.VEC, rgt.FP) if "freg" in self.rt.shared else (rgt.VEC,)
+        held = {k for k in self.phys if k[2] in classes}
+        after = self.after if self.after is not None else held
+        writes = {k for o in ops for k in self.reads_writes(o)[1]}
+        afters = self.live_afters(ops, self.exposed(ops) | (writes & after))
+        touched = {k for o in ops for k in self.data_keys(o)}
+        through = {k for k in held if k not in touched}
+        peak = 0
+        for pos, o in enumerate(ops):
+            reads, writes_here = self.reads_writes(o)
+            live = {k for k in afters[pos] | reads | writes_here if k[2] in classes}
+            peak = max(peak, len(live) + len(through))
+        return peak
 
     def _slices(self, op) -> list[str]:
         """
@@ -1844,6 +1869,7 @@ class signature_emitter:
                 lines = []
                 for pos, op in enumerate(ops):
                     self.outside = lambda k, a=afters[pos]: k in a
+                    self.after = afters[pos]
                     lines += self.emit_op(op)
                 out.sections[name] = lines
             self.outside = outside
@@ -1890,6 +1916,7 @@ class signature_emitter:
         outside = self.outside
         for pos, op in enumerate(ops):
             self.outside = lambda k, after=live_after[pos]: k in after
+            self.after = live_after[pos]
             lines += self.emit_op(op)
             for k in keys(op):
                 if last[k] == pos and k not in needed_later:
