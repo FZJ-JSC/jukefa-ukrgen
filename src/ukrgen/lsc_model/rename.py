@@ -83,12 +83,12 @@ def rename_straight(ops: list, end: set, limit: int, flexible, tags: frozenset,
     for op in ops:
         reads = {k for p in op.reads or [] for k in [liveness.data_key(op, p)] if mine(k)}
         writes = {k for p in op.writes or [] for k in [liveness.data_key(op, p)] if mine(k)}
-        # a lane, a block or a slice written is part of a register - the rest
-        # kept (a lane load keeps the lanes below, AVX's vinsertf128 the other
-        # block), though the IR has the operation read only its source: a
-        # value built piece by piece one value, read by each piece written (a
-        # block extracted into a scratch writes all of it: kept from moving)
-        if any(op.properties.get(p) is not None for p in ("lane", "block", "slice")):
+        # a part of a register written reads the rest (liveness.keeps): a
+        # value built piece by piece one value - and the renamer leaves any
+        # lane, block or slice operation's register where it is (an extract's
+        # scratch too: renamed, AVX2's strided C ran out of registers, the
+        # names' limit short of something - not yet found)
+        if liveness.keeps(op) or any(op.properties.get(p) is not None for p in ("lane", "block", "slice")):
             reads |= writes
         rw.append((reads, writes))
     afters, live = [None] * len(ops), {k for k in end if mine(k)}
@@ -139,3 +139,15 @@ def rename_straight(ops: list, end: set, limit: int, flexible, tags: frozenset,
                     idx.component, idx.indices = target[0], [target[1]] + list(idx.indices[1:])
                     op.indices[p] = idx
     return len(plan)
+
+
+def bounded(ops: list, limit: int, tags: frozenset) -> bool:
+    """
+    Whether a section's names of a register file bound what's live at once:
+    no more names than limit - a name holds one value at a time, but names
+    the renamer left (values written in parts, crossing the section,
+    fixed) overlap freely otherwise
+    """
+    mine = lambda k: k is not None and classes.TAGS.get(k[2]) in tags
+    return len({k for op in ops for p in range(len(op.indices))
+                for k in [liveness.data_key(op, p)] if mine(k)}) <= limit

@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from asmgen.asmblocks.op import register_type as rgt
 
 from ..models.lsc.reg import lsc_reg_type
+from ..lsc_model import liveness
 from ..models.load_store_operations import lsc_transformation
 from .dependency import dependency_type as dept
 from .distance import distance_specification
@@ -74,10 +75,15 @@ class edge:
     spec : int | None = None
 
 
-def dependencies(ops: list, loop: bool, groups: dict | None = None) -> list[edge]:
+def dependencies(ops: list, loop: bool, groups: dict | None = None,
+                 partials_independent: bool = False) -> list[edge]:
     """
     Read-after-write, write-after-read and write-after-write dependencies; for
-    a loop body also those from one iteration into the next
+    a loop body also those from one iteration into the next. An operation
+    writing part of a register (liveness.keeps: a lane, a block, a slice)
+    reads the rest - a read-after-write from the write before; ordered after
+    it only (write-after-write) where partials_independent: whether a part
+    waits for the rest is the microarchitecture's
     """
     n = len(ops)
     seq = list(enumerate(ops)) + (list(enumerate(ops)) if loop else [])
@@ -95,6 +101,8 @@ def dependencies(ops: list, loop: bool, groups: dict | None = None) -> list[edge
     for step, (i, op) in enumerate(seq):
         reads = {_key(op, p, groups): _tag(op, p) for p in op.reads}
         writes = {_key(op, p, groups): _tag(op, p) for p in op.writes}
+        if not partials_independent and liveness.keeps(op):
+            reads.update({k: t for k, t in writes.items() if lsc_reg_type.data == k[0]})
         # processor state as registers (asmgen's signatures': RVV's vlen, SME's
         # sm): no register class
         reads.update({(lsc_reg_type.state, name, None, None): None for name in op.reads_state})
@@ -204,6 +212,9 @@ class list_scheduler:
     """
 
     def __init__(self, specs: list[distance_specification], model=None, buckets=None):
+        #: a register written part by part ordered only (scheduling's
+        #: --schedule-partials-independently)
+        self.partials_independent = False
         self.specs = specs
         #: per class a bucket's size (--sched-buckets "vf:5"): a cycle issuing
         #: one of the class fills it by one, a cycle without drains it by one;
@@ -215,7 +226,7 @@ class list_scheduler:
         self.cycles = None
 
     def edges(self, ops: list, loop: bool, groups: dict | None = None) -> list[edge]:
-        edges = dependencies(ops, loop, groups)
+        edges = dependencies(ops, loop, groups, self.partials_independent)
         for e in edges:
             for i, spec in enumerate(self.specs):
                 if _applies(spec, e, ops) and spec.distance > e.distance:

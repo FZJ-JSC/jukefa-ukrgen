@@ -356,17 +356,17 @@ subq %r11,%rax
 subq %r11,%rax
 subq %r11,%rax
 vmovsd (%rax), %xmm2
-vmovhpd (%rax,%r11,1), %xmm2, %xmm2
 vmovhpd %xmm0,(%rcx)
+vmovhpd (%rax,%r11,1), %xmm2, %xmm2
 vinsertf128 $0,%xmm2,%ymm0,%ymm0
 vmovsd (%rax,%r11,2), %xmm2
 leaq (%rcx,%r10,1),%rax
-vmovhpd (%rax), %xmm2, %xmm2
 addq %r10,%rcx
+subq %r11,%rcx
+vmovhpd (%rax), %xmm2, %xmm2
 subq %r11,%rcx
 subq %r11,%rcx
 vinsertf128 $1,%xmm2,%ymm0,%ymm0
-subq %r11,%rcx
 vaddpd %ymm1,%ymm0,%ymm0
 vextractf128 $0,%ymm0,%xmm1
 vmovsd %xmm1,(%rcx)
@@ -379,8 +379,8 @@ jmp .ukr0_cases_end
 .ukr0_case9:
 movq %rcx, %rax
 vmovsd (%rax), %xmm2
-vmovhpd (%rax,%r11,1), %xmm2, %xmm2
 vbroadcastsd (%r8), %ymm3
+vmovhpd (%rax,%r11,1), %xmm2, %xmm2
 vinsertf128 $0,%xmm2,%ymm4,%ymm4
 vmovsd (%rax,%r11,2), %xmm2
 addq %r11,%rax
@@ -399,17 +399,17 @@ subq %r11,%rax
 subq %r11,%rax
 subq %r11,%rax
 vmovsd (%rax), %xmm2
-vmovhpd (%rax,%r11,1), %xmm2, %xmm2
 vmovhpd %xmm0,(%rcx)
+vmovhpd (%rax,%r11,1), %xmm2, %xmm2
 vinsertf128 $0,%xmm2,%ymm0,%ymm0
 vmovsd (%rax,%r11,2), %xmm2
 leaq (%rcx,%r10,1),%rax
-vmovhpd (%rax), %xmm2, %xmm2
 addq %r10,%rcx
+subq %r11,%rcx
+vmovhpd (%rax), %xmm2, %xmm2
 subq %r11,%rcx
 subq %r11,%rcx
 vinsertf128 $1,%xmm2,%ymm0,%ymm0
-subq %r11,%rcx
 vfmadd231pd %ymm1,%ymm3,%ymm0
 vextractf128 $0,%ymm0,%xmm1
 vmovsd %xmm1,(%rcx)
@@ -422,8 +422,8 @@ jmp .ukr0_cases_end
 .ukr0_case10:
 movq %rcx, %rax
 vmovsd (%rax), %xmm2
-vmovhpd (%rax,%r11,1), %xmm2, %xmm2
 vbroadcastsd (%r9), %ymm3
+vmovhpd (%rax,%r11,1), %xmm2, %xmm2
 vinsertf128 $0,%xmm2,%ymm4,%ymm4
 vmovsd (%rax,%r11,2), %xmm2
 addq %r11,%rax
@@ -442,17 +442,17 @@ subq %r11,%rax
 subq %r11,%rax
 subq %r11,%rax
 vmovsd (%rax), %xmm0
-vmovhpd (%rax,%r11,1), %xmm0, %xmm0
 vmovhpd %xmm2,(%rcx)
+vmovhpd (%rax,%r11,1), %xmm0, %xmm0
 vinsertf128 $0,%xmm0,%ymm2,%ymm2
 vmovsd (%rax,%r11,2), %xmm0
 leaq (%rcx,%r10,1),%rax
-vmovhpd (%rax), %xmm0, %xmm0
 addq %r10,%rcx
+subq %r11,%rcx
+vmovhpd (%rax), %xmm0, %xmm0
 subq %r11,%rcx
 subq %r11,%rcx
 vinsertf128 $1,%xmm0,%ymm2,%ymm2
-subq %r11,%rcx
 vfmadd231pd %ymm2,%ymm3,%ymm1
 vextractf128 $0,%ymm1,%xmm0
 vmovsd %xmm0,(%rcx)
@@ -465,9 +465,9 @@ jmp .ukr0_cases_end
 .ukr0_case11:
 movq %rcx, %rax
 vmovsd (%rax), %xmm2
-vmovhpd (%rax,%r11,1), %xmm2, %xmm2
 vbroadcastsd (%r9), %ymm3
 vbroadcastsd (%r8), %ymm4
+vmovhpd (%rax,%r11,1), %xmm2, %xmm2
 vinsertf128 $0,%xmm2,%ymm5,%ymm5
 vmovsd (%rax,%r11,2), %xmm2
 addq %r11,%rax
@@ -487,17 +487,17 @@ subq %r11,%rax
 subq %r11,%rax
 subq %r11,%rax
 vmovsd (%rax), %xmm2
-vmovhpd (%rax,%r11,1), %xmm2, %xmm2
 vmovhpd %xmm0,(%rcx)
+vmovhpd (%rax,%r11,1), %xmm2, %xmm2
 vinsertf128 $0,%xmm2,%ymm0,%ymm0
 vmovsd (%rax,%r11,2), %xmm2
 leaq (%rcx,%r10,1),%rax
-vmovhpd (%rax), %xmm2, %xmm2
 addq %r10,%rcx
+subq %r11,%rcx
+vmovhpd (%rax), %xmm2, %xmm2
 subq %r11,%rcx
 subq %r11,%rcx
 vinsertf128 $1,%xmm2,%ymm0,%ymm0
-subq %r11,%rcx
 vmulpd %ymm0,%ymm3,%ymm0
 vfmadd231pd %ymm1,%ymm4,%ymm0
 vextractf128 $0,%ymm0,%xmm1

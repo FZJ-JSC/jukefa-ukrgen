@@ -14,7 +14,7 @@ from asmgen.asmblocks.op import register_type as rgt
 
 from ...lsc_model import liveness
 from ...lsc_model import classes
-from ...lsc_model.rename import rename_straight, rename_temporaries
+from ...lsc_model.rename import bounded, rename_straight, rename_temporaries
 from ...schedulers.list_scheduler import list_scheduler, register_budget, _key, TAGS
 
 SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
@@ -143,6 +143,11 @@ class schedule_stage(stage):
                             "one free longest), dead (the dead one freed last: the fewest "
                             "registers), distance (the dead one free longest: the most room "
                             "to load ahead)")
+        self.params["schedule-partials-independently"] = stage_param(
+                value=False, default=False, flag=True, required=False,
+                description="A register written part by part - a lane, a block, a slice - "
+                            "ordered only: a part needn't wait for the part written before "
+                            "(the microarchitecture's; by default it reads the rest, waiting)")
         self.params["mru-inflight"] = stage_param(
                 value=None, required=False,
                 description="With --mru: values loaded ahead of their use at most at once")
@@ -153,12 +158,14 @@ class schedule_stage(stage):
                 value=False, default=False, flag=True, required=False,
                 description="Print the scheduled IR and the distances reached, and exit")
 
-    def _rename(self, ops: list, block, after_sections, budget, program) -> int:
+    def _rename(self, ops: list, block, after_sections, budget, program) -> bool:
         """
         A straight-line section's flexible values renamed onto dead registers
         within the vector file's registers there are (lsc_model.rename): what's
         live after it - the block's later sections', the blocks after's - its
-        end, those held through it untouched taken off the limit
+        end, those held through it untouched taken off the limit. Whether its
+        names then bound what's live at once (rename.bounded): the register
+        model left out only then
         """
         rt = self.context.gen.get_reg_tracker()
         tags = rt.pool("vreg")
@@ -172,7 +179,9 @@ class schedule_stage(stage):
         prefer = str(self.params["rename-from"].value or "new")
         if prefer not in ("new", "dead", "distance"):
             raise ValueError(f"--rename-from {prefer}: new, dead or distance")
-        return rename_straight(ops, end, limit, _flexible(self.context, program.groups), tags, prefer)
+        rename_straight(ops, end, limit, _flexible(self.context, program.groups), tags, prefer)
+        # the register model left out only where the names bound what's live
+        return bounded(ops, limit, tags)
 
     def progress(self):
         try:
@@ -204,6 +213,7 @@ class schedule_stage(stage):
             cls, _, size = item.partition(":")
             buckets[cls] = int(size or 1)
         scheduler = list_scheduler(specs, model, buckets)
+        scheduler.partials_independent = bool(self.params["schedule-partials-independently"].value)
         lines = []
 
         for program in self.context.programs:

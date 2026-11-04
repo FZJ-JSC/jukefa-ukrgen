@@ -560,121 +560,121 @@ imulq %r10,%rdx
 subq %rdx,%rax
 addq %r11,%rax
 vmovsd (%rax), %xmm4
-vmovhpd (%rax,%r10,1), %xmm4, %xmm4
 vextractf32x4 $3,%zmm5,%xmm0
-vinsertf32x4 $0,%xmm4,%zmm5,%zmm5
+vmovhpd (%rax,%r10,1), %xmm4, %xmm4
+vmovsd %xmm0,(%rcx)
+vmovhpd %xmm0,(%rcx,%r10,1)
+vinsertf32x4 $0,%xmm4,%zmm0,%zmm0
 vmovsd (%rax,%r10,2), %xmm4
 addq %r10,%rax
 leaq (%rax,%r10,2),%rax
-vmovsd %xmm0,(%rcx)
 vmovhpd (%rax), %xmm4, %xmm4
-vmovhpd %xmm0,(%rcx,%r10,1)
-vinsertf32x4 $1,%xmm4,%zmm5,%zmm5
+vinsertf32x4 $1,%xmm4,%zmm0,%zmm0
 vmovsd (%rax,%r10,1), %xmm4
 vmovhpd (%rax,%r10,2), %xmm4, %xmm4
 leaq (%rcx,%r11,1),%rax
 movq $6,%rdx
 imulq %r10,%rdx
-vinsertf32x4 $2,%xmm4,%zmm5,%zmm5
+vinsertf32x4 $2,%xmm4,%zmm0,%zmm0
 vmovsd (%rax), %xmm4
+subq %rdx,%rcx
+addq %r11,%rcx
 vmovhpd (%rax,%r10,1), %xmm4, %xmm4
-subq %rdx,%rcx
-addq %r11,%rcx
-vinsertf32x4 $3,%xmm4,%zmm5,%zmm5
-vaddpd %zmm1,%zmm5,%zmm5
-vextractf32x4 $0,%zmm5,%xmm0
-vmovsd %xmm0,(%rcx)
-vmovhpd %xmm0,(%rcx,%r10,1)
-vextractf32x4 $1,%zmm5,%xmm0
-vmovsd %xmm0,(%rcx,%r10,2)
+vinsertf32x4 $3,%xmm4,%zmm0,%zmm0
+vaddpd %zmm1,%zmm0,%zmm0
+vextractf32x4 $0,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
+vextractf32x4 $1,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,2)
 addq %r10,%rcx
 leaq (%rcx,%r10,2),%rcx
-vmovhpd %xmm0,(%rcx)
-vextractf32x4 $2,%zmm5,%xmm0
-vmovsd %xmm0,(%rcx,%r10,1)
-vmovhpd %xmm0,(%rcx,%r10,2)
+vmovhpd %xmm1,(%rcx)
+vextractf32x4 $2,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,1)
+vmovhpd %xmm1,(%rcx,%r10,2)
 movq %rax, %rcx
 movq $6,%rdx
 imulq %r10,%rdx
 subq %rdx,%rax
 addq %r11,%rax
-vmovsd (%rax), %xmm1
-vmovhpd (%rax,%r10,1), %xmm1, %xmm1
-vextractf32x4 $3,%zmm5,%xmm0
-vinsertf32x4 $0,%xmm1,%zmm4,%zmm4
-vmovsd (%rax,%r10,2), %xmm1
+vmovsd (%rax), %xmm4
+vextractf32x4 $3,%zmm0,%xmm1
+vmovhpd (%rax,%r10,1), %xmm4, %xmm4
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
+vinsertf32x4 $0,%xmm4,%zmm0,%zmm0
+vmovsd (%rax,%r10,2), %xmm4
 addq %r10,%rax
 leaq (%rax,%r10,2),%rax
-vmovsd %xmm0,(%rcx)
-vmovhpd (%rax), %xmm1, %xmm1
-vmovhpd %xmm0,(%rcx,%r10,1)
-vinsertf32x4 $1,%xmm1,%zmm4,%zmm4
-vmovsd (%rax,%r10,1), %xmm1
-vmovhpd (%rax,%r10,2), %xmm1, %xmm1
+vmovhpd (%rax), %xmm4, %xmm4
+vinsertf32x4 $1,%xmm4,%zmm0,%zmm0
+vmovsd (%rax,%r10,1), %xmm4
+vmovhpd (%rax,%r10,2), %xmm4, %xmm4
 leaq (%rcx,%r11,1),%rax
 movq $6,%rdx
 imulq %r10,%rdx
-vinsertf32x4 $2,%xmm1,%zmm4,%zmm4
-vmovsd (%rax), %xmm1
-vmovhpd (%rax,%r10,1), %xmm1, %xmm1
+vinsertf32x4 $2,%xmm4,%zmm0,%zmm0
+vmovsd (%rax), %xmm4
 subq %rdx,%rcx
 addq %r11,%rcx
-vinsertf32x4 $3,%xmm1,%zmm4,%zmm4
-vaddpd %zmm2,%zmm4,%zmm4
-vextractf32x4 $0,%zmm4,%xmm0
-vmovsd %xmm0,(%rcx)
-vmovhpd %xmm0,(%rcx,%r10,1)
-vextractf32x4 $1,%zmm4,%xmm0
-vmovsd %xmm0,(%rcx,%r10,2)
+vmovhpd (%rax,%r10,1), %xmm4, %xmm4
+vinsertf32x4 $3,%xmm4,%zmm0,%zmm0
+vaddpd %zmm2,%zmm0,%zmm0
+vextractf32x4 $0,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
+vextractf32x4 $1,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,2)
 addq %r10,%rcx
 leaq (%rcx,%r10,2),%rcx
-vmovhpd %xmm0,(%rcx)
-vextractf32x4 $2,%zmm4,%xmm0
-vmovsd %xmm0,(%rcx,%r10,1)
-vmovhpd %xmm0,(%rcx,%r10,2)
+vmovhpd %xmm1,(%rcx)
+vextractf32x4 $2,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,1)
+vmovhpd %xmm1,(%rcx,%r10,2)
 movq %rax, %rcx
 movq $6,%rdx
 imulq %r10,%rdx
 subq %rdx,%rax
 addq %r11,%rax
-vmovsd (%rax), %xmm1
-vmovhpd (%rax,%r10,1), %xmm1, %xmm1
-vextractf32x4 $3,%zmm4,%xmm0
-vinsertf32x4 $0,%xmm1,%zmm2,%zmm2
-vmovsd (%rax,%r10,2), %xmm1
+vmovsd (%rax), %xmm2
+vextractf32x4 $3,%zmm0,%xmm1
+vmovhpd (%rax,%r10,1), %xmm2, %xmm2
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
+vinsertf32x4 $0,%xmm2,%zmm0,%zmm0
+vmovsd (%rax,%r10,2), %xmm2
 addq %r10,%rax
 leaq (%rax,%r10,2),%rax
-vmovsd %xmm0,(%rcx)
-vmovhpd (%rax), %xmm1, %xmm1
-vmovhpd %xmm0,(%rcx,%r10,1)
-vinsertf32x4 $1,%xmm1,%zmm2,%zmm2
-vmovsd (%rax,%r10,1), %xmm1
-vmovhpd (%rax,%r10,2), %xmm1, %xmm1
+vmovhpd (%rax), %xmm2, %xmm2
+vinsertf32x4 $1,%xmm2,%zmm0,%zmm0
+vmovsd (%rax,%r10,1), %xmm2
+vmovhpd (%rax,%r10,2), %xmm2, %xmm2
 leaq (%rcx,%r11,1),%rax
 movq $6,%rdx
 imulq %r10,%rdx
-vinsertf32x4 $2,%xmm1,%zmm2,%zmm2
-vmovsd (%rax), %xmm1
-vmovhpd (%rax,%r10,1), %xmm1, %xmm1
+vinsertf32x4 $2,%xmm2,%zmm0,%zmm0
+vmovsd (%rax), %xmm2
 subq %rdx,%rcx
 addq %r11,%rcx
-vinsertf32x4 $3,%xmm1,%zmm2,%zmm2
-vaddpd %zmm3,%zmm2,%zmm2
-vextractf32x4 $0,%zmm2,%xmm0
-vmovsd %xmm0,(%rcx)
-vmovhpd %xmm0,(%rcx,%r10,1)
-vextractf32x4 $1,%zmm2,%xmm0
-vmovsd %xmm0,(%rcx,%r10,2)
+vmovhpd (%rax,%r10,1), %xmm2, %xmm2
+vinsertf32x4 $3,%xmm2,%zmm0,%zmm0
+vaddpd %zmm3,%zmm0,%zmm0
+vextractf32x4 $0,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
+vextractf32x4 $1,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,2)
 addq %r10,%rcx
 leaq (%rcx,%r10,2),%rcx
-vmovhpd %xmm0,(%rcx)
-vextractf32x4 $2,%zmm2,%xmm0
-vmovsd %xmm0,(%rcx,%r10,1)
-vmovhpd %xmm0,(%rcx,%r10,2)
-vextractf32x4 $3,%zmm2,%xmm0
+vmovhpd %xmm1,(%rcx)
+vextractf32x4 $2,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,1)
+vmovhpd %xmm1,(%rcx,%r10,2)
+vextractf32x4 $3,%zmm0,%xmm1
 movq %rax, %rcx
-vmovsd %xmm0,(%rcx)
-vmovhpd %xmm0,(%rcx,%r10,1)
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
 jmp .ukr0_cases_end
 .ukr0_case9:
 movq %rcx, %rax
@@ -684,8 +684,8 @@ vinsertf32x4 $0,%xmm4,%zmm5,%zmm5
 vmovsd (%rax,%r10,2), %xmm4
 addq %r10,%rax
 leaq (%rax,%r10,2),%rax
-vmovhpd (%rax), %xmm4, %xmm4
 vbroadcastsd (%r8), %zmm6
+vmovhpd (%rax), %xmm4, %xmm4
 vinsertf32x4 $1,%xmm4,%zmm5,%zmm5
 vmovsd (%rax,%r10,1), %xmm4
 vmovhpd (%rax,%r10,2), %xmm4, %xmm4
@@ -713,121 +713,121 @@ imulq %r10,%rdx
 subq %rdx,%rax
 addq %r11,%rax
 vmovsd (%rax), %xmm4
-vmovhpd (%rax,%r10,1), %xmm4, %xmm4
 vextractf32x4 $3,%zmm5,%xmm0
-vinsertf32x4 $0,%xmm4,%zmm5,%zmm5
+vmovhpd (%rax,%r10,1), %xmm4, %xmm4
+vmovsd %xmm0,(%rcx)
+vmovhpd %xmm0,(%rcx,%r10,1)
+vinsertf32x4 $0,%xmm4,%zmm0,%zmm0
 vmovsd (%rax,%r10,2), %xmm4
 addq %r10,%rax
 leaq (%rax,%r10,2),%rax
-vmovsd %xmm0,(%rcx)
 vmovhpd (%rax), %xmm4, %xmm4
-vmovhpd %xmm0,(%rcx,%r10,1)
-vinsertf32x4 $1,%xmm4,%zmm5,%zmm5
+vinsertf32x4 $1,%xmm4,%zmm0,%zmm0
 vmovsd (%rax,%r10,1), %xmm4
 vmovhpd (%rax,%r10,2), %xmm4, %xmm4
 leaq (%rcx,%r11,1),%rax
 movq $6,%rdx
 imulq %r10,%rdx
-vinsertf32x4 $2,%xmm4,%zmm5,%zmm5
+vinsertf32x4 $2,%xmm4,%zmm0,%zmm0
 vmovsd (%rax), %xmm4
+subq %rdx,%rcx
+addq %r11,%rcx
 vmovhpd (%rax,%r10,1), %xmm4, %xmm4
-subq %rdx,%rcx
-addq %r11,%rcx
-vinsertf32x4 $3,%xmm4,%zmm5,%zmm5
-vfmadd231pd %zmm1,%zmm6,%zmm5
-vextractf32x4 $0,%zmm5,%xmm0
-vmovsd %xmm0,(%rcx)
-vmovhpd %xmm0,(%rcx,%r10,1)
-vextractf32x4 $1,%zmm5,%xmm0
-vmovsd %xmm0,(%rcx,%r10,2)
+vinsertf32x4 $3,%xmm4,%zmm0,%zmm0
+vfmadd231pd %zmm1,%zmm6,%zmm0
+vextractf32x4 $0,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
+vextractf32x4 $1,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,2)
 addq %r10,%rcx
 leaq (%rcx,%r10,2),%rcx
-vmovhpd %xmm0,(%rcx)
-vextractf32x4 $2,%zmm5,%xmm0
-vmovsd %xmm0,(%rcx,%r10,1)
-vmovhpd %xmm0,(%rcx,%r10,2)
+vmovhpd %xmm1,(%rcx)
+vextractf32x4 $2,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,1)
+vmovhpd %xmm1,(%rcx,%r10,2)
 movq %rax, %rcx
 movq $6,%rdx
 imulq %r10,%rdx
 subq %rdx,%rax
 addq %r11,%rax
-vmovsd (%rax), %xmm1
-vmovhpd (%rax,%r10,1), %xmm1, %xmm1
-vextractf32x4 $3,%zmm5,%xmm0
-vinsertf32x4 $0,%xmm1,%zmm4,%zmm4
-vmovsd (%rax,%r10,2), %xmm1
+vmovsd (%rax), %xmm4
+vextractf32x4 $3,%zmm0,%xmm1
+vmovhpd (%rax,%r10,1), %xmm4, %xmm4
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
+vinsertf32x4 $0,%xmm4,%zmm0,%zmm0
+vmovsd (%rax,%r10,2), %xmm4
 addq %r10,%rax
 leaq (%rax,%r10,2),%rax
-vmovsd %xmm0,(%rcx)
-vmovhpd (%rax), %xmm1, %xmm1
-vmovhpd %xmm0,(%rcx,%r10,1)
-vinsertf32x4 $1,%xmm1,%zmm4,%zmm4
-vmovsd (%rax,%r10,1), %xmm1
-vmovhpd (%rax,%r10,2), %xmm1, %xmm1
+vmovhpd (%rax), %xmm4, %xmm4
+vinsertf32x4 $1,%xmm4,%zmm0,%zmm0
+vmovsd (%rax,%r10,1), %xmm4
+vmovhpd (%rax,%r10,2), %xmm4, %xmm4
 leaq (%rcx,%r11,1),%rax
 movq $6,%rdx
 imulq %r10,%rdx
-vinsertf32x4 $2,%xmm1,%zmm4,%zmm4
-vmovsd (%rax), %xmm1
-vmovhpd (%rax,%r10,1), %xmm1, %xmm1
+vinsertf32x4 $2,%xmm4,%zmm0,%zmm0
+vmovsd (%rax), %xmm4
 subq %rdx,%rcx
 addq %r11,%rcx
-vinsertf32x4 $3,%xmm1,%zmm4,%zmm4
-vfmadd231pd %zmm2,%zmm6,%zmm4
-vextractf32x4 $0,%zmm4,%xmm0
-vmovsd %xmm0,(%rcx)
-vmovhpd %xmm0,(%rcx,%r10,1)
-vextractf32x4 $1,%zmm4,%xmm0
-vmovsd %xmm0,(%rcx,%r10,2)
+vmovhpd (%rax,%r10,1), %xmm4, %xmm4
+vinsertf32x4 $3,%xmm4,%zmm0,%zmm0
+vfmadd231pd %zmm2,%zmm6,%zmm0
+vextractf32x4 $0,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
+vextractf32x4 $1,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,2)
 addq %r10,%rcx
 leaq (%rcx,%r10,2),%rcx
-vmovhpd %xmm0,(%rcx)
-vextractf32x4 $2,%zmm4,%xmm0
-vmovsd %xmm0,(%rcx,%r10,1)
-vmovhpd %xmm0,(%rcx,%r10,2)
+vmovhpd %xmm1,(%rcx)
+vextractf32x4 $2,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,1)
+vmovhpd %xmm1,(%rcx,%r10,2)
 movq %rax, %rcx
 movq $6,%rdx
 imulq %r10,%rdx
 subq %rdx,%rax
 addq %r11,%rax
-vmovsd (%rax), %xmm1
-vmovhpd (%rax,%r10,1), %xmm1, %xmm1
-vextractf32x4 $3,%zmm4,%xmm0
-vinsertf32x4 $0,%xmm1,%zmm2,%zmm2
-vmovsd (%rax,%r10,2), %xmm1
+vmovsd (%rax), %xmm2
+vextractf32x4 $3,%zmm0,%xmm1
+vmovhpd (%rax,%r10,1), %xmm2, %xmm2
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
+vinsertf32x4 $0,%xmm2,%zmm0,%zmm0
+vmovsd (%rax,%r10,2), %xmm2
 addq %r10,%rax
 leaq (%rax,%r10,2),%rax
-vmovsd %xmm0,(%rcx)
-vmovhpd (%rax), %xmm1, %xmm1
-vmovhpd %xmm0,(%rcx,%r10,1)
-vinsertf32x4 $1,%xmm1,%zmm2,%zmm2
-vmovsd (%rax,%r10,1), %xmm1
-vmovhpd (%rax,%r10,2), %xmm1, %xmm1
+vmovhpd (%rax), %xmm2, %xmm2
+vinsertf32x4 $1,%xmm2,%zmm0,%zmm0
+vmovsd (%rax,%r10,1), %xmm2
+vmovhpd (%rax,%r10,2), %xmm2, %xmm2
 leaq (%rcx,%r11,1),%rax
 movq $6,%rdx
 imulq %r10,%rdx
-vinsertf32x4 $2,%xmm1,%zmm2,%zmm2
-vmovsd (%rax), %xmm1
-vmovhpd (%rax,%r10,1), %xmm1, %xmm1
+vinsertf32x4 $2,%xmm2,%zmm0,%zmm0
+vmovsd (%rax), %xmm2
 subq %rdx,%rcx
 addq %r11,%rcx
-vinsertf32x4 $3,%xmm1,%zmm2,%zmm2
-vfmadd231pd %zmm3,%zmm6,%zmm2
-vextractf32x4 $0,%zmm2,%xmm0
-vmovsd %xmm0,(%rcx)
-vmovhpd %xmm0,(%rcx,%r10,1)
-vextractf32x4 $1,%zmm2,%xmm0
-vmovsd %xmm0,(%rcx,%r10,2)
+vmovhpd (%rax,%r10,1), %xmm2, %xmm2
+vinsertf32x4 $3,%xmm2,%zmm0,%zmm0
+vfmadd231pd %zmm3,%zmm6,%zmm0
+vextractf32x4 $0,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
+vextractf32x4 $1,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,2)
 addq %r10,%rcx
 leaq (%rcx,%r10,2),%rcx
-vmovhpd %xmm0,(%rcx)
-vextractf32x4 $2,%zmm2,%xmm0
-vmovsd %xmm0,(%rcx,%r10,1)
-vmovhpd %xmm0,(%rcx,%r10,2)
-vextractf32x4 $3,%zmm2,%xmm0
+vmovhpd %xmm1,(%rcx)
+vextractf32x4 $2,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,1)
+vmovhpd %xmm1,(%rcx,%r10,2)
+vextractf32x4 $3,%zmm0,%xmm1
 movq %rax, %rcx
-vmovsd %xmm0,(%rcx)
-vmovhpd %xmm0,(%rcx,%r10,1)
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
 jmp .ukr0_cases_end
 .ukr0_case10:
 movq %rcx, %rax
@@ -837,8 +837,8 @@ vinsertf32x4 $0,%xmm4,%zmm5,%zmm5
 vmovsd (%rax,%r10,2), %xmm4
 addq %r10,%rax
 leaq (%rax,%r10,2),%rax
-vmovhpd (%rax), %xmm4, %xmm4
 vbroadcastsd (%r9), %zmm6
+vmovhpd (%rax), %xmm4, %xmm4
 vinsertf32x4 $1,%xmm4,%zmm5,%zmm5
 vmovsd (%rax,%r10,1), %xmm4
 vmovhpd (%rax,%r10,2), %xmm4, %xmm4
@@ -866,15 +866,15 @@ imulq %r10,%rdx
 subq %rdx,%rax
 addq %r11,%rax
 vmovsd (%rax), %xmm5
-vmovhpd (%rax,%r10,1), %xmm5, %xmm5
 vextractf32x4 $3,%zmm0,%xmm4
+vmovhpd (%rax,%r10,1), %xmm5, %xmm5
+vmovsd %xmm4,(%rcx)
+vmovhpd %xmm4,(%rcx,%r10,1)
 vinsertf32x4 $0,%xmm5,%zmm0,%zmm0
 vmovsd (%rax,%r10,2), %xmm5
 addq %r10,%rax
 leaq (%rax,%r10,2),%rax
-vmovsd %xmm4,(%rcx)
 vmovhpd (%rax), %xmm5, %xmm5
-vmovhpd %xmm4,(%rcx,%r10,1)
 vinsertf32x4 $1,%xmm5,%zmm0,%zmm0
 vmovsd (%rax,%r10,1), %xmm5
 vmovhpd (%rax,%r10,2), %xmm5, %xmm5
@@ -883,9 +883,9 @@ movq $6,%rdx
 imulq %r10,%rdx
 vinsertf32x4 $2,%xmm5,%zmm0,%zmm0
 vmovsd (%rax), %xmm5
-vmovhpd (%rax,%r10,1), %xmm5, %xmm5
 subq %rdx,%rcx
 addq %r11,%rcx
+vmovhpd (%rax,%r10,1), %xmm5, %xmm5
 vinsertf32x4 $3,%xmm5,%zmm0,%zmm0
 vfmadd231pd %zmm0,%zmm6,%zmm1
 vextractf32x4 $0,%zmm1,%xmm0
@@ -905,28 +905,28 @@ imulq %r10,%rdx
 subq %rdx,%rax
 addq %r11,%rax
 vmovsd (%rax), %xmm4
-vmovhpd (%rax,%r10,1), %xmm4, %xmm4
 vextractf32x4 $3,%zmm1,%xmm0
-vinsertf32x4 $0,%xmm4,%zmm1,%zmm1
+vmovhpd (%rax,%r10,1), %xmm4, %xmm4
+vmovsd %xmm0,(%rcx)
+vmovhpd %xmm0,(%rcx,%r10,1)
+vinsertf32x4 $0,%xmm4,%zmm0,%zmm0
 vmovsd (%rax,%r10,2), %xmm4
 addq %r10,%rax
 leaq (%rax,%r10,2),%rax
-vmovsd %xmm0,(%rcx)
 vmovhpd (%rax), %xmm4, %xmm4
-vmovhpd %xmm0,(%rcx,%r10,1)
-vinsertf32x4 $1,%xmm4,%zmm1,%zmm1
+vinsertf32x4 $1,%xmm4,%zmm0,%zmm0
 vmovsd (%rax,%r10,1), %xmm4
 vmovhpd (%rax,%r10,2), %xmm4, %xmm4
 leaq (%rcx,%r11,1),%rax
 movq $6,%rdx
 imulq %r10,%rdx
-vinsertf32x4 $2,%xmm4,%zmm1,%zmm1
+vinsertf32x4 $2,%xmm4,%zmm0,%zmm0
 vmovsd (%rax), %xmm4
-vmovhpd (%rax,%r10,1), %xmm4, %xmm4
 subq %rdx,%rcx
 addq %r11,%rcx
-vinsertf32x4 $3,%xmm4,%zmm1,%zmm1
-vfmadd231pd %zmm1,%zmm6,%zmm2
+vmovhpd (%rax,%r10,1), %xmm4, %xmm4
+vinsertf32x4 $3,%xmm4,%zmm0,%zmm0
+vfmadd231pd %zmm0,%zmm6,%zmm2
 vextractf32x4 $0,%zmm2,%xmm0
 vmovsd %xmm0,(%rcx)
 vmovhpd %xmm0,(%rcx,%r10,1)
@@ -944,28 +944,28 @@ imulq %r10,%rdx
 subq %rdx,%rax
 addq %r11,%rax
 vmovsd (%rax), %xmm1
-vmovhpd (%rax,%r10,1), %xmm1, %xmm1
 vextractf32x4 $3,%zmm2,%xmm0
-vinsertf32x4 $0,%xmm1,%zmm2,%zmm2
+vmovhpd (%rax,%r10,1), %xmm1, %xmm1
+vmovsd %xmm0,(%rcx)
+vmovhpd %xmm0,(%rcx,%r10,1)
+vinsertf32x4 $0,%xmm1,%zmm0,%zmm0
 vmovsd (%rax,%r10,2), %xmm1
 addq %r10,%rax
 leaq (%rax,%r10,2),%rax
-vmovsd %xmm0,(%rcx)
 vmovhpd (%rax), %xmm1, %xmm1
-vmovhpd %xmm0,(%rcx,%r10,1)
-vinsertf32x4 $1,%xmm1,%zmm2,%zmm2
+vinsertf32x4 $1,%xmm1,%zmm0,%zmm0
 vmovsd (%rax,%r10,1), %xmm1
 vmovhpd (%rax,%r10,2), %xmm1, %xmm1
 leaq (%rcx,%r11,1),%rax
 movq $6,%rdx
 imulq %r10,%rdx
-vinsertf32x4 $2,%xmm1,%zmm2,%zmm2
+vinsertf32x4 $2,%xmm1,%zmm0,%zmm0
 vmovsd (%rax), %xmm1
-vmovhpd (%rax,%r10,1), %xmm1, %xmm1
 subq %rdx,%rcx
 addq %r11,%rcx
-vinsertf32x4 $3,%xmm1,%zmm2,%zmm2
-vfmadd231pd %zmm2,%zmm6,%zmm3
+vmovhpd (%rax,%r10,1), %xmm1, %xmm1
+vinsertf32x4 $3,%xmm1,%zmm0,%zmm0
+vfmadd231pd %zmm0,%zmm6,%zmm3
 vextractf32x4 $0,%zmm3,%xmm0
 vmovsd %xmm0,(%rcx)
 vmovhpd %xmm0,(%rcx,%r10,1)
@@ -990,8 +990,8 @@ vinsertf32x4 $0,%xmm4,%zmm5,%zmm5
 vmovsd (%rax,%r10,2), %xmm4
 addq %r10,%rax
 leaq (%rax,%r10,2),%rax
-vmovhpd (%rax), %xmm4, %xmm4
 vbroadcastsd (%r9), %zmm6
+vmovhpd (%rax), %xmm4, %xmm4
 vbroadcastsd (%r8), %zmm7
 vinsertf32x4 $1,%xmm4,%zmm5,%zmm5
 vmovsd (%rax,%r10,1), %xmm4
@@ -1021,124 +1021,124 @@ imulq %r10,%rdx
 subq %rdx,%rax
 addq %r11,%rax
 vmovsd (%rax), %xmm4
-vmovhpd (%rax,%r10,1), %xmm4, %xmm4
 vextractf32x4 $3,%zmm5,%xmm0
-vinsertf32x4 $0,%xmm4,%zmm5,%zmm5
+vmovhpd (%rax,%r10,1), %xmm4, %xmm4
+vmovsd %xmm0,(%rcx)
+vmovhpd %xmm0,(%rcx,%r10,1)
+vinsertf32x4 $0,%xmm4,%zmm0,%zmm0
 vmovsd (%rax,%r10,2), %xmm4
 addq %r10,%rax
 leaq (%rax,%r10,2),%rax
-vmovsd %xmm0,(%rcx)
 vmovhpd (%rax), %xmm4, %xmm4
-vmovhpd %xmm0,(%rcx,%r10,1)
-vinsertf32x4 $1,%xmm4,%zmm5,%zmm5
+vinsertf32x4 $1,%xmm4,%zmm0,%zmm0
 vmovsd (%rax,%r10,1), %xmm4
 vmovhpd (%rax,%r10,2), %xmm4, %xmm4
 leaq (%rcx,%r11,1),%rax
 movq $6,%rdx
 imulq %r10,%rdx
-vinsertf32x4 $2,%xmm4,%zmm5,%zmm5
+vinsertf32x4 $2,%xmm4,%zmm0,%zmm0
 vmovsd (%rax), %xmm4
+subq %rdx,%rcx
+addq %r11,%rcx
 vmovhpd (%rax,%r10,1), %xmm4, %xmm4
-subq %rdx,%rcx
-addq %r11,%rcx
-vinsertf32x4 $3,%xmm4,%zmm5,%zmm5
-vmulpd %zmm5,%zmm6,%zmm5
-vfmadd231pd %zmm1,%zmm7,%zmm5
-vextractf32x4 $0,%zmm5,%xmm0
-vmovsd %xmm0,(%rcx)
-vmovhpd %xmm0,(%rcx,%r10,1)
-vextractf32x4 $1,%zmm5,%xmm0
-vmovsd %xmm0,(%rcx,%r10,2)
+vinsertf32x4 $3,%xmm4,%zmm0,%zmm0
+vmulpd %zmm0,%zmm6,%zmm0
+vfmadd231pd %zmm1,%zmm7,%zmm0
+vextractf32x4 $0,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
+vextractf32x4 $1,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,2)
 addq %r10,%rcx
 leaq (%rcx,%r10,2),%rcx
-vmovhpd %xmm0,(%rcx)
-vextractf32x4 $2,%zmm5,%xmm0
-vmovsd %xmm0,(%rcx,%r10,1)
-vmovhpd %xmm0,(%rcx,%r10,2)
+vmovhpd %xmm1,(%rcx)
+vextractf32x4 $2,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,1)
+vmovhpd %xmm1,(%rcx,%r10,2)
 movq %rax, %rcx
 movq $6,%rdx
 imulq %r10,%rdx
 subq %rdx,%rax
 addq %r11,%rax
-vmovsd (%rax), %xmm1
-vmovhpd (%rax,%r10,1), %xmm1, %xmm1
-vextractf32x4 $3,%zmm5,%xmm0
-vinsertf32x4 $0,%xmm1,%zmm4,%zmm4
-vmovsd (%rax,%r10,2), %xmm1
+vmovsd (%rax), %xmm4
+vextractf32x4 $3,%zmm0,%xmm1
+vmovhpd (%rax,%r10,1), %xmm4, %xmm4
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
+vinsertf32x4 $0,%xmm4,%zmm0,%zmm0
+vmovsd (%rax,%r10,2), %xmm4
 addq %r10,%rax
 leaq (%rax,%r10,2),%rax
-vmovsd %xmm0,(%rcx)
-vmovhpd (%rax), %xmm1, %xmm1
-vmovhpd %xmm0,(%rcx,%r10,1)
-vinsertf32x4 $1,%xmm1,%zmm4,%zmm4
-vmovsd (%rax,%r10,1), %xmm1
-vmovhpd (%rax,%r10,2), %xmm1, %xmm1
+vmovhpd (%rax), %xmm4, %xmm4
+vinsertf32x4 $1,%xmm4,%zmm0,%zmm0
+vmovsd (%rax,%r10,1), %xmm4
+vmovhpd (%rax,%r10,2), %xmm4, %xmm4
 leaq (%rcx,%r11,1),%rax
 movq $6,%rdx
 imulq %r10,%rdx
-vinsertf32x4 $2,%xmm1,%zmm4,%zmm4
-vmovsd (%rax), %xmm1
-vmovhpd (%rax,%r10,1), %xmm1, %xmm1
+vinsertf32x4 $2,%xmm4,%zmm0,%zmm0
+vmovsd (%rax), %xmm4
 subq %rdx,%rcx
 addq %r11,%rcx
-vinsertf32x4 $3,%xmm1,%zmm4,%zmm4
-vmulpd %zmm4,%zmm6,%zmm4
-vfmadd231pd %zmm2,%zmm7,%zmm4
-vextractf32x4 $0,%zmm4,%xmm0
-vmovsd %xmm0,(%rcx)
-vmovhpd %xmm0,(%rcx,%r10,1)
-vextractf32x4 $1,%zmm4,%xmm0
-vmovsd %xmm0,(%rcx,%r10,2)
+vmovhpd (%rax,%r10,1), %xmm4, %xmm4
+vinsertf32x4 $3,%xmm4,%zmm0,%zmm0
+vmulpd %zmm0,%zmm6,%zmm0
+vfmadd231pd %zmm2,%zmm7,%zmm0
+vextractf32x4 $0,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
+vextractf32x4 $1,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,2)
 addq %r10,%rcx
 leaq (%rcx,%r10,2),%rcx
-vmovhpd %xmm0,(%rcx)
-vextractf32x4 $2,%zmm4,%xmm0
-vmovsd %xmm0,(%rcx,%r10,1)
-vmovhpd %xmm0,(%rcx,%r10,2)
+vmovhpd %xmm1,(%rcx)
+vextractf32x4 $2,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,1)
+vmovhpd %xmm1,(%rcx,%r10,2)
 movq %rax, %rcx
 movq $6,%rdx
 imulq %r10,%rdx
 subq %rdx,%rax
 addq %r11,%rax
-vmovsd (%rax), %xmm1
-vmovhpd (%rax,%r10,1), %xmm1, %xmm1
-vextractf32x4 $3,%zmm4,%xmm0
-vinsertf32x4 $0,%xmm1,%zmm2,%zmm2
-vmovsd (%rax,%r10,2), %xmm1
+vmovsd (%rax), %xmm2
+vextractf32x4 $3,%zmm0,%xmm1
+vmovhpd (%rax,%r10,1), %xmm2, %xmm2
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
+vinsertf32x4 $0,%xmm2,%zmm0,%zmm0
+vmovsd (%rax,%r10,2), %xmm2
 addq %r10,%rax
 leaq (%rax,%r10,2),%rax
-vmovsd %xmm0,(%rcx)
-vmovhpd (%rax), %xmm1, %xmm1
-vmovhpd %xmm0,(%rcx,%r10,1)
-vinsertf32x4 $1,%xmm1,%zmm2,%zmm2
-vmovsd (%rax,%r10,1), %xmm1
-vmovhpd (%rax,%r10,2), %xmm1, %xmm1
+vmovhpd (%rax), %xmm2, %xmm2
+vinsertf32x4 $1,%xmm2,%zmm0,%zmm0
+vmovsd (%rax,%r10,1), %xmm2
+vmovhpd (%rax,%r10,2), %xmm2, %xmm2
 leaq (%rcx,%r11,1),%rax
 movq $6,%rdx
 imulq %r10,%rdx
-vinsertf32x4 $2,%xmm1,%zmm2,%zmm2
-vmovsd (%rax), %xmm1
-vmovhpd (%rax,%r10,1), %xmm1, %xmm1
+vinsertf32x4 $2,%xmm2,%zmm0,%zmm0
+vmovsd (%rax), %xmm2
 subq %rdx,%rcx
 addq %r11,%rcx
-vinsertf32x4 $3,%xmm1,%zmm2,%zmm2
-vmulpd %zmm2,%zmm6,%zmm2
-vfmadd231pd %zmm3,%zmm7,%zmm2
-vextractf32x4 $0,%zmm2,%xmm0
-vmovsd %xmm0,(%rcx)
-vmovhpd %xmm0,(%rcx,%r10,1)
-vextractf32x4 $1,%zmm2,%xmm0
-vmovsd %xmm0,(%rcx,%r10,2)
+vmovhpd (%rax,%r10,1), %xmm2, %xmm2
+vinsertf32x4 $3,%xmm2,%zmm0,%zmm0
+vmulpd %zmm0,%zmm6,%zmm0
+vfmadd231pd %zmm3,%zmm7,%zmm0
+vextractf32x4 $0,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
+vextractf32x4 $1,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,2)
 addq %r10,%rcx
 leaq (%rcx,%r10,2),%rcx
-vmovhpd %xmm0,(%rcx)
-vextractf32x4 $2,%zmm2,%xmm0
-vmovsd %xmm0,(%rcx,%r10,1)
-vmovhpd %xmm0,(%rcx,%r10,2)
-vextractf32x4 $3,%zmm2,%xmm0
+vmovhpd %xmm1,(%rcx)
+vextractf32x4 $2,%zmm0,%xmm1
+vmovsd %xmm1,(%rcx,%r10,1)
+vmovhpd %xmm1,(%rcx,%r10,2)
+vextractf32x4 $3,%zmm0,%xmm1
 movq %rax, %rcx
-vmovsd %xmm0,(%rcx)
-vmovhpd %xmm0,(%rcx,%r10,1)
+vmovsd %xmm1,(%rcx)
+vmovhpd %xmm1,(%rcx,%r10,1)
 .ukr0_cases_end:
 ret
 .cfi_endproc
