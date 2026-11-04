@@ -27,51 +27,75 @@ scalar's liveness across loops (0325).
 
 ## Where it goes
 
-The scheduler orders operations on virtual registers, aware of pressure; one
-pass after scheduling assigns every physical register from the final order;
-the emitter only looks registers up.
+Virtual registers keep their names - no SSA, by design: the names carry the
+allocations a user fixes per component for the STOs (an input's ring,
+--COMP-data-regs; the accumulators), the address registers' fixed ones,
+and a register whose lanes or slices are written piece by piece (a lane
+load, a VLA fill, a ZA tile's slices) - a partial write reads and writes
+its register, it doesn't start a new value. `cluster` finds its
+dependencies by the names.
 
-- **One value, one virtual register**: each copy's temporaries their own -
-  no false dependencies for the scheduler.
-- **Exact liveness over the scheduled program**: a value carried across a
-  back edge (an accumulator, an invariant, a value preloaded at a body's end
-  and read at its start) live over the whole loop, one register; copies'
-  temporaries overlapping exactly as far as registers allow.
-- **Classes and constraints**: slice index registers (w12-w15) and governing
-  predicates (p0-p7) from the signatures' operands (asmgen's `operand_values`);
-  RVV's LMUL groups aligned, structure loads' consecutive registers; ZA tiles;
-  SVE's d and s registers the low parts of z registers - aliasing, not scalars
-  from the top.
-- **A defined failure**: what doesn't fit known where, before emitting - a
-  tighter schedule, a smaller unroll or preload, a spill (ADDRESSING_PLAN step
-  5) - not an emitter failing on its way.
+- **Fixed and flexible.** A component with a fixed allocation keeps its
+  registers. Others - C, the vectors a loop over slices moves through,
+  scratch registers - are flexible within a budget or a max-reg limit: a
+  value takes a new virtual register (a name of its own) or reuses a dead
+  one.
+- **The order**: `cluster` (chains together: the order of least pressure) ->
+  **rename** (each flexible value onto a dead register or a new one within
+  its budget - the reuse a write-after-read or write-after-write dependency
+  the scheduler keeps) -> **schedule** (dependencies only: no register model
+  of its own, the renaming bounds the pressure) -> **allocate in two passes**
+  (an analysis pass - live ranges per virtual register across back edges
+  and partial writes; each register's class and constraints from its
+  operands' signatures: asmgen's operand_values for SME's slice index
+  (w12-w15) and governing predicates (p0-p7), groups consecutive and aligned
+  (RVV's LMUL, structure loads), tied operands (accumulating FMAs, x86's
+  destructive forms), files from the tracker's pools (SVE's FP registers the
+  low parts of its vector registers); the fixed allocations - then an
+  allocation pass: the most constrained first, the fixed ones as given, the
+  rest by least recent use, giving the scheduler room to load ahead) ->
+  **emit** (registers looked up).
+- **One liveness**: the analysis pass's - the renamer, the allocation and
+  any check use it, nothing else computes its own.
+- **A loop over slices' index register**: each virtual tile operation its
+  own; fusion (fuse_slices) merges loops traversing the same value range -
+  the whole VLA range - and with them their index registers, before the
+  renamer; the allocation meets w12-w15.
+- **A defined failure**: a fixed allocation or budget that doesn't fit, or a
+  constraint no register meets, known in the analysis pass with where.
 
-What stays: the scheduler's pressure model (its schedules should usually fit -
-a heuristic, no longer something to match), clustering (pressure).
+## The liveness computed now, and what replaces it
+
+| Where | What it answers | Afterwards |
+|---|---|---|
+| model: `fit_registers`, rings, the preload shift's occupancy bounds | an input's registers, a tile's ring slot | the fixed allocation stays the user's; the slots the renamer's, the bounds the analysis' |
+| scheduler: `_register_state`, `_across`, `live_out` | values live while it reorders | gone: the renaming bounds the pressure |
+| emitter: `straight()`'s releases, 0325's loop bodies, `peak_registers` | when a physical register is free; a loop body's peak | gone: the allocation pass |
+| `slices()`: local values, `dead_after`, register sets; `expand_copies`' local values | a slice loop's temporaries | gone: flexible values renamed |
+| `copyprop`'s events | whether a copy's source survives its uses | the analysis pass' |
+
+The 33 of SMESVE's 2x4x4 (0329's fallback) is what this removes: the scheduler
+broke its own budget (a soft one) - after renaming there is no budget for it
+to break.
 
 ## Steps
 
-1. **One allocator in the emitter.** Every data register taken and freed
-   through one object (`allocator`: the tracker, the virtual-to-physical map,
-   groups, bounds, the FP sharing) with two operations - take a value's
-   register, free it - and every release point (`straight()`'s, an element
-   loop's, `slices()`') a call of it. Moved code: byte for byte the same.
-2. **The allocation computed before emitting.** A pass walks the scheduled IR
-   in emission order with the same allocator and the same release points -
-   the registers index vectors and helpers' scratch take as events of their
-   own - and leaves the map; the emitter's `reg()` looks values up. Byte for
-   byte the same (the golden kernels, every shipped configuration's sizes).
-3. **Loop bodies with exact liveness across the back edge**: element and
-   slice loops first - each copy's temporaries their own, `slices()`' register
-   sets and `dead_after` gone, no budget for the emitter to match.
-4. **Constraints and aliasing**: the slice index, governing predicates, LMUL
-   alignment, structure loads, SVE's scalar aliasing - from the signatures.
-5. **The k loop**: the model's rings a pressure budget, the allocator assigning
-   the registers, the preload shift's no-second-occupancy bound a liveness
-   fact. Kernels change: measured.
-6. **General registers** - pointers, walkers, counters, offset registers (and
-   with them `auto`'s second run) - then spilling.
+1. **One allocator in the emitter** - done (0327).
+2. **The analysis pass**: live ranges per virtual register (back edges,
+   partial writes: lanes, slices), classes and constraints from the
+   signatures, fixed versus flexible - one function; the checks above
+   answered by it, the kernels byte for byte the same.
+3. **The renamer** after `cluster`: flexible values onto dead registers or
+   new ones within their budgets; the scheduler's register model gone.
+   Kernels change: instruction counts, runs.
+4. **The allocation pass** replacing the emitter's: fixed as given, the most
+   constrained first, least recent use; the emitter looks registers up.
+5. **The slice index register** per virtual tile operation, merged by fusion
+   on the same value range, allocated within w12-w15.
+6. **The rest into the IR** - address registers' fixed allocations, walkers,
+   counters, masks, index vectors, scratch, offset registers (and `auto`'s
+   second run) - then spilling.
 
 Each step's check: the golden kernels, every shipped configuration's sizes
-(the tools/allcfg.py comparison), the qemu-run tests; from step 3 on,
-instruction counts and runs where kernels change.
+(tools/allcfg.py), the qemu-run tests; from step 3 on, instruction counts and
+runs where kernels change.
