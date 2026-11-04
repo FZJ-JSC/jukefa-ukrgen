@@ -10,7 +10,10 @@ from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
 from ...models.lsc.reg import lsc_reg_type
 from ...schedulers.distance import distance_specification
+from asmgen.asmblocks.op import register_type as rgt
+
 from ...lsc_model import liveness
+from ...lsc_model.rename import rename_temporaries
 from ...schedulers.list_scheduler import list_scheduler, register_budget, _key, TAGS
 
 SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
@@ -205,6 +208,16 @@ class schedule_stage(stage):
                                 # the order before: copies one after another (the
                                 # emitter's fallback where the registers there
                                 # are at the loop don't hold the copies overlapped)
+                                if inner_budget is not None and "vreg" in inner_budget.registers:
+                                    # its own temporaries under as many names as
+                                    # vector registers there are for them (the
+                                    # renamer): no order of the scheduler's holds
+                                    # more - those it reads without writing
+                                    # first held all along
+                                    held = {k for k in liveness.exposed(op.block) if rgt.VEC == k[2]}
+                                    limit = max(1, inner_budget.registers["vreg"] - len(held))
+                                    if rename_temporaries(op.block, limit):
+                                        op.refresh()
                                 op.info["serial"] = list(op.block)
                                 inner, _ = scheduler(list(op.block), loop=True, budget=inner_budget,
                                                      groups=program.groups)
