@@ -743,41 +743,48 @@ class signature_emitter:
     def slices(self, op) -> list[str]:
         """
         A loop over slices: its body as scheduled - copies overlapped as far as
-        the scheduler's budget let - if the vector values live at once in it
-        (peak_vectors: the IR's liveness, back edge and all) fit the registers
-        there are at the loop, else its copies one after another (the order
-        before the scheduler's: info serial, no more than one copy's at once)
+        the scheduler's budget let - if the values live at once in it
+        (peak_registers: the IR's liveness, back edge and all) fit the vector
+        file's room, else its copies one after another (the order before the
+        scheduler's: info serial, no more than one copy's at once)
         """
         serial = op.info.get("serial")
         if serial and [id(b) for b in serial] != [id(b) for b in op.block]:
-            room = self.gen.max_vregs() - len(self.reserved_vregs())
-            if self.peak_vectors(op.block) > room:
+            if self.peak_registers(op.block, "vreg") > self.room("vreg"):
                 op.block = list(serial)
                 op.refresh()
-        peak, room = self.peak_vectors(op.block), self.gen.max_vregs() - len(self.reserved_vregs())
+        peak, room = self.peak_registers(op.block, "vreg"), self.room("vreg")
         if peak > room:
             raise specialization_error(
-                f"{op.info.get('component')}: {peak} vector values live at once in a loop over slices, "
-                f"{room} vector registers there - its copies one after another too: fewer data "
-                f"registers or a smaller microtile fit")
+                f"{op.info.get('component')}: {peak} values live at once in a loop over slices, "
+                f"{room} registers of their file there - its copies one after another too: fewer "
+                f"data registers or a smaller microtile fit")
         return self._slices(op)
 
-    def reserved_vregs(self) -> set:
-        """Vector registers taken by no value: masks, index vectors, v0"""
-        by_values = {n for k, (t, n) in self.numbers.items() if t == "vreg"}
-        if "freg" in self.rt.shared:
-            by_values |= {n for k, (t, n) in self.numbers.items() if t == "freg"}
-        return set(self.rt.get_used_regs("vreg")) - by_values
+    #: a value's register type, the tracker's tag for it
+    TAGS = {rgt.VEC: "vreg", rgt.FP: "freg", rgt.TILE: "treg"}
 
-    def peak_vectors(self, ops: list) -> int:
+    def room(self, tag: str) -> int:
         """
-        The most vector values live at once in a loop's body in this order -
-        read later before written, carried across the back edge, read after
-        the loop (self.after), or held through it untouched - FP scalars too
-        where they are vector registers' low parts
+        The registers of a file values can have: free ones and those values
+        hold (the tracker's counts - those no value holds, masks and index
+        vectors, not among them)
         """
-        classes = (rgt.VEC, rgt.FP) if "freg" in self.rt.shared else (rgt.VEC,)
-        held = {k for k in self.phys if k[2] in classes}
+        pool = self.rt.pool(tag)
+        held = sum(1 for (t, n) in self.numbers.values() if t in pool)
+        return self.rt.available(tag) + held
+
+    def peak_registers(self, ops: list, tag: str) -> int:
+        """
+        The most values of a register file (the tracker's pool: SVE's FP
+        registers the low parts of its vector registers) live at once in a
+        loop's body in this order - read later before written, carried across
+        the back edge, read after the loop (self.after), or held through it
+        untouched
+        """
+        pool = self.rt.pool(tag)
+        mine = lambda k: self.TAGS.get(k[2]) in pool
+        held = {k for k in self.phys if mine(k)}
         after = self.after if self.after is not None else held
         writes = {k for o in ops for k in self.reads_writes(o)[1]}
         afters = self.live_afters(ops, self.exposed(ops) | (writes & after))
@@ -786,7 +793,7 @@ class signature_emitter:
         peak = 0
         for pos, o in enumerate(ops):
             reads, writes_here = self.reads_writes(o)
-            live = {k for k in afters[pos] | reads | writes_here if k[2] in classes}
+            live = {k for k in afters[pos] | reads | writes_here if mine(k)}
             peak = max(peak, len(live) + len(through))
         return peak
 
