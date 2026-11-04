@@ -96,3 +96,12 @@ def local(ops: list, types=(rgt.VEC,), key=data_key) -> list:
             if k is not None and k[-1] in types and k not in read and k not in out:
                 out.append(k)
     return out
+
+
+def live_in(ops: list, end: set, key=data_key) -> set:
+    """What's live before operations: read by one before it's written, or at the end (end) and not written"""
+    live = set(end)
+    for op in reversed(ops):
+        reads, writes = reads_writes(op, key)
+        live = (live - writes) | reads
+    return live

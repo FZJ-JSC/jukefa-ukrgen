@@ -13,10 +13,24 @@ from ...schedulers.distance import distance_specification
 from asmgen.asmblocks.op import register_type as rgt
 
 from ...lsc_model import liveness
-from ...lsc_model.rename import rename_temporaries
+from ...lsc_model import classes
+from ...lsc_model.rename import rename_straight, rename_temporaries
 from ...schedulers.list_scheduler import list_scheduler, register_budget, _key, TAGS
 
 SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
+
+
+def _flexible(context, groups):
+    """
+    Whether a data register's value may move to another register: its
+    component's registers not fixed by the user (--COMP-data-regs), not a
+    register group's (consecutive registers: renamed as a unit, not yet)
+    """
+    def flexible(key):
+        comp = key[0]
+        fixed = context.params.get(f"{comp}-data-regs")
+        return comp not in groups and not (fixed is not None and fixed.value)
+    return flexible
 
 
 def _scheduler_key(groups=None):
@@ -115,6 +129,13 @@ class schedule_stage(stage):
                 description="Don't schedule straight-line blocks within the registers there "
                             "are: a gemm whose accumulators fill the register file then can't "
                             "stream C through its epilogue")
+        self.params["rename"] = stage_param(
+                value=False, default=False, flag=True, required=False,
+                description="Rename a straight-line section's flexible values (components "
+                            "no data-regs fixes) onto dead registers within the registers "
+                            "there are - C's in the accumulators' after their stores - and "
+                            "schedule it by dependencies alone (docs/REGISTER_ALLOCATION.md "
+                            "step 3)")
         self.params["mru-inflight"] = stage_param(
                 value=None, required=False,
                 description="With --mru: values loaded ahead of their use at most at once")
@@ -125,6 +146,24 @@ class schedule_stage(stage):
                 value=False, default=False, flag=True, required=False,
                 description="Print the scheduled IR and the distances reached, and exit")
 
+    def _rename(self, ops: list, block, after_sections, budget, program) -> int:
+        """
+        A straight-line section's flexible values renamed onto dead registers
+        within the vector file's registers there are (lsc_model.rename): what's
+        live after it - the block's later sections', the blocks after's - its
+        end, those held through it untouched taken off the limit
+        """
+        rt = self.context.gen.get_reg_tracker()
+        tags = rt.pool("vreg")
+        rest = [op for section in after_sections for op in getattr(block, section) or []]
+        end = liveness.live_in(rest, budget.live_out) if rest else set(budget.live_out)
+        mine = lambda k: classes.TAGS.get(k[2]) in tags
+        touched = {k for op in ops for p in range(len(op.indices))
+                   for k in [liveness.data_key(op, p)] if k is not None}
+        held = {k for k in liveness.live_in(ops, end) & end if mine(k) and k not in touched}
+        limit = max(1, budget.registers.get("vreg", 0) - len(held))
+        return rename_straight(ops, end, limit, _flexible(self.context, program.groups), tags)
+
     def progress(self):
         try:
             specs = [distance_specification.from_string(s)
@@ -134,6 +173,7 @@ class schedule_stage(stage):
         # on unless turned off: the epilogue's C streams through the registers
         # the accumulators free only when scheduled so
         mru = not bool(self.params["no-mru"].value)
+        rename = bool(self.params["rename"].value)
         if not specs and not mru:
             self.context.params.update(self.params)
             return []
@@ -179,15 +219,21 @@ class schedule_stage(stage):
                                        "freg": gen.max_fregs() - reserve},
                             inflight=None if inflight is None else int(inflight),
                             live_out=_read_before_written(later))
-                    for section in SECTIONS:
+                    for si, section in enumerate(SECTIONS):
                         ops = getattr(block, section)
                         loop = block.loop_index is not None and "body" == section
+                        renamed = 0
+                        if rename and budget is not None and block.loop_index is None and ops:
+                            renamed = self._rename(ops, block, SECTIONS[si + 1:], budget, program)
                         # MRU: chains pulled together before addresses were
                         # fixed (the cluster irmod), spread within a window
                         window = None
                         if budget is not None:
                             window = int(self.params["mru-window"].value or 12)
-                        order, report = scheduler(ops, loop=loop, budget=budget, window=window,
+                        # renamed: the names bound what's live at once - no
+                        # register model, dependencies and distances alone
+                        order, report = scheduler(ops, loop=loop, budget=None if renamed else budget,
+                                                  window=None if renamed else window,
                                                   groups=program.groups)
                         setattr(block, section, order)
                         # a loop's own block, as a loop body: a fused loop's

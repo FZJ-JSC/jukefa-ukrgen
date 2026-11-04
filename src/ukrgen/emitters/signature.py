@@ -570,16 +570,18 @@ class signature_emitter:
         comps = self.ctx.component_dts
         dts: dict[tuple, object] = {}
 
+        # by the value's own register (value(): a renamed value's owner) -
+        # its data type the value's, whose register it is in or not
         def note(idx, dt):
-            dts.setdefault((idx.component, idx.indices[0]), dt)
+            dts.setdefault(idx.value(), dt)
 
         for op in self._all_ops():
             if isinstance(op, (lsc_load, lsc_store)):
                 note(op.indices[1], comps[op.indices[0].component])
         for op in self._all_ops():
             for idx in op.indices:
-                if idx.component in comps:
-                    note(idx, comps[idx.component])
+                if idx.value()[0] in comps:
+                    note(idx, comps[idx.value()[0]])
         default = next(iter(comps.values()))
         for op in self._all_ops():
             for idx in op.indices:
