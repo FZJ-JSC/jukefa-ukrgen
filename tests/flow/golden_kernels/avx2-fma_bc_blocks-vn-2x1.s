@@ -305,11 +305,11 @@ vmovhpd %xmm2,(%rax)
 leaq (%rcx,%r10,1),%rax
 vmovsd %xmm3,(%rax)
 vmovhpd %xmm3,(%rax,%r11,1)
-vextractf128 $1,%ymm1,%xmm3
-vmovsd %xmm3,(%rax,%r11,2)
+vextractf128 $1,%ymm1,%xmm0
+vmovsd %xmm0,(%rax,%r11,2)
 addq %r11,%rax
 leaq (%rax,%r11,2),%rax
-vmovhpd %xmm3,(%rax)
+vmovhpd %xmm0,(%rax)
 jmp .ukr0_cases_end
 .ukr0_case7:
 movq %rcx, %rax
@@ -328,11 +328,11 @@ vmovhpd %xmm1,(%rax)
 leaq (%rcx,%r10,1),%rax
 vmovsd %xmm2,(%rax)
 vmovhpd %xmm2,(%rax,%r11,1)
-vextractf128 $1,%ymm0,%xmm2
-vmovsd %xmm2,(%rax,%r11,2)
+vextractf128 $1,%ymm0,%xmm1
+vmovsd %xmm1,(%rax,%r11,2)
 addq %r11,%rax
 leaq (%rax,%r11,2),%rax
-vmovhpd %xmm2,(%rax)
+vmovhpd %xmm1,(%rax)
 jmp .ukr0_cases_end
 .ukr0_case8:
 movq %rcx, %rax

@@ -1903,33 +1903,28 @@ class signature_emitter:
         are released when the block starts.
         """
         keys = self.data_keys
-
-        needed_later = {k for b in later
-                        for section in ("prologue", "body", "epilogue", "tail", "subtail")
-                        for op in getattr(b, section) for k in keys(op)}
-        used_here = {k for op in ops for k in keys(op)}
-        for key in list(self.phys):
-            if key not in used_here and key not in needed_later:
-                self.release(key)
-        last = {}
-        for pos, op in enumerate(ops):
-            for k in keys(op):
-                last[k] = pos
         # what's live after each operation: read by a later one before it's
-        # written, or by a later block before it writes it - a loop's body keeps
-        # their registers (straight's own releases as they were: needed_later)
+        # written, or by a later block before it writes it - a register
+        # written in parts (lanes, blocks, a tile's slices) held whole
+        rw = lambda o: liveness.reads_writes(o, slices=True)
         exposed, written = set(), set()
         for b in later:
             for section in ("prologue", "body", "epilogue", "tail", "subtail"):
                 for o in getattr(b, section) or []:
-                    reads, writes = self.reads_writes(o)
+                    reads, writes = rw(o)
                     exposed |= reads - written
                     written |= writes
         live, live_after = set(exposed), [None] * len(ops)
         for pos in reversed(range(len(ops))):
             live_after[pos] = set(live)
-            reads, writes = self.reads_writes(ops[pos])
+            reads, writes = rw(ops[pos])
             live = (live - writes) | reads
+        # a register free once its value is dead - not held while its name
+        # comes again (a renamed value in a dead one's register): taken again
+        # then
+        for key in list(self.phys):
+            if key not in live:
+                self.release(key)
         lines = []
         outside = self.outside
         for pos, op in enumerate(ops):
@@ -1937,7 +1932,7 @@ class signature_emitter:
             self.after = live_after[pos]
             lines += self.emit_op(op)
             for k in keys(op):
-                if last[k] == pos and k not in needed_later:
+                if k not in live_after[pos] and k in self.phys:
                     self.release(k)
         self.outside = outside
         return lines

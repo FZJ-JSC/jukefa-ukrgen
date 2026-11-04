@@ -35,7 +35,7 @@ def _dest_mods(op) -> set:
     return {m.name for m in (op.step.opd_mod_reqs or {}).get(op.step.dest, ())}
 
 
-def keeps(op) -> bool:
+def keeps(op, slices: bool = False) -> bool:
     """
     Whether an operation keeps part of a data register it writes - writes a
     part: a lane loaded keeps the other lanes (a ZEROOTHERS load of lane 0
@@ -54,10 +54,14 @@ def keeps(op) -> bool:
         return not ("ZEROOTHERS" in _dest_mods(op) and 0 == props["lane"])
     if isinstance(op, lsc_move) and props.get("block") is not None:
         return "IBLOCK" in _dest_mods(op)
+    if slices and isinstance(op, lsc_move) and props.get("slice") is not None:
+        # for a register's release: a tile built slice by slice held whole
+        types = op.rtypes or []
+        return len(types) > 1 and rgt.TILE == types[1]
     return False
 
 
-def reads_writes(op, key=data_key) -> tuple[set, set]:
+def reads_writes(op, key=data_key, slices: bool = False) -> tuple[set, set]:
     """
     The registers an operation reads and writes - a loop's: what its body
     reads before writing it (carried into it), what it writes
@@ -68,7 +72,7 @@ def reads_writes(op, key=data_key) -> tuple[set, set]:
     def own(o):
         # what an operation keeping part of it writes it reads too (keeps)
         r, w = at(o, o.reads), at(o, o.writes)
-        return (r | w, w) if keeps(o) else (r, w)
+        return (r | w, w) if keeps(o, slices) else (r, w)
     if isinstance(op, lsc_loop):
         reads, writes = set(), set()
         for b in op.block:
