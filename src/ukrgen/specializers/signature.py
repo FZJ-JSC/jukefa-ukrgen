@@ -1037,13 +1037,11 @@ class signature_specializer:
                     ops.append(op)
                     self.positions[key] = self.positions[key] - moved
                     continue
-                # the advance less the walk, one move - none where they cancel
-                # (a last iteration's: 4 vector lengths on, 4 back)
-                net = (step if step is not None else sym.const(0)) - moved
-                if any(dict(net.terms).values()):
-                    op = lsc_addr_compute(comp, reg, reg, net, scalar_tile)
-                    if step is not None:
-                        op.properties = dict(op.properties or {}, advance=step)
+                if any(dict(moved.terms).values()):
+                    ops.append(lsc_addr_compute(comp, reg, reg, sym.const(0) - moved, scalar_tile))
+                if step is not None and any(dict(step.terms).values()):
+                    op = lsc_addr_compute(comp, reg, reg, step, scalar_tile)
+                    op.properties = dict(op.properties or {}, advance=step)
                     ops.append(op)
                 self.positions[key] = self.positions[key] - moved
             if advances:

@@ -1232,8 +1232,8 @@ int main( void )
     def test_trans_rewind_bounded(self):
         # no offset register for it (budget 0): the rewind - twelve strides
         # back, which no shifted sub spells (Zba shifts adds only) - the count
-        # times the stride in a scratch register, then one sub: no run of
-        # more than three, whatever the count
+        # times the stride in a scratch register (multiplied or shift-added),
+        # then one sub: no run of more than three, whatever the count
         k = self.k3_trans14({"X-stride-pointers": "0", "max-offset-registers": "0",
                              "X-addr-regs": "1", "X-addr-pattern": "rotate"})
         for body in self.loop_bodies(k):
@@ -1245,7 +1245,10 @@ int main( void )
                 prev = dest
                 longest = max(longest, run)
             self.assertLessEqual(longest, 3, k.symbol)
-        self.assertTrue(any(l.startswith("mul ") for b in self.loop_bodies(k) for l in b))
+        # the count times the stride in a scratch register: multiplied, or
+        # shift-added where that's no longer (twelve: slli and sh2add with Zba)
+        self.assertTrue(any(l.startswith(("mul ", "slli ", "sh1add ", "sh2add ", "sh3add "))
+                            for b in self.loop_bodies(k) for l in b))
         self.run_k3_trans14(k)
 
     def test_trans_rotates_without_pointers(self):
