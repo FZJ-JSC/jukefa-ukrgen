@@ -217,3 +217,64 @@ the element size it's in, and a move is spelled in its component's (FP16 A
 and B into FP32 C; FP32 into FP64 on RVV). test_widen's address variants
 run every kernel kind under the walks, rotating registers and offset
 registers.
+
+## RVV findings
+
+The integer arithmetic of RVV's generated kernels (tools/addr_patterns.py),
+K3's dgemm (x100: stride pointers A, B, C 4 each) and fma_vf_m2's, per kernel:
+
+| | K3 x100 | fma_vf_m2 |
+|---|---|---|
+| before the k loop | 16 | 14 |
+| the k loop, per iteration | 8 | 9 |
+| the block after the loop | 10 | 9 |
+| the epilogue's dispatch | 27 | 27 |
+| the epilogue's cases, all (one runs) | 357 | 180 |
+| an expression again, its sources unchanged | 54 | 12 |
+| a pointer stepped forward and back | 22 | 10 |
+| pointer steps between its accesses (serial) | 9 | 9 |
+| a copy, then an operation on it | 7.5 | 6 |
+| li and mul for a small constant | 1.6 | 1.3 |
+
+What they are, by cost:
+
+1. **The block after the loop restores dead pointers.** K3 vm 4vx6's:
+   A's four pointers bumped for an iteration that doesn't follow, `li s4,4`
+   and `mul s4,t1,s4` four times (4*t1 - the prologue's t4), the bump
+   subtracted. A's pointers are dead after the loop (the epilogue walks C):
+   0302's rule - a looped block's tail moves its walked registers back, it
+   repeats - applied where the block doesn't repeat and the registers are
+   dead. Fix: the restore only for a block that repeats or registers live
+   after it; the last iteration's bumps of dead registers dropped.
+2. **Loads and stores walk C with pointer sets of their own.** K3's last
+   case: C + cs_c in a1, a2, s1, s3, s6; C + 2cs_c and C + 4cs_c twice each
+   (from t6, a copy of a3, and from a3). Twice the arithmetic and the
+   general registers - what ran out at unroll 2 (vm 4vx6: unroll 1 of 2).
+   Fix: a load and the store of one address share its register.
+3. **The walk forward, then back.** A walker crosses C's columns, steps back
+   (`sub a0,a0,s8`, s8 = 5*cs_c), then on to the next row block (`add
+   a0,a0,t5`) - after it the walk serial (`vlse64 v1,(a0); add a0,a0,a7;
+   vlse64 v2,(a0); ...`: each access waiting on an add, where the first
+   block's pointers were independent). Fix: rotate the pointers (each
+   column's its own, independent) or walk in a serpentine order - no step
+   back, no chain.
+4. **Small multiples by li and mul.** 5*cs_c as `li s8,5; mul s8,a7,s8`,
+   twice. Fix: shift-and-add (`sh2add s8,a7,a7`), computed once.
+5. **A copy, then an operation on it.** `add t3,t1,0; sh1add t3,t1,t3`
+   (`sh1add t3,t1,t1`), `add s1,a1,0; add s1,s1,t1` (`add s1,a1,t1`), `add
+   t6,a6,0; add t6,t6,-8` (`addi t6,a6,-8`). Fix: three-operand forms.
+6. **The dispatch repeats its tests.** Each try recomputes rs_c - 8 (`add
+   t6,a6,0; add t6,t6,-8`), reloads beta and alpha, rebuilds 0.0 and 1.0
+   (`fcvt.d.w`; `li` and `fmv.d.x`), and branches twice (`beq` to the case,
+   `j` to the next try) - about ten tries, a hundred instructions a call.
+   Fix: each predicate once, a decision tree on them.
+7. **B's second pointer.** K3's B: `s3` and `a2` (8 bytes apart), both bumped
+   by 48 every k step - fld takes immediates up to 2047: one pointer reaches
+   all six columns. One add an iteration (B-stride-pointers 4, K3's).
+8. **Unrolling where per-copy addresses don't fit.** RVV's vector loads take
+   no offset: a second copy's A accesses get address registers of their
+   own; where they don't fit the flow fails and the family builder halves
+   the unroll (run_unrolled, the error dropped). Repeating the unroll-1 body
+   - the pointers walked between copies - always fits. Fix: that fallback in
+   the address stage before failing; run_unrolled saying why it halved.
+
