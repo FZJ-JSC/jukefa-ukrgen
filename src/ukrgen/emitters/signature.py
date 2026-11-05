@@ -1906,7 +1906,7 @@ class signature_emitter:
         # what's live after each operation: read by a later one before it's
         # written, or by a later block before it writes it - a register
         # written in parts (lanes, blocks, a tile's slices) held whole
-        rw = lambda o: liveness.reads_writes(o, slices=True)
+        rw = liveness.reads_writes
         exposed, written = set(), set()
         for b in later:
             for section in ("prologue", "body", "epilogue", "tail", "subtail"):

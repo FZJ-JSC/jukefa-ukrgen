@@ -35,19 +35,16 @@ def _dest_mods(op) -> set:
     return {m.name for m in (op.step.opd_mod_reqs or {}).get(op.step.dest, ())}
 
 
-def keeps(op, slices: bool = False) -> bool:
+def keeps(op) -> bool:
     """
     Whether an operation keeps part of a data register it writes - writes a
     part: a lane loaded keeps the other lanes (a ZEROOTHERS load of lane 0
     none - none below it, the rest zeroed: the whole register written), a
     block written into a vector the other blocks (AVX's vinsertf128; a block
-    extracted into a scratch writes all of it). The value flows through it:
-    it reads what it writes. A slice written into a tile isn't counted: a
-    tile written slice by slice is written whole before it's read (packm's
-    transposes, the epilogue's), and counted, the tile would look read
-    before it's written - copyprop_tiles couldn't rename its copies away
-    (no instruction copies a tile). Telling partial writes that together
-    write a register whole needs more than one operation's view
+    extracted into a scratch writes all of it), a slice written into a tile
+    the other slices. The value flows through it: it reads what it writes -
+    in a loop over slices: the loop, covering its tiles' slices, writes
+    them whole (reads_writes)
     """
     # a load or a move only: other operations (a scheduler's tests' state-only
     # ones) have no lanes, blocks or slices to keep
@@ -57,33 +54,41 @@ def keeps(op, slices: bool = False) -> bool:
     if isinstance(op, lsc_move):
         if op.properties.get("block") is not None:
             return "IBLOCK" in _dest_mods(op)
-        if slices and op.properties.get("slice") is not None:
-            # for a register's release: a tile built slice by slice held whole
+        if op.properties.get("slice") is not None:
             types = op.rtypes or []
             return len(types) > 1 and rgt.TILE == types[1]
     return False
 
 
-def reads_writes(op, key=data_key, slices: bool = False) -> tuple[set, set]:
+def reads_writes(op, key=data_key) -> tuple[set, set]:
     """
     The registers an operation reads and writes - a loop's: what its body
-    reads before writing it (carried into it), what it writes
+    reads before writing it (carried into it), what it writes; a loop over
+    slices writes its tiles whole (each slice once: through one slice index,
+    as lanes by their numbers) - what its slices keep of a tile not read
     """
     def at(o, positions):
         return {k for p in positions or [] for k in [key(o, p)] if k is not None}
 
-    def own(o):
-        # what an operation keeping part of it writes it reads too (keeps)
-        r, w = at(o, o.reads), at(o, o.writes)
-        return (r | w, w) if keeps(o, slices) else (r, w)
     if isinstance(op, lsc_loop):
+        covered = set()
+        if "slices" == op.info.get("kind"):
+            covered = {key(op, p) for p in range(len(op.indices))
+                       if p < len(op.rtypes or []) and rgt.TILE == op.rtypes[p]} - {None}
         reads, writes = set(), set()
         for b in op.block:
-            r, w = own(b)
+            r, w = reads_writes(b, key)
+            if covered and not isinstance(b, lsc_loop) and keeps(b):
+                # what a slice keeps of a tile the loop covers: the loop
+                # writes the tile whole - what else it keeps stays read
+                own = at(b, b.reads)
+                r = own | (r - own - covered)
             reads |= r - writes
             writes |= w
         return reads, writes
-    return own(op)
+    r, w = at(op, op.reads), at(op, op.writes)
+    # what an operation keeping part of it writes it reads too (keeps)
+    return (r | w, w) if keeps(op) else (r, w)
 
 
 def exposed(ops: list, key=data_key) -> set:

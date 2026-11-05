@@ -105,10 +105,11 @@ to break.
    reading the rest (`liveness.keeps`, 0344, 0346), a part waiting for the
    part before unless `--schedule-partials-independently`. The scheduler's
    register model still schedules loop bodies and sections whose names
-   don't bound what's live. Open: a tile's slices - written slice by slice
-   a tile is written whole before read, which one operation's view can't
-   tell: not counted as keeping (`copyprop_tiles` would keep tile copies),
-   so `--schedule-partials-independently` doesn't cover them; register
+   don't bound what's live. A tile's slices (0348): inside a loop over
+   slices a slice written keeps the rest of the tile, as a lane does (one
+   slice index, a slice by its immediate); the loop, covering its tiles'
+   slices, writes them whole - `copyprop_tiles` sees no read of a tile so
+   built, `--schedule-partials-independently` covers slices. Open: register
    groups not renamed; the k loop's rings.
 4. **The allocation pass** replacing the emitter's: fixed as given, the most
    constrained first, least recent use; the emitter looks registers up.
