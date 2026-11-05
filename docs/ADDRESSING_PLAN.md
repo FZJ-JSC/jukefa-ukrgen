@@ -234,6 +234,22 @@ in the IR, in order.
       branches on them (a case's try now re-tests from scratch).
    5. **Index vectors and masks.** start_indexes' index vectors, the tail
       masks: setup operations of their blocks.
+   6. **Scheduling across the dispatch** (optional, a flag: say
+      --schedule-across-dispatch). A block is the scheduler's unit and the
+      dispatch a boundary: the program's blocks are scheduled once, shared by
+      the cases, each case's on its own - liveness looks across it, no
+      operation moves across it: a case's C loads can't start while the k
+      loop's last FMAs run (K3's strided epilogue: its loads' latency
+      exposed). With the flag the dispatch moves before the k loop's last
+      iteration (its predicates parameters only), each case's path one
+      straight-line block - the last iteration (epilogue, tail) and its
+      first block - scheduled as one; the paths' longest common scheduled
+      prefix back before the branch, so code grows only where a case's
+      schedule differs (twelve cases: up to twelve copies of K3 vm 4vx6's
+      70-odd instructions). A few cycles off a call - in-order cores mostly
+      - for code size: the user's choice. After step 4 (where the branch sits,
+      how it's tested); each path allocated on its own, as the emitter's
+      copied state per case does now.
    Each step: the kernels' instruction counts no higher, the golden kernels
    re-recorded where they change, the full suite and K3's kernels under qemu.
 
