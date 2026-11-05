@@ -25,6 +25,8 @@ from ..components.tile import scalar_tile
 from ..emitters import asmops
 from ..lsc_model.addressing import sym
 from ..lsc_model.ir import ir_program
+from ..models.lsc.index import lsc_reg_index
+from ..models.lsc.reg import lsc_reg_type
 from ..models.load_store_operations import lsc_addr_compute, lsc_loop
 from .signature import specialization_error
 
@@ -414,6 +416,13 @@ class address_speller:
         for n, st in enumerate(steps):
             o = lsc_addr_compute(comp, src if 0 == n else dst, dst, self.step_delta(st, comp), scalar_tile)
             o.properties = dict(props, step=st)
+            # the values it adds read by name: what orders it after their
+            # setup's operations (docs/ADDRESSING_PLAN.md setup values, 1)
+            for value in step_values(st):
+                o.indices.append(lsc_reg_index(value_name(value), [0]))
+                o.tiles.append(scalar_tile)
+                o.reg_types.append(lsc_reg_type.value)
+                o.reads.append(len(o.indices) - 1)
             if advance is not None and len(steps) - 1 == n:
                 o.properties["advance"] = advance
             out.append(o)
@@ -469,6 +478,36 @@ class address_speller:
                 ops = getattr(block, section)
                 if ops:
                     setattr(block, section, rewrite(list(ops)))
+
+
+def value_name(value: tuple) -> str:
+    """A setup value's name as an operand: value: and its tuple"""
+    return f"value:{value}"
+
+
+def step_values(step: tuple) -> list:
+    """
+    The setup values a spelled step adds (the emitter's value_reg's): a
+    register's (reg, mul, the split multiply's), a vector length multiple
+    (from_vectors), a stride (from_stride); a copy-and-step's inner step's;
+    an offset step's fallback's (its register the offsets' own)
+    """
+    kind = step[0]
+    if kind in ("reg", "mul"):
+        return [step[1]]
+    if "scratch_mul" == kind:
+        return [step[2]]
+    if "scratch_add" == kind:
+        return [step[3]]
+    if "from" == kind:
+        return step_values(step[1])
+    if "from_vectors" == kind:
+        return [("vl_multiple", step[1], step[2])]
+    if "from_stride" == kind:
+        return [("stride", step[1])]
+    if "offset" == kind:
+        return [v for sub in step[3] for v in step_values(sub)]
+    return []
 
 
 #: an immediate two adds merge into - within every ISA's add of one
