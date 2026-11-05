@@ -248,12 +248,24 @@ class offset_planner:
                 scratch = self.e.greg()
             except specialization_error:
                 return [line for sub in run for line in self.emit_step(areg, sub)]
-            out = [asmops.set_imm(self.e.gen, reg=scratch, imm=count),
-                   asmops.mul(self.e.gen, dst=scratch, reg1=source, reg2=scratch),
-                   asmops.arith(self.e.gen, op, dst=areg, reg1=areg, reg2=scratch)]
+            # the product the shorter way - shift-adds (Zba's shNadd) or the
+            # count's load and a multiply - then the move
+            out = self.scaled_from(scratch, source, count) + \
+                [asmops.arith(self.e.gen, op, dst=areg, reg1=areg, reg2=scratch)]
             self.e.rt.unuse_reg("greg", scratch.idx)
             return out
         raise specialization_error(f"no instruction for the step {step}")
+
+    def scaled_length(self, n: int) -> int:
+        """
+        The instructions scaled_from takes for n times a register (n > 0) -
+        as it emits them, for two registers apart (an ISA's shifts of two
+        operands, x86's, a copy more; its multiply by an immediate, x86's imul,
+        where shorter)
+        """
+        gen = self.e.gen
+        return sum(len([l for l in str(o).splitlines() if l.strip()])
+                   for o in self.scaled_from(gen.greg(1), gen.greg(2), n))
 
     def scaled_from(self, dst, source, n: int) -> list[str]:
         """
@@ -264,18 +276,27 @@ class offset_planner:
         multiply by n (an immediate's load and a mul; x86's imul), the shorter
         """
         bits = [b for b in range(n.bit_length()) if n >> b & 1]
-        out = asmops.shift_left_from(self.e.gen, src=source, dst=dst, bit_count=bits[0])
+        if 0 == bits[0] and len(bits) > 1 and self.e.shifted_available("add", bits[1]):
+            # an odd n: the source and itself shifted, one instruction (5x:
+            # sh2add dst,src,src) - no copy first
+            out = [asmops.shifted(self.e.gen, "add", dst=dst, reg1=source, reg2=source, shift=bits[1])]
+            bits = bits[1:]
+        else:
+            out = asmops.shift_left_from(self.e.gen, src=source, dst=dst, bit_count=bits[0])
         for b in bits[1:]:
             if self.e.shifted_available("add", b):
                 out.append(asmops.shifted(self.e.gen, "add", dst=dst, reg1=dst, reg2=source, shift=b))
             else:
                 out += [asmops.arith(self.e.gen, "add", dst=dst, reg1=dst, reg2=source)] * (1 << b)
-        if len(out) > 2 and source != dst:
+        # instructions, not entries: an entry may hold two (x86's shift from
+        # another register: a copy and the shift)
+        lines = sum(len([l for l in str(o).splitlines() if l.strip()]) for o in out)
+        if lines > 2 and source != dst:
             try:
                 mul = [l for l in asmops.mul_imm(self.e.gen, src=source, dst=dst, factor=n).splitlines() if l.strip()]
             except (ValueError, NotImplementedError):
                 mul = None
-            if mul and len(mul) < len(out):
+            if mul and len(mul) < lines:
                 return mul
         return out
 
@@ -293,9 +314,8 @@ class offset_planner:
                 except specialization_error:
                     out += [line for sub in run for line in self._given(areg, source, sub)]
                     continue
-                out += [asmops.set_imm(self.e.gen, reg=scratch, imm=count),
-                        asmops.mul(self.e.gen, dst=scratch, reg1=source, reg2=scratch),
-                        asmops.arith(self.e.gen, op, dst=areg, reg1=areg, reg2=scratch)]
+                out += self.scaled_from(scratch, source, count) + \
+                    [asmops.arith(self.e.gen, op, dst=areg, reg1=areg, reg2=scratch)]
                 self.e.rt.unuse_reg("greg", scratch.idx)
             else:
                 out += self._given(areg, source, step)
@@ -530,6 +550,8 @@ class signature_emitter:
         #: scratch multiplies' registers between their steps: group -> register
         #: (None: none was free, its last step spells the run)
         self.scratches: dict = {}
+        #: a scratch multiply's count where shift-adds compute it (scratch_mul)
+        self.scratch_counts: dict = {}
         #: offset registers a needed value may take (greg): cache key ->
         #: (register, plan key, rank); the planner's ranks
         self.evictable: dict = {}
@@ -1511,12 +1533,21 @@ class signature_emitter:
                 self.scratches[step[1]] = None
                 return []
             self.scratches[step[1]] = reg
+            if self.offsets.scaled_length(step[2]) <= 2:
+                # shift-adds no longer than the count's load and the multiply
+                # (Zba: 5x one sh2add): computed at the multiply's step
+                self.scratch_counts[step[1]] = step[2]
+                return []
             return [asmops.set_imm(self.gen, reg=reg, imm=step[2])]
         if "scratch_mul" == step[0]:
             reg = self.scratches.get(step[1])
             if reg is None:
                 return []
-            return [asmops.mul(self.gen, dst=reg, reg1=self.offsets.value_reg(step[2]), reg2=reg)]
+            source = self.offsets.value_reg(step[2])
+            count = self.scratch_counts.pop(step[1], None)
+            if count is not None:
+                return self.offsets.scaled_from(reg, source, count)
+            return [asmops.mul(self.gen, dst=reg, reg1=source, reg2=reg)]
         if "scratch_add" == step[0]:
             _, gid, op, _, _, run = step
             reg = self.scratches.pop(gid, None)

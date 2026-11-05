@@ -862,9 +862,9 @@ vse64.v v3, (t6)
 add t6,t6,a7
 vle64.v v3, (t5)
 vfadd.vv v6,v11,v6
-li a0,13
 vse64.v v4, (t6)
 add t6,t6,a7
+li a0,13
 mul a0,a7,a0
 vfadd.vv v7,v12,v7
 vse64.v v5, (t6)
@@ -1021,9 +1021,9 @@ vse64.v v3, (t6)
 add t6,t6,a7
 vle64.v v3, (t5)
 vfmacc.vf v6,f0,v11
-li a0,13
 vse64.v v4, (t6)
 add t6,t6,a7
+li a0,13
 mul a0,a7,a0
 vfmacc.vf v7,f0,v12
 vse64.v v5, (t6)
@@ -1180,9 +1180,9 @@ vse64.v v7, (t6)
 add t6,t6,a7
 vle64.v v2, (t5)
 vfmacc.vf v11,f0,v1
-li a0,13
 vse64.v v8, (t6)
 add t6,t6,a7
+li a0,13
 mul a0,a7,a0
 vfmacc.vf v12,f0,v3
 vse64.v v9, (t6)
@@ -1344,11 +1344,11 @@ add t5,t5,a7
 vfmacc.vf v4,f1,v8
 vfmul.vf v30,v30,f0
 vle64.v v7, (t5)
-li a0,13
 vse64.v v2, (t6)
 vfmacc.vf v5,f1,v9
 add t6,t6,a7
 vfmul.vf v1,v1,f0
+li a0,13
 mul a0,a7,a0
 vse64.v v3, (t6)
 vfmacc.vf v29,f1,v10
@@ -1673,10 +1673,10 @@ vfadd.vv v6,v11,v6
 add t5,t5,t4
 vsse64.v v4, (a3), a6
 add a3,a3,a7
-li t6,13
 vfadd.vv v7,v12,v7
 vsse64.v v5, (a3), a6
 add a3,a3,a7
+li t6,13
 mul t6,a7,t6
 vfadd.vv v2,v13,v2
 vsse64.v v1, (a3), a6
@@ -1818,10 +1818,10 @@ vfmacc.vf v6,f0,v11
 add t5,t5,t4
 vsse64.v v4, (a3), a6
 add a3,a3,a7
-li t6,13
 vfmacc.vf v7,f0,v12
 vsse64.v v5, (a3), a6
 add a3,a3,a7
+li t6,13
 mul t6,a7,t6
 vfmacc.vf v2,f0,v13
 vsse64.v v1, (a3), a6
@@ -1963,10 +1963,10 @@ vfmacc.vf v11,f0,v1
 add t5,t5,t4
 vsse64.v v8, (a3), a6
 add a3,a3,a7
-li t6,13
 vfmacc.vf v12,f0,v3
 vsse64.v v9, (a3), a6
 add a3,a3,a7
+li t6,13
 mul t6,a7,t6
 vfmacc.vf v13,f0,v4
 vsse64.v v10, (a3), a6
@@ -2115,11 +2115,11 @@ add t5,t5,t4
 vfmacc.vf v5,f1,v9
 add a3,a3,a7
 vfmul.vf v1,v1,f0
-li t6,13
 vsse64.v v3, (a3), a6
 vfmacc.vf v29,f1,v10
 add a3,a3,a7
 vfmul.vf v6,v6,f0
+li t6,13
 mul t6,a7,t6
 vsse64.v v4, (a3), a6
 vfmacc.vf v30,f1,v11
