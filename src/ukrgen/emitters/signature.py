@@ -44,7 +44,8 @@ from ..lsc_model.ir import ir_program, ir_block, BASE_REGISTER, is_start_block
 from ..components.tile import scalar_tile
 from ..specializers.addresses import address_speller
 from ..models.load_store_operations import (lsc_state, 
-    lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop, lsc_permute)
+    lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop, lsc_permute,
+    lsc_value_op)
 from ..models.lsc.index import lsc_reg_index
 
 
@@ -581,6 +582,10 @@ class signature_emitter:
         #: the components' last reads of their base pseudo registers in the list
         #: straight emits, and its position there (address: a start's register)
         self.base_last, self.straight_pos = {}, None
+        #: values in general registers by name (lsc_value_op: a loop's counts)
+        self.values: dict = {}
+        #: the blocks after those straight emits (value_op: a count shared)
+        self.straight_later: list = []
         isa = self.gen.isa_setup()
         self.vector_length_kept = isa.predication().name == "IMPLICIT"
         self.strides_in: dict[str, object] = {}
@@ -1836,6 +1841,8 @@ class signature_emitter:
             return [asmops.zero(self.gen, reg=reg, dt=self.dts[op.indices[0].value()])]
         if isinstance(op, lsc_addr_compute):
             return self.address(op)
+        if isinstance(op, lsc_value_op):
+            return self.value_op(op)
         if isinstance(op, lsc_permute):
             return [self.permute(op)]
         if isinstance(op, lsc_move):
@@ -1974,6 +1981,7 @@ class signature_emitter:
         outside = self.outside
         # each component's last read of its base pseudo register here: that
         # start may take the base parameter's register (address)
+        self.straight_later = list(later)
         self.base_last = {op.indices[0].component: pos for pos, op in enumerate(ops)
                           if isinstance(op, lsc_addr_compute) and BASE_REGISTER == op.indices[0].indices[0]}
         for pos, op in enumerate(ops):
@@ -2099,10 +2107,9 @@ class signature_emitter:
             new_before = set(self.aregs)
             self.region_loads = self.start_addresses(regions[i], later)
             self.start_indexes([b])
-            counters = None
-            if b.loop_index is not None:
-                counters, count_lines = self.loop_counts(b, b.loop_index in loops[i + 1:])
-                self.region_loads += count_lines
+            # a loop's counters: its setup block's counts (value_op)
+            counters = (self.values.get(f"iter({b.name})"), self.values.get(f"left({b.name})")) \
+                if b.loop_index is not None else None
             out = self.block(b, prefix[i + 1:] + case_blocks)
             out.loads, out.counters = self.region_loads, counters
             if is_start_block(b):
@@ -2180,7 +2187,7 @@ class signature_emitter:
             for i, b in enumerate(c.blocks):
                 counters, count_lines = None, []
                 if b.loop_index is not None:
-                    counters, count_lines = self.loop_counts(b, b.loop_index in case_loops[i + 1:])
+                    counters = (self.values.get(f"iter({b.name})"), self.values.get(f"left({b.name})"))
                 emitted = self.block(b, list(c.blocks[i + 1:]))
                 emitted.loads, emitted.counters = count_lines + list(emitted.loads or []), counters
                 if is_start_block(b):
@@ -2334,6 +2341,25 @@ class signature_emitter:
         lanes = {self.gen.simd_size // adt_size(self.ctx.component_dts[comp])
                  for comp, along in self.program.vector_indices.items() if along == index}
         return lanes.pop() if 1 == len(lanes) else None
+
+    def value_op(self, op) -> list[str]:
+        """
+        A value operation (lsc_value_op): a loop's counts - its iterations and
+        what's left (loop_counts: the unroll its step's; a copy of the count
+        parameter where a later loop counts the same, else counted in place;
+        none for a loop stepping one element) - kept by the values' names
+        """
+        if "counts" == op.kind:
+            from types import SimpleNamespace
+            index, loop = op.read_names[0], op.params["loop"]
+            shared = any(b.loop_index == index for b in self.straight_later
+                         if b.name != loop and b.loop_index is not None)
+            counters, lines = self.loop_counts(
+                SimpleNamespace(loop_index=index, step=op.params["step"], name=loop), shared)
+            for name, reg in zip(op.write_names, counters):
+                self.values[name] = reg
+            return lines
+        raise specialization_error(f"no value operation {op.kind} emitted yet")
 
     def loop_counts(self, block, shared: bool):
         """

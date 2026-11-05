@@ -14,7 +14,7 @@ from ..models.load_store_operations import (
         lsc_zero,
         lsc_transformation,
         lsc_move,
-        lsc_add_val_off,
+        lsc_value_op,
         lsc_addr_add,
         )
 from ..models.lsc.reg import lsc_reg_type
@@ -135,7 +135,8 @@ class distance_specification:
             "mv" : lsc_move,
             "z" : lsc_zero,
             "aadd" : lsc_addr_add,
-            "oadd" : lsc_add_val_off,
+            "oadd" : lsc_value_op,      # lsc_add_val_off's successor
+            "val" : lsc_value_op,
         }
 
         op1_type = None

@@ -40,7 +40,8 @@ from ..lsc_model.addressing import sym
 from ..lsc_model.ir import ir_program, ir_block, BASE_REGISTER, START_BLOCK
 from ..components.tile import scalar_tile
 from ..models.load_store_operations import (
-    lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop)
+    lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop,
+    lsc_value_op)
 from ..models.lsc.index import lsc_reg_index
 from ..models.lsc.reg import lsc_reg_type
 
@@ -1144,10 +1145,15 @@ class signature_specializer:
             out = []
             for block in blocks:
                 new = sorted((_components_accessed([block]) & setup) - started)
-                if new:
-                    ops = [lsc_addr_compute(comp, BASE_REGISTER, reg,
-                                            offsets.elements_offset(oid, strides.get(comp, {})), scalar_tile)
-                           for (comp, reg), oid in sorted(self.program.addr_setup.items()) if comp in new]
+                ops = [lsc_addr_compute(comp, BASE_REGISTER, reg,
+                                        offsets.elements_offset(oid, strides.get(comp, {})), scalar_tile)
+                       for (comp, reg), oid in sorted(self.program.addr_setup.items()) if comp in new]
+                if block.loop_index is not None:
+                    # its counts: the iterations and what's left of its count
+                    # parameter - the emitter deciding them (loop_counts)
+                    ops.append(lsc_value_op("counts", writes=[f"iter({block.name})", f"left({block.name})"],
+                                            reads=[block.loop_index], step=block.step, loop=block.name))
+                if ops:
                     out.append(ir_block(name=f"{START_BLOCK}{block.name}", body=ops))
                     started = started | set(new)
                 out.append(block)

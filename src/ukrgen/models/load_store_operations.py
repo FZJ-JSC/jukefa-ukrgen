@@ -365,30 +365,30 @@ class lsc_addr_compute(lsc_operation):
         return f"{self.indices[1]} <- {self.indices[0]} + {self.delta}"
 
 
-class lsc_add_val_off(lsc_operation):
-    def __init__(self, valname : str, off : lsc_offset):
-        if not isinstance(off, lsc_offset):
-            raise ValueError(f"offset {off} is not an lsc_offset")
-        self.off = off
-        self.valname = valname
-
-        # t is used for calculating address, isn't the tile the address resides in
-        tiles = [scalar_tile]
-        indices = []
-        # read addr
-        reads = [0]
-        # write addr
-        writes = [0]
-        
-        reg_types = [lsc_reg_type.value]
-
-
-        super().__init__(tiles=tiles, indices=indices,
-                         reads=reads, writes=writes,
-                         reg_types=reg_types)
+class lsc_value_op(lsc_operation):
+    """
+    An operation on values in general registers, not addresses - each value by
+    name (lsc_reg_type.value): a loop's counts (kind "counts": its iterations
+    and what's left over of k, its step's - the emitter's loop_counts deciding
+    the unroll, nothing for a loop stepping one element), a value's copy
+    ("copy"). The setup in the IR (docs/ADDRESSING_PLAN.md: setup in the IR),
+    the emitter allocating and spelling it. (lsc_add_val_off's successor: an
+    lsc_offset added to a value, unused since offsets moved to sym)
+    """
+    def __init__(self, kind: str, writes: list[str], reads: list[str], **params):
+        names = list(reads) + list(writes)
+        super().__init__(tiles=[scalar_tile] * len(names),
+                         indices=[lsc_reg_index(n, [0]) for n in names],
+                         reads=list(range(len(reads))),
+                         writes=list(range(len(reads), len(names))),
+                         reg_types=[lsc_reg_type.value] * len(names))
+        self.kind = kind
+        self.params = params
+        self.read_names, self.write_names = list(reads), list(writes)
 
     def __str__(self):
-        return f"{self.valname} <- {self.valname} + {self.off}"
+        return f"{', '.join(self.write_names)} <- {self.kind}({', '.join(self.read_names)})"
+
 
 class lsc_debugmsg(lsc_operation):
     def __init__(self, msg : str):
