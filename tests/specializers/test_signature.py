@@ -9,6 +9,8 @@ import subprocess
 import tempfile
 import unittest
 
+from ukrgen.lsc_model.ir import is_start_block
+
 from ukrgen.flow.ukr_context import ukr_context
 from ukrgen.flow.stage_engine import stage_engine
 from ukrgen.flow.stages.setup import setup_stage
@@ -116,7 +118,8 @@ class test_signature_specializer(unittest.TestCase):
     def test_specialized_ir(self):
         # still LSC IR: the adaptations are explicit address computations
         prog = self.ctx.programs[0]
-        loop, store = prog.blocks[0], prog.blocks[1]
+        # (the setup blocks of address starts aside: is_start_block)
+        loop, store = [b for b in prog.blocks if not is_start_block(b)][:2]
         # B's broadcast loads (ld1r) take no immediate offset: a scratch
         # address is set right before each that needs one
         scratch = [op for op in loop.body if isinstance(op, lsc_addr_compute)]
@@ -164,7 +167,7 @@ class test_signature_specializer(unittest.TestCase):
                             for l in p.blocks[0].advance + p.blocks[0].sections["body"]))
         # only the model's address registers advance - as text after the
         # body, or as the body's advance operations
-        advances = [op for op in ctx.programs[0].blocks[0].body
+        advances = [op for op in next(b for b in ctx.programs[0].blocks if b.loop_index is not None).body
                     if (getattr(op, "properties", None) or {}).get("advance") is not None]
         self.assertEqual(2, len(p.blocks[0].advance) or len(advances))
         if shutil.which("aarch64-linux-gnu-as"):

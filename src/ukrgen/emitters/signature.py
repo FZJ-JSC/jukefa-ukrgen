@@ -40,7 +40,7 @@ from asmgen.asmblocks.op.constraint import ConstraintDoesNotApplyError
 
 from ..lsc_model.state import merge_switches
 from ..lsc_model.addressing import sym
-from ..lsc_model.ir import ir_program, ir_block
+from ..lsc_model.ir import ir_program, ir_block, BASE_REGISTER, is_start_block
 from ..components.tile import scalar_tile
 from ..specializers.addresses import address_speller
 from ..models.load_store_operations import (lsc_state, 
@@ -578,6 +578,9 @@ class signature_emitter:
         self.outside = lambda k: True
         #: what's live after the operation emitted - None: not known
         self.after = None
+        #: the components' last reads of their base pseudo registers in the list
+        #: straight emits, and its position there (address: a start's register)
+        self.base_last, self.straight_pos = {}, None
         isa = self.gen.isa_setup()
         self.vector_length_kept = isa.predication().name == "IMPLICIT"
         self.strides_in: dict[str, object] = {}
@@ -1517,6 +1520,9 @@ class signature_emitter:
         lengths, one stride), else dest moved by it (emit_step)
         """
         if "copy" == step[0]:
+            # a register onto itself (a start taking the base's register): none
+            if src.idx == dest.idx:
+                return []
             return [asmops.mov(self.gen, src=src, dst=dest)]
         if "from_vectors" == step[0]:
             return [asmops.add(self.gen, dst=dest, reg1=src, reg2=self.vl_multiple(step[1], step[2]))]
@@ -1573,6 +1579,14 @@ class signature_emitter:
         comp = op.indices[0].component
         src_key = (comp, op.indices[0].indices[0])
         dest_key = (comp, op.indices[1].indices[0])
+        if dest_key not in self.aregs and BASE_REGISTER == src_key[1]:
+            # a start from the base parameter: the last read of the base takes
+            # its register (moved in place) where the parameter is free - the
+            # IR's option, the emitter's choice
+            name = f"base({comp})"
+            if name in self.live_params and self.base_last.get(comp) == self.straight_pos:
+                self.aregs[dest_key] = self.params[name]
+                self.live_params.discard(name)
         if dest_key not in self.aregs:
             self.aregs[dest_key] = self.greg()
         dest = self.aregs[dest_key]
@@ -1958,9 +1972,14 @@ class signature_emitter:
                 self.release(key)
         lines = []
         outside = self.outside
+        # each component's last read of its base pseudo register here: that
+        # start may take the base parameter's register (address)
+        self.base_last = {op.indices[0].component: pos for pos, op in enumerate(ops)
+                          if isinstance(op, lsc_addr_compute) and BASE_REGISTER == op.indices[0].indices[0]}
         for pos, op in enumerate(ops):
             self.outside = lambda k, after=live_after[pos]: k in after
             self.after = live_after[pos]
+            self.straight_pos = pos
             lines += self.emit_op(op)
             for k in keys(op):
                 if k not in live_after[pos] and k in self.phys:
@@ -2074,7 +2093,7 @@ class signature_emitter:
         case_comps = [self.memory_comps(c.blocks) for c in self.program.cases]
         conditions = {v for c in self.program.cases for v in c.when}
         loops = [b.loop_index for b in prefix + case_blocks]
-        blocks = []
+        blocks, pending = [], []
         for i, b in enumerate(prefix):
             later = set().union(*regions[i + 1:], *case_comps, conditions)
             new_before = set(self.aregs)
@@ -2086,7 +2105,15 @@ class signature_emitter:
                 self.region_loads += count_lines
             out = self.block(b, prefix[i + 1:] + case_blocks)
             out.loads, out.counters = self.region_loads, counters
-            blocks.append(out)
+            if is_start_block(b):
+                # a setup block's code leads the next block's (as the emitter's
+                # starts did): the emitted blocks the IR's other blocks
+                pending = list(out.loads or []) + [l for part in out.sections.values() for l in part]
+            else:
+                if pending:
+                    out.loads = pending + list(out.loads or [])
+                    pending = []
+                blocks.append(out)
             # pointers the block computed, and what no later region uses
             new = set(self.aregs) - new_before
             self.release_aregs({k for k in self.aregs
@@ -2149,12 +2176,19 @@ class signature_emitter:
             # each looping over n): their counters set up as the prefix's
             out = []
             case_loops = [b.loop_index for b in c.blocks]
+            case_pending = []
             for i, b in enumerate(c.blocks):
                 counters, count_lines = None, []
                 if b.loop_index is not None:
                     counters, count_lines = self.loop_counts(b, b.loop_index in case_loops[i + 1:])
                 emitted = self.block(b, list(c.blocks[i + 1:]))
                 emitted.loads, emitted.counters = count_lines + list(emitted.loads or []), counters
+                if is_start_block(b):
+                    case_pending += list(emitted.loads or []) + [l for part in emitted.sections.values() for l in part]
+                    continue
+                if case_pending:
+                    emitted.loads = case_pending + list(emitted.loads or [])
+                    case_pending = []
                 out.append(emitted)
             if out:
                 out[0].loads = self.region_loads + out[0].loads
@@ -2433,38 +2467,23 @@ class signature_emitter:
 
     def start_addresses(self, comps, later) -> list[str]:
         """
-        Each address register of these components, not yet held: a copy of
-        the component's start address parameter moved to its first access.
-        Where no later region needs the start address, the parameter's own
-        register becomes the last of them, the others copied before it moves
+        These components' base parameters as their base pseudo registers
+        (BASE_REGISTER, position 0): the IR's setup blocks move each address
+        register from it to its start (the specializer's start_blocks)
         """
-        lines = []
-        db, strides = self.program.offsets, self.program.strides
         for comp in sorted(comps):
             name = f"base({comp})"
-            keys = [k for k in sorted(self.program.addr_setup) if k[0] == comp and k not in self.aregs]
-            if not keys or name not in self.params:
-                continue
-            param = self.params[name]
-            reuse = comp not in later and name in self.live_params
-            for n, key in enumerate(keys):
-                if reuse and n == len(keys) - 1:
-                    areg = param
-                    self.live_params.discard(name)
-                else:
-                    areg = self.greg()
-                    lines += [l.strip() for l in asmops.mov(self.gen, src=param, dst=areg).splitlines()
-                              if l.strip()]
-                self.aregs[key] = areg
-                start = db.elements_offset(self.program.addr_setup[key], strides.get(comp, {}))
-                self.positions[key] = start
-                lines += [l.strip() for l in self.add_bytes(areg, self.bytes_of(comp, start), comp)]
-        return lines
+            if name in self.params and (comp, BASE_REGISTER) not in self.aregs:
+                self.aregs[(comp, BASE_REGISTER)] = self.params[name]
+                self.positions[(comp, BASE_REGISTER)] = sym.const(0)
+        return []
 
     def release_aregs(self, keys):
         for key in keys:
             reg = self.aregs.pop(key)
-            self.rt.unuse_reg("greg", reg.idx)
+            if BASE_REGISTER != key[1]:
+                # (a base pseudo register's is the parameter's: its own release)
+                self.rt.unuse_reg("greg", reg.idx)
 
     def loop_code(self, block: emitted_block) -> list[str]:
         """

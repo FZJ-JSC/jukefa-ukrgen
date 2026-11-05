@@ -352,8 +352,8 @@ st1d {z7.d}, p0, [x1]
 st1d {z16.d}, p0, [x1, x8, lsl #3]
 b .ukr0_cases_end
 .ukr0_case6:
-mov x0,x3
 index z4.d,#0,x7
+mov x0,x3
 st1d {z0.d}, p0, [x0, z4.d]
 add x0,x0,x6
 st1d {z1.d}, p0, [x0, z4.d]
@@ -363,8 +363,8 @@ add x0,x0,x6
 st1d {z3.d}, p0, [x0, z4.d]
 b .ukr0_cases_end
 .ukr0_case7:
-mov x0,x3
 index z4.d,#0,x7
+mov x0,x3
 ld1rd {z5.d}, p0/z, [x4]
 fmul z6.d,z0.d,z5.d
 fmul z0.d,z1.d,z5.d
@@ -379,8 +379,8 @@ add x0,x0,x6
 st1d {z2.d}, p0, [x0, z4.d]
 b .ukr0_cases_end
 .ukr0_case8:
-mov x0,x3
 index z4.d,#0,x7
+mov x0,x3
 ld1d {z5.d}, p0/z, [x0, z4.d]
 add x0,x0,x6
 ld1d {z6.d}, p0/z, [x0, z4.d]
@@ -401,8 +401,8 @@ add x3,x3,x6
 st1d {z1.d}, p0, [x3, z4.d]
 b .ukr0_cases_end
 .ukr0_case9:
-mov x0,x3
 index z4.d,#0,x7
+mov x0,x3
 ld1d {z5.d}, p0/z, [x0, z4.d]
 ld1rd {z6.d}, p0/z, [x4]
 add x0,x0,x6
@@ -424,8 +424,8 @@ add x3,x3,x6
 st1d {z1.d}, p0, [x3, z4.d]
 b .ukr0_cases_end
 .ukr0_case10:
-mov x0,x3
 index z4.d,#0,x7
+mov x0,x3
 ld1d {z5.d}, p0/z, [x0, z4.d]
 ld1rd {z6.d}, p0/z, [x5]
 add x0,x0,x6
@@ -447,8 +447,8 @@ add x3,x3,x6
 st1d {z3.d}, p0, [x3, z4.d]
 b .ukr0_cases_end
 .ukr0_case11:
-mov x0,x3
 index z4.d,#0,x7
+mov x0,x3
 ld1d {z5.d}, p0/z, [x0, z4.d]
 ld1rd {z6.d}, p0/z, [x5]
 add x0,x0,x6

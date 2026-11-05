@@ -37,7 +37,7 @@ from asmgen.registers import reg_tracker, adt_size
 from asmgen.asmblocks.op.constraint import ConstraintDoesNotApplyError
 
 from ..lsc_model.addressing import sym
-from ..lsc_model.ir import ir_program, ir_block
+from ..lsc_model.ir import ir_program, ir_block, BASE_REGISTER, START_BLOCK
 from ..components.tile import scalar_tile
 from ..models.load_store_operations import (
     lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop)
@@ -1128,11 +1128,40 @@ class signature_specializer:
                 for op in getattr(block, section) or []:
                     self.forms(op)
 
+    def start_blocks(self) -> None:
+        """
+        Each component's address registers started in the IR: before the first
+        block that accesses it - the program's, a case's own where it starts
+        there - a setup block moving each register from the component's base
+        parameter (BASE_REGISTER) to where it starts (addr_setup), the copy and
+        the move then the speller's to spell and merge, the scheduler's to
+        place (docs/ADDRESSING_PLAN.md: setup in the IR, address starts)
+        """
+        setup = {c for c, _ in self.program.addr_setup}
+        offsets, strides = self.program.offsets, self.program.strides
+
+        def starts(blocks, started):
+            out = []
+            for block in blocks:
+                new = sorted((_components_accessed([block]) & setup) - started)
+                if new:
+                    ops = [lsc_addr_compute(comp, BASE_REGISTER, reg,
+                                            offsets.elements_offset(oid, strides.get(comp, {})), scalar_tile)
+                           for (comp, reg), oid in sorted(self.program.addr_setup.items()) if comp in new]
+                    out.append(ir_block(name=f"{START_BLOCK}{block.name}", body=ops))
+                    started = started | set(new)
+                out.append(block)
+            return out, started
+        self.program.blocks, started = starts(list(self.program.blocks), set())
+        for case in self.program.cases:
+            case.blocks, _ = starts(list(case.blocks), started)
+
     def place(self) -> ir_program:
         """
         The addresses, block by block - positions, walks, moves, immediates,
         offsets - then the processor state each access's forms need
         """
+        self.start_blocks()
         case_blocks = [b for case in self.program.cases for b in case.blocks]
         for j, block in enumerate(self.program.blocks):
             self.accessed_later = _components_accessed(list(self.program.blocks[j + 1:]) + case_blocks)

@@ -78,6 +78,21 @@ def render_op(op, db: offset_db) -> str:
     return str(op)
 
 
+#: an address register standing for a component's base parameter (its start
+#: address, position 0): a setup block's address starts move from it to each
+#: register's first access (docs/ADDRESSING_PLAN.md: setup in the IR)
+BASE_REGISTER = -1
+
+#: the name a setup block of address starts (the specializer's start_blocks)
+#: begins with: the emitter puts its code before the next block's
+START_BLOCK = "start."
+
+
+def is_start_block(block) -> bool:
+    """Whether a block is a setup block of address starts (START_BLOCK)"""
+    return block.name.startswith(START_BLOCK)
+
+
 @dataclass
 class ir_block:
     """

@@ -67,7 +67,7 @@ class test_dependencies(unittest.TestCase):
     def test_lane_reads_depend_on_the_load(self):
         ctx, _ = run(**{"mm-tileop": ["fma[bdreg:ILANE](A.VEC:direct, B.VEC:use_lane, AB.VEC)"
                                   "{i=m, n=1, k*=1}"], "no-preload": True})
-        body = ctx.programs[0].blocks[0].body
+        body = next(b for b in ctx.programs[0].blocks if b.loop_index is not None).body
         edges = dependencies(body, loop=False)
         for j, op in enumerate(body):
             if isinstance(op, lsc_transformation) and any(len(i.indices) > 1 for i in op.indices):
@@ -79,7 +79,7 @@ class test_distances(unittest.TestCase):
 
     def body(self):
         ctx, _ = run(**{"no-preload": True})
-        return ctx.programs[0].blocks[0].body
+        return next(b for b in ctx.programs[0].blocks if b.loop_index is not None).body
 
     def test_reached_or_reported(self):
         body = self.body()
@@ -99,7 +99,7 @@ class test_distances(unittest.TestCase):
     def test_loop_carried(self):
         # the accumulator chain runs from one iteration into the next
         ctx, _ = run()
-        body = ctx.programs[0].blocks[0].body
+        body = next(b for b in ctx.programs[0].blocks if b.loop_index is not None).body
         self.assertTrue(any(e.carried for e in dependencies(body, loop=True)))
         _, report = list_scheduler(specs("raw:data::fma:fma:4"))(body, loop=True)
         self.assertNotEqual(float("inf"), report.achieved[0])
