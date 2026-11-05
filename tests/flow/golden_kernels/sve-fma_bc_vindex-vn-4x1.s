@@ -335,21 +335,21 @@ ld1d {z5.d}, p0/z, [x0]
 ld1d {z6.d}, p0/z, [x0, x8, lsl #3]
 add x0,x0,x6, LSL #1
 ld1d {z7.d}, p0/z, [x0]
+ld1d {z16.d}, p0/z, [x0, x8, lsl #3]
 fmul z5.d,z5.d,z4.d
-ld1rd {z16.d}, p0/z, [x4]
+ld1rd {z17.d}, p0/z, [x4]
 fmul z6.d,z6.d,z4.d
 fmul z7.d,z7.d,z4.d
-fmla z5.d,p0/m,z0.d,z16.d
-ld1d {z0.d}, p0/z, [x0, x8, lsl #3]
-fmla z6.d,p0/m,z1.d,z16.d
-fmla z7.d,p0/m,z2.d,z16.d
+fmul z16.d,z16.d,z4.d
+fmla z5.d,p0/m,z0.d,z17.d
+fmla z6.d,p0/m,z1.d,z17.d
+fmla z7.d,p0/m,z2.d,z17.d
+fmla z16.d,p0/m,z3.d,z17.d
 st1d {z5.d}, p0, [x1]
-fmul z0.d,z0.d,z4.d
 st1d {z6.d}, p0, [x1, x8, lsl #3]
 mov x1,x0
 st1d {z7.d}, p0, [x1]
-fmla z0.d,p0/m,z3.d,z16.d
-st1d {z0.d}, p0, [x1, x8, lsl #3]
+st1d {z16.d}, p0, [x1, x8, lsl #3]
 b .ukr0_cases_end
 .ukr0_case6:
 mov x0,x3
@@ -389,8 +389,8 @@ fadd z5.d,z0.d,z5.d
 ld1d {z0.d}, p0/z, [x0, z4.d]
 add x0,x0,x6
 fadd z6.d,z1.d,z6.d
-st1d {z5.d}, p0, [x3, z4.d]
 ld1d {z1.d}, p0/z, [x0, z4.d]
+st1d {z5.d}, p0, [x3, z4.d]
 fadd z0.d,z2.d,z0.d
 add x3,x3,x6
 st1d {z6.d}, p0, [x3, z4.d]
@@ -412,8 +412,8 @@ fmla z5.d,p0/m,z0.d,z6.d
 ld1d {z0.d}, p0/z, [x0, z4.d]
 add x0,x0,x6
 fmla z7.d,p0/m,z1.d,z6.d
-st1d {z5.d}, p0, [x3, z4.d]
 ld1d {z1.d}, p0/z, [x0, z4.d]
+st1d {z5.d}, p0, [x3, z4.d]
 fmla z0.d,p0/m,z2.d,z6.d
 add x3,x3,x6
 st1d {z7.d}, p0, [x3, z4.d]
@@ -435,12 +435,12 @@ fmla z0.d,p0/m,z5.d,z6.d
 ld1d {z5.d}, p0/z, [x0, z4.d]
 add x0,x0,x6
 fmla z1.d,p0/m,z7.d,z6.d
+ld1d {z7.d}, p0/z, [x0, z4.d]
 st1d {z0.d}, p0, [x3, z4.d]
-ld1d {z0.d}, p0/z, [x0, z4.d]
 fmla z2.d,p0/m,z5.d,z6.d
 add x3,x3,x6
 st1d {z1.d}, p0, [x3, z4.d]
-fmla z3.d,p0/m,z0.d,z6.d
+fmla z3.d,p0/m,z7.d,z6.d
 add x3,x3,x6
 st1d {z2.d}, p0, [x3, z4.d]
 add x3,x3,x6
@@ -457,22 +457,22 @@ add x0,x0,x6
 fmul z5.d,z5.d,z6.d
 ld1rd {z16.d}, p0/z, [x4]
 ld1d {z17.d}, p0/z, [x0, z4.d]
+add x0,x0,x6
 fmul z7.d,z7.d,z6.d
+ld1d {z18.d}, p0/z, [x0, z4.d]
 fmla z5.d,p0/m,z0.d,z16.d
 fmul z17.d,z17.d,z6.d
 fmla z7.d,p0/m,z1.d,z16.d
+fmul z18.d,z18.d,z6.d
 st1d {z5.d}, p0, [x3, z4.d]
-add x0,x0,x6
-ld1d {z0.d}, p0/z, [x0, z4.d]
 fmla z17.d,p0/m,z2.d,z16.d
 add x3,x3,x6
 st1d {z7.d}, p0, [x3, z4.d]
-fmul z0.d,z0.d,z6.d
+fmla z18.d,p0/m,z3.d,z16.d
 add x3,x3,x6
 st1d {z17.d}, p0, [x3, z4.d]
 add x3,x3,x6
-fmla z0.d,p0/m,z3.d,z16.d
-st1d {z0.d}, p0, [x3, z4.d]
+st1d {z18.d}, p0, [x3, z4.d]
 .ukr0_cases_end:
 ret
 .cfi_endproc

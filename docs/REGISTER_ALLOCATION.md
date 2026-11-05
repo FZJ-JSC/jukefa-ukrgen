@@ -84,10 +84,32 @@ to break.
 2. **The analysis pass**: live ranges per virtual register (back edges,
    partial writes: lanes, slices), classes and constraints from the
    signatures, fixed versus flexible - one function; the checks above
-   answered by it, the kernels byte for byte the same.
+   answered by it, the kernels byte for byte the same. Done: one liveness
+   (`lsc_model/liveness.py`: the emitter's, the scheduler's, `copyprop`'s,
+   `slices()`' and `expand_copies`' local temporaries - 0333, 0334); a
+   value's register class, its units and fit by the tracker's knowledge
+   (`lsc_model/classes.py`, asmgen's tile types and `storage` - 0336, 0338,
+   0341); a renamed value's data type its own (`owner`, `value()` - 0335).
+   Open: a vector's bounds still the emitter's (`_register_bounds`).
 3. **The renamer** after `cluster`: flexible values onto dead registers or
    new ones within their budgets; the scheduler's register model gone.
-   Kernels change: instruction counts, runs.
+   Kernels change: instruction counts, runs. Done: a loop body's
+   temporaries within the registers there are (0337, no serial fallback
+   since: 0339); a straight-line section's flexible values (0342; the
+   default since 0347, `--no-rename`), `--rename-from` new (the default),
+   dead, distance (0343: `new` schedules best - the straight-line sections'
+   distance shortfall NEON -26%, SVE -51%, RVV -15%, AVX2 the same, K3's
+   modelled cycles -14%; `dead` four times worse); `--max-{g,f,v,t}regs`
+   (0343: callee-saved registers left out by priority); registers released
+   by liveness, not their names' mentions (0345); a lane or block written
+   reading the rest (`liveness.keeps`, 0344, 0346), a part waiting for the
+   part before unless `--schedule-partials-independently`. The scheduler's
+   register model still schedules loop bodies and sections whose names
+   don't bound what's live. Open: a tile's slices - written slice by slice
+   a tile is written whole before read, which one operation's view can't
+   tell: not counted as keeping (`copyprop_tiles` would keep tile copies),
+   so `--schedule-partials-independently` doesn't cover them; register
+   groups not renamed; the k loop's rings.
 4. **The allocation pass** replacing the emitter's: fixed as given, the most
    constrained first, least recent use; the emitter looks registers up.
 5. **The slice index register** per virtual tile operation, merged by fusion

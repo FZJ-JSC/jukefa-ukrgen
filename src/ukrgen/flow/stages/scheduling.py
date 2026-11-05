@@ -131,11 +131,15 @@ class schedule_stage(stage):
                             "stream C through its epilogue")
         self.params["rename"] = stage_param(
                 value=False, default=False, flag=True, required=False,
-                description="Rename a straight-line section's flexible values (components "
-                            "no data-regs fixes) onto dead registers within the registers "
-                            "there are - C's in the accumulators' after their stores - and "
-                            "schedule it by dependencies alone (docs/REGISTER_ALLOCATION.md "
-                            "step 3)")
+                description="Rename straight-line sections' values onto dead registers - the "
+                            "default; kept for older command lines")
+        self.params["no-rename"] = stage_param(
+                value=False, default=False, flag=True, required=False,
+                description="Don't rename a straight-line section's flexible values (components "
+                            "no data-regs fixes) onto dead registers within the registers there "
+                            "are - C's in the accumulators' after their stores - nor schedule it "
+                            "by dependencies alone where its names then bound what's live "
+                            "(docs/REGISTER_ALLOCATION.md step 3)")
         self.params["rename-from"] = stage_param(
                 value="new", default="new", required=False,
                 description="With --rename: where a value looks first for a register - new "
@@ -192,7 +196,7 @@ class schedule_stage(stage):
         # on unless turned off: the epilogue's C streams through the registers
         # the accumulators free only when scheduled so
         mru = not bool(self.params["no-mru"].value)
-        rename = bool(self.params["rename"].value)
+        rename = not bool(self.params["no-rename"].value)
         if not specs and not mru:
             self.context.params.update(self.params)
             return []
