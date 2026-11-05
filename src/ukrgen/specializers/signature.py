@@ -42,6 +42,7 @@ from ..components.tile import scalar_tile
 from ..models.load_store_operations import (
     lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop)
 from ..models.lsc.index import lsc_reg_index
+from ..models.lsc.reg import lsc_reg_type
 
 
 class specialization_error(Exception):
@@ -265,6 +266,48 @@ MAX_STRIDE_POINTERS = 4
 FEW_STRIDE_POINTERS = 2
 
 
+def _tail_runs(block) -> bool:
+    """
+    Whether a loop's tail runs - as the emitter counts it (loop_counts): a
+    loop stepping one element (or one vector length) an iteration leaves
+    none over, its tail not emitted; else the tail a counted loop over what's
+    left, repeating (packm's, once a step left). A step of a fixed vector
+    length's lanes isn't told here: taken to leave some
+    """
+    if block.loop_index is None or block.step is None:
+        return False
+    terms = {f: int(c) for f, c in dict(block.step.terms).items() if c}
+    return terms not in ({(): 1}, {("VL",): 1})
+
+
+class _sections:
+    """A block's sections as given - the rest empty (what's after a section)"""
+
+    def __init__(self, block, names):
+        for name in ("prologue", "body", "epilogue", "tail", "subtail"):
+            setattr(self, name, getattr(block, name) if name in names else [])
+
+
+def _components_accessed(blocks) -> set:
+    """
+    The components blocks access through an address register - a loop's body
+    too: those whose registers' positions matter after a block
+    """
+    out = set()
+
+    def visit(ops):
+        for op in ops or []:
+            if isinstance(op, lsc_loop):
+                visit(op.block)
+            for p, idx in enumerate(op.indices):
+                if p < len(op.reg_types or []) and lsc_reg_type.address == op.reg_types[p]:
+                    out.add(idx.component)
+    for block in blocks:
+        for section in ("prologue", "body", "epilogue", "tail", "subtail"):
+            visit(getattr(block, section))
+    return out
+
+
 class signature_specializer:
     """
     Adapts one part's IR program to the ISA, in place: after it, every
@@ -432,6 +475,9 @@ class signature_specializer:
         #: adapting a case's last block: its last section's registers are read
         #: by nothing after it (the kernel returns; the next case starts afresh)
         self.final_block = False
+        #: the components blocks after the one adapted access (their address
+        #: registers): a block's last section moves no other's back
+        self.accessed_later = None
         #: the loop index of the block being adapted (None: straight-line)
         self.loop_index = None
         self.ctx = ctx
@@ -950,11 +996,30 @@ class signature_specializer:
             # kernel returns after it (phase+rotate's walks, C's walked columns) -
             # unless it repeats: a loop's tail runs once a step left (packm's
             # 2-wide transposed panel walked its x1 to row 1 for good)
-            repeats = "tail" == section and block.loop_index is not None
+            repeats = "tail" == section and _tail_runs(block)
             if self.final_block and filled and section == filled[-1] and not advances and not repeats:
                 for key, moved in walked.items():
                     self.positions[key] = self.positions[key] - moved
                 walked = {}
+            # a section run once (not a loop's body, nor a tail that repeats):
+            # a component nothing after it accesses - the block's later
+            # sections, the blocks after - has its registers neither moved
+            # back nor advanced: dead (the k loop's last iteration: A's and
+            # B's, the epilogue walking C)
+            once = not (block.loop_index is not None and "body" == section) and not repeats
+            after = None
+            if self.accessed_later is not None:
+                rest = ("prologue", "body", "epilogue", "tail", "subtail")
+                later_here = [s for s in rest[rest.index(section) + 1:]
+                              if s not in ("tail", "subtail") or _tail_runs(block)]
+                after = self.accessed_later | _components_accessed(
+                    [_sections(block, later_here)])
+            if once and after is not None:
+                walked, advances = dict(walked), dict(advances)
+                for key in [k for k in list(walked) + list(advances) if k[0] not in after]:
+                    if key in walked:
+                        self.positions[key] = self.positions[key] - walked.pop(key)
+                    advances.pop(key, None)
             for key in list(walked) + [k for k in advances if k not in walked]:
                 comp, reg = key
                 moved = walked.get(key, sym.const(0))
@@ -972,11 +1037,13 @@ class signature_specializer:
                     ops.append(op)
                     self.positions[key] = self.positions[key] - moved
                     continue
-                if any(dict(moved.terms).values()):
-                    ops.append(lsc_addr_compute(comp, reg, reg, sym.const(0) - moved, scalar_tile))
-                if step is not None and any(dict(step.terms).values()):
-                    op = lsc_addr_compute(comp, reg, reg, step, scalar_tile)
-                    op.properties = dict(op.properties or {}, advance=step)
+                # the advance less the walk, one move - none where they cancel
+                # (a last iteration's: 4 vector lengths on, 4 back)
+                net = (step if step is not None else sym.const(0)) - moved
+                if any(dict(net.terms).values()):
+                    op = lsc_addr_compute(comp, reg, reg, net, scalar_tile)
+                    if step is not None:
+                        op.properties = dict(op.properties or {}, advance=step)
                     ops.append(op)
                 self.positions[key] = self.positions[key] - moved
             if advances:
@@ -988,8 +1055,11 @@ class signature_specializer:
             if "epilogue" == section:
                 # and back after the last iteration: the tail starts where it
                 # does when the loop (and its prologue) didn't run
+                # - a component nothing after it accesses (a tail that runs, the
+                # blocks after) left where it is: its registers dead
                 for (comp, reg), delta in rebased.items():
-                    ops.append(lsc_addr_compute(comp, reg, reg, sym.const(0) - delta, scalar_tile))
+                    if after is None or comp in after:
+                        ops.append(lsc_addr_compute(comp, reg, reg, sym.const(0) - delta, scalar_tile))
                     self.positions[(comp, reg)] = self.positions[(comp, reg)] - delta
             setattr(block, section, ops)
             # stride pointers are computed per section, in the same registers;
@@ -1065,7 +1135,9 @@ class signature_specializer:
         The addresses, block by block - positions, walks, moves, immediates,
         offsets - then the processor state each access's forms need
         """
-        for block in self.program.blocks:
+        case_blocks = [b for case in self.program.cases for b in case.blocks]
+        for j, block in enumerate(self.program.blocks):
+            self.accessed_later = _components_accessed(list(self.program.blocks[j + 1:]) + case_blocks)
             self.adapt_block(block)
         start = dict(self.positions)
         for case in self.program.cases:
@@ -1073,8 +1145,10 @@ class signature_specializer:
             for i, block in enumerate(case.blocks):
                 # the case's last block: nothing reads its registers after it
                 self.final_block = len(case.blocks) - 1 == i
+                self.accessed_later = _components_accessed(case.blocks[i + 1:])
                 self.adapt_block(block)
             self.final_block = False
+        self.accessed_later = None
         # the state the ISA's setup leaves (for the narrowest element type, as
         # the emitter sets it up), lsc_states setting more: each access's
         # signatures those whose requirements hold where it is - decided here,
