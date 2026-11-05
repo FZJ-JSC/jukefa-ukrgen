@@ -228,7 +228,26 @@ in the IR, in order.
       multiples, vector lengths in bytes and elements (stride_reg,
       offset_value, vl_elements, the preallocated recipes) - value operations
       at the point the emitter places them now (region starts, the
-      dispatch's setup), spelled by the speller (shift-adds, Zba).
+      dispatch's setup), spelled by the speller (shift-adds, Zba). Now each a
+      recipe computing into a register allocated where first needed, its code
+      into late_setup (after the ISA's setup) or dispatch_setup (after the
+      dispatch's loads, a stride deferred there), never scheduled; preallocate
+      replaying what an emission found it needed:
+      1. *Steps read their values*: a spelled step's value (`("reg",
+         ("vl_bytes", dt), "add", 0)`) an operand of its operation, read by
+         name (lsc_reg_type.value) - what orders it after the value's
+         operation; nothing writes them yet, the kernels the same.
+      2. *The values steps name, computed in the IR*: after the spelling,
+         value operations (lsc_value_op) for each, in a setup block at entry;
+         their recipes' code in place, not late_setup - preallocate gone for
+         them.
+      3. *Values of deferred strides* in the dispatch's block, once step 4
+         makes it IR (dispatch_setup until then).
+      4. *Offset registers as options*: the planned offsets (offset_plan, its
+         ranks) value operations the emitter may give registers - in rank
+         order, while registers last - each step using one carrying its
+         fallback already: the eviction now (greg's) the same choice, made
+         before; a kernel failing only where a needed value finds none.
    4. **The dispatch.** Its predicates - C's unit stride, beta 0 or 1, alpha
       1 - value operations computed once, the cases a decision tree of
       branches on them (a case's try now re-tests from scratch).
