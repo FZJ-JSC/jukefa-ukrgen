@@ -2115,7 +2115,7 @@ class signature_emitter:
             if is_start_block(b):
                 # a setup block's code leads the next block's (as the emitter's
                 # starts did): the emitted blocks the IR's other blocks
-                pending = list(out.loads or []) + [l for part in out.sections.values() for l in part]
+                pending += list(out.loads or []) + [l for part in out.sections.values() for l in part]
             else:
                 if pending:
                     out.loads = pending + list(out.loads or [])
@@ -2138,6 +2138,11 @@ class signature_emitter:
                                              *[self.index_keys(c.blocks) for c in self.program.cases]))
         # the deferred stack parameters into registers of their own, right
         # before the dispatch: their offsets once the save area is known
+        if pending:
+            # a setup block's code no block of the program's followed (every
+            # block a case's): setup's, right after the ISA's (late_setup)
+            self.late_setup = list(pending) + list(self.late_setup)
+            pending = []
         loads = []
         self.deferred_regs = {}
         for name, (off, named) in self.deferred.items():
@@ -2359,6 +2364,23 @@ class signature_emitter:
             for name, reg in zip(op.write_names, counters):
                 self.values[name] = reg
             return lines
+        if "value" == op.kind:
+            # a setup value the steps add: its recipe's code this operation's,
+            # not late_setup's - computed at the program's start, not late; a
+            # value of a stride deferred to the dispatch left there
+            value = op.params["value"]
+            if "stride" == value[0] or self.placed_at_dispatch(value[0], tuple(value[1:])):
+                # a stride its parameter's register - nothing to compute, and
+                # touching it here would keep a parameter the dispatch defers
+                return []
+            saved, started = self.late_setup, self.regions_started
+            self.late_setup, self.regions_started = [], False
+            try:
+                self.values[op.write_names[0]] = self.offsets.value_reg(value)
+                code = self.late_setup
+            finally:
+                self.late_setup, self.regions_started = saved, started
+            return [l.strip() for chunk in code for l in str(chunk).splitlines() if l.strip()]
         raise specialization_error(f"no value operation {op.kind} emitted yet")
 
     def loop_counts(self, block, shared: bool):

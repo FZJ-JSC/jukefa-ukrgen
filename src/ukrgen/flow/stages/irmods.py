@@ -4,7 +4,7 @@ IR modifications before and after specialization for the ISA
 
 import logging
 
-from ...specializers.addresses import address_speller, spells
+from ...specializers.addresses import address_speller, value_setup, spells
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
@@ -162,5 +162,9 @@ class post_specialize_irmod_stage(irmod_stage_base):
         # passes on the steps (ldinc: a walk's step a post-increment)
         for cls in self.on_steps:
             self.run(cls)
+        # the values the steps add computed in the IR, at the program's start
+        for p in self.context.programs:
+            if spells(p):
+                value_setup(p)
         if self.params["print-modified-ir"].value:
             raise early_exit("\n\n".join(p.render() for p in self.context.programs))

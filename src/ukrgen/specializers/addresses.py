@@ -510,6 +510,35 @@ def step_values(step: tuple) -> list:
     return []
 
 
+def value_setup(program) -> int:
+    """
+    The setup values spelled steps add (step_values) computed in the IR: a
+    value operation for each, in a setup block at the program's start - the
+    emitter's recipes' code in place, ordered by the values the steps read
+    (docs/ADDRESSING_PLAN.md setup values, 2). A value of a stride deferred to
+    the dispatch the emitter leaves there. :return: the values
+    """
+    from ..lsc_model.ir import ir_block, START_BLOCK
+    from ..models.load_store_operations import lsc_value_op
+    values = {}
+
+    def visit(ops):
+        for op in ops or []:
+            if isinstance(op, lsc_loop):
+                visit(op.block)
+            step = (op.properties or {}).get("step")
+            if step is not None:
+                for value in step_values(step):
+                    values.setdefault(value_name(value), value)
+    for block in program.blocks + [b for case in program.cases for b in case.blocks]:
+        for section in SECTIONS:
+            visit(getattr(block, section))
+    if values:
+        ops = [lsc_value_op("value", writes=[name], reads=[], value=values[name]) for name in sorted(values)]
+        program.blocks = [ir_block(name=f"{START_BLOCK}values", body=ops)] + list(program.blocks)
+    return len(values)
+
+
 #: an immediate two adds merge into - within every ISA's add of one
 #: (RISC-V's addi: 12 bits signed)
 MERGED_IMMEDIATE = 2047
