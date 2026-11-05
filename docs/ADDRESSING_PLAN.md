@@ -178,7 +178,7 @@ in the IR, in order.
       insr) before SME's slices (tests/stages/test_sme.py, the SME and SMESVE
       configurations) - nothing of either special to the other. Measured:
       instructions, right under qemu.
-   Setup values as an IR setup block, after.
+   Setup values as an IR setup block, after - below (**Setup in the IR**).
 
    **Loops, from here** (after 0309-0323: the VLA element loops wholly the
    IR's but their counter; SME's tile slice loops standing operations):
@@ -203,6 +203,39 @@ in the IR, in order.
      slice index (a slice access's _rowreg/_colreg: w12-w15), SVE's governing
      predicates (p0-p7) - the renamer allocating from that set; no register
      type of asmgen's (its gen.valid_rcregs unused).
+
+   **Setup in the IR.** The emitter still computes the kernel's setup
+   itself (emit: parameters, then per region start_addresses, start_indexes,
+   loop_counts, then the dispatch): no IR pass sees it - the speller's merge
+   (merge_ops: a copy and its first step one instruction) never met the
+   stride pointers' copy-then-add (0353 then added add_bytes_from to the
+   emitter: against this plan, gone again here), the scheduler never placed
+   it, the dispatch tests the same predicates try after try. Each value an IR
+   operation instead, in the section where the emitter starts it now, the
+   emitter only allocating and spelling what the IR says:
+   1. **Address starts.** ir_program.addr_setup already says where each
+      address register starts; an lsc_addr_compute from the component's
+      base parameter (a pseudo address register, the parameter's: position
+      0) to the start, in the first section of the block whose region starts
+      the component (a case's own, where it starts there) - the copy and its
+      first move then merge_ops' (add_bytes_from gone). The parameter's own
+      register the last one's where nothing later needs the base (the
+      emitter's reuse now): the start a move in place.
+   2. **Loop counters.** loop_counts' k over the unroll and its remainder:
+      value operations in the loop block's setup, the counters virtual
+      registers.
+   3. **Setup values.** The offset registry's values - strides, their
+      multiples, vector lengths in bytes and elements (stride_reg,
+      offset_value, vl_elements, the preallocated recipes) - value operations
+      at the point the emitter places them now (region starts, the
+      dispatch's setup), spelled by the speller (shift-adds, Zba).
+   4. **The dispatch.** Its predicates - C's unit stride, beta 0 or 1, alpha
+      1 - value operations computed once, the cases a decision tree of
+      branches on them (a case's try now re-tests from scratch).
+   5. **Index vectors and masks.** start_indexes' index vectors, the tail
+      masks: setup operations of their blocks.
+   Each step: the kernels' instruction counts no higher, the golden kernels
+   re-recorded where they change, the full suite and K3's kernels under qemu.
 
 7. **Data offsets, resolved late** (later): carry only what each data
    register must hold at each point - the data's offsets - and resolve them
