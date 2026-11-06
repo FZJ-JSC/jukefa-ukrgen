@@ -171,7 +171,8 @@ in the IR, in order.
       own address, its form the one that address allows.
    5. **The scheduler in a loop's sections**: within the registers the
       enclosing section leaves, the copies' tiles renamed into them - no
-      register sets rotated, nothing freed by hand.
+      register sets rotated, nothing freed by hand (the allocation's two
+      passes: docs/REGISTER_ALLOCATION.md, its analysis' live ranges).
    6. **The emitter's `block` for nested blocks**: the count, the index (SME's
       w12-w15 a register class; the slice operand its index and the copy's
       immediate); `slices` and `loop` gone. The loops over slices lowered
@@ -202,7 +203,9 @@ in the IR, in order.
          emitter's copy and add where not - the accesses at it, and one step
          a register in the body: the emitter allocates and emits, nothing
          chosen at emission. The columns' registers freed where the loop ends
-         (the emitter's, until address liveness frees them where they die);
+         (the emitter's, until address liveness frees them where they die -
+         docs/REGISTER_ALLOCATION.md step 6, the address registers in the
+         allocation's two passes);
          the plan's own register the home column's, as it was. The frame goes
          before the setups: its index among the registers the slice operands
          allow (w12-w15) is taken first, or a column finds them. The SME and

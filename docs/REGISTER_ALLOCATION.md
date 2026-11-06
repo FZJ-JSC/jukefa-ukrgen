@@ -1,8 +1,8 @@
-# Register allocation: one pass, after scheduling
+# Register allocation: two passes, after scheduling
 
 ## Where it is
 
-Three places decide registers, and they have to agree:
+Four places decide registers, and they have to agree:
 
 - **The model** fits each loop input's ring (`fit_registers`: a register per
   tile or rings shared, `--COMP-data-regs`) and assigns tiles to ring registers
@@ -19,6 +19,15 @@ Three places decide registers, and they have to agree:
   edge (0325); `slices()` by its own register sets and `dead_after`. Index
   vectors (`index_vector`) and helpers' scratch registers take registers from
   the same tracker.
+- **The address registers** (the general file): the model numbers a component's
+  (`--COMP-addr-regs`, its pattern), the specializer adds more with `new_reg`
+  - stride pointers, a loop over slices' columns and walkers, a scratch
+  address - and the emitter gives each a general register when it is first
+  named (`aregs`, lazily) and frees it by hand: a loop over slices' pointers
+  at its end (`release_pointers`; the columns' after, ADDRESSING_PLAN 6.6.4),
+  a block's at its end (`release_aregs`). No liveness and no MRU: a column's
+  register is the allocation order's accident, and holding one to a block's
+  end cost three packm kernels their build.
 
 Every disagreement so far came from two of these: the gathers' index vectors
 the scheduler didn't count (0292), a slice loop's body budgeted 28 vector
@@ -40,6 +49,22 @@ dependencies by the names.
   scratch registers - are flexible within a budget or a max-reg limit: a
   value takes a new virtual register (a name of its own) or reuses a dead
   one.
+- **Address registers are virtual too.** A component's numbered address
+  register, a stride pointer, a loop over slices' column or walker, a scratch
+  address, a counter, a mask, an index vector: names, not registers. The fixed
+  ones stay as given - the base parameters' (the calling convention's
+  registers), a loop's carried pointers, SME's slice index (w12-w15), a
+  counter an ISA requires in a named one - the flexible ones renamed and
+  allocated as any other value: a column alive from its setup to the end of
+  its loop, a walker, a scratch address, an offset's register. Least recent
+  use among the file's registers left (`--max-gregs`, the callee-saved ones
+  by the tracker's priority).
+- **The allocation is static, the operation keeps its component.** The
+  allocation pass binds each virtual register - of either kind - to a physical
+  one once; the emitter looks the number up. An address register's instruction
+  is formed from the operation's own component and register type: a
+  half-precision A's address register, an FP32 C's and a tile's index each
+  their element size and file - never from a value found while emitting.
 - **The order**: `cluster` (chains together: the order of least pressure) ->
   **rename** (each flexible value onto a dead register or a new one within
   its budget - the reuse a write-after-read or write-after-write dependency
@@ -53,8 +78,9 @@ dependencies by the names.
   destructive forms), files from the tracker's pools (SVE's FP registers the
   low parts of its vector registers); the fixed allocations - then an
   allocation pass: the most constrained first, the fixed ones as given, the
-  rest by least recent use, giving the scheduler room to load ahead) ->
-  **emit** (registers looked up).
+  rest by least recent use, giving the scheduler room to load ahead; the
+  address registers in the same two passes, their live ranges the IR's) ->
+  **emit** (registers looked up, nothing taken).
 - **One liveness**: the analysis pass's - the renamer, the allocation and
   any check use it, nothing else computes its own.
 - **A loop over slices' index register**: each virtual tile operation its
@@ -72,6 +98,7 @@ dependencies by the names.
 | scheduler: `_register_state`, `_across`, `live_out` | values live while it reorders | gone: the renaming bounds the pressure |
 | emitter: `straight()`'s releases, 0325's loop bodies, `peak_registers` | when a physical register is free; a loop body's peak | gone: the allocation pass |
 | `slices()`: local values, `dead_after`, register sets; `expand_copies`' local values | a slice loop's temporaries | gone: flexible values renamed |
+| emitter: `aregs` taking a general register when first named, `release_aregs` per block, `release_pointers`, the columns' release after a loop, `index_vector`'s reservation | which general register a pointer, a column, a walker, an index vector has, and when it is free | the analysis pass' live ranges, the allocation pass' choice |
 | `copyprop`'s events | whether a copy's source survives its uses | the analysis pass' |
 
 The 33 of SMESVE's 2x4x4 (0329's fallback) is what this removes: the scheduler
@@ -111,13 +138,26 @@ to break.
    slices, writes them whole - `copyprop_tiles` sees no read of a tile so
    built, `--schedule-partials-independently` covers slices. Open: register
    groups not renamed; the k loop's rings.
-4. **The allocation pass** replacing the emitter's: fixed as given, the most
-   constrained first, least recent use; the emitter looks registers up.
+4. **The allocation pass** replacing the emitter's, for the data registers:
+   fixed as given, the most constrained first, least recent use; the emitter
+   looks registers up. The address registers' the same pass, step 6.
 5. **The slice index register** per virtual tile operation, merged by fusion
    on the same value range, allocated within w12-w15.
-6. **The rest into the IR** - address registers' fixed allocations, walkers,
-   counters, masks, index vectors, scratch, offset registers (and `auto`'s
-   second run) - then spilling.
+6. **The address registers, walkers, counters, masks, index vectors, offset
+   registers - the same two passes.** The analysis': live ranges over the IR -
+   a loop's carried pointers through its back edge, a column from its setup to
+   the end of its loop, a walker's, a scratch address's, a mask's and an index
+   vector's region, an offset's register, each loop's counter - the fixed ones
+   as given (the base parameters' and the calling convention's, SME's slice
+   index within w12-w15, a counter the ISA requires in a named register), each
+   other's constraints from the instructions taking it (asmgen's
+   operand_values). The allocation's: the fixed ones as given, the most
+   constrained next, the rest by least recent use among the file's registers
+   (`--max-gregs`, the callee-saved priority), a column or a walker dead where
+   its loop ends. Then the emitter's `aregs` on first naming, its per-block
+   `release_aregs`, `release_pointers` and the columns' release go: it looks
+   the number up and forms the instruction from the operation's component.
+   Then spilling.
 
 Each step's check: the golden kernels, every shipped configuration's sizes
 (tools/allcfg.py), the qemu-run tests; from step 3 on, instruction counts and
