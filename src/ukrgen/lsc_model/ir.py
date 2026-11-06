@@ -43,6 +43,58 @@ class addr_ref:
     offset : int
 
 
+def render_ops(ops, db: offset_db, indent: str = "") -> list[str]:
+    """
+    Operations as lines, a loop as the operations it runs - loops among them
+    """
+    from ..models.load_store_operations import lsc_loop
+    out = []
+    for op in ops:
+        if isinstance(op, lsc_loop):
+            out += render_loop(op, db, indent)
+        else:
+            out.append(f"{indent}{render_op(op, db)}")
+    return out
+
+
+def render_loop(loop, db: offset_db, indent: str = "") -> list[str]:
+    """
+    A loop as its operations: what it runs over and how many (a vector length
+    of slices, or a count known at run time), how many at a time, its walks -
+    the registers they walk and by what - and a walk plan's registers, where
+    each access of one stands from its home; then the operations of one
+    iteration
+    """
+    info = loop.info or {}
+    comp = info.get("component") or "-"
+    if "slices" == info.get("kind"):
+        what = f"{comp}'s {'columns' if 'col' == info.get('axis') else 'rows'}"
+    else:
+        what = f"{comp}'s elements"
+    count = info.get("count")
+    head = (f"{indent}loop over {what}, {count} of them at run time" if count
+            else f"{indent}loop over {what}, the vector length of them")
+    if loop.subtiling.unroll > 1:
+        head += f", unrolled {loop.subtiling.unroll}x"
+    if info.get("frame"):
+        head += ", its count and index the setup's"
+    out = [head]
+    walks = {}
+    for w in loop.walks:
+        key = (w.anchor.indices[0].component, w.anchor.indices[0].indices[0], str(w.step))
+        walks[key] = walks.get(key, 0) + 1
+    if walks:
+        out.append(f"{indent}  walks: " + "; ".join(
+            f"a{reg} of {wcomp} by {step}" + (f", {n} of them" if n > 1 else "")
+            for (wcomp, reg, step), n in walks.items()))
+    for (c, reg), p in (loop.walk_plan or {}).items():
+        stands = ", ".join(str(v) for v in p["walks"].values())
+        out.append(f"{indent}  a{reg} of {c}: home {p['home']}, its accesses at {stands}, "
+                   f"stepping {p['step']}")
+    out += render_ops(loop.block, db, indent + "  ")
+    return out
+
+
 def render_op(op, db: offset_db) -> str:
     """
     One LSC operation as built by the model, with addresses from the offset
@@ -224,7 +276,7 @@ class ir_program:
                 ops = getattr(block, section)
                 if ops:
                     lines.append(f"{indent}  {section}:")
-                    lines.extend(f"{indent}    {render_op(op, db)}" for op in ops)
+                    lines.extend(render_ops(ops, db, f"{indent}    "))
             for comp, oid in block.advance.items():
                 lines.append(f"{indent}  advance {comp} by {db[oid]} per iteration")
 
