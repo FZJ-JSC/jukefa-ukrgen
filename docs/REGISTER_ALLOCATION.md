@@ -151,13 +151,16 @@ to break.
    as given (the base parameters' and the calling convention's, SME's slice
    index within w12-w15, a counter the ISA requires in a named register), each
    other's constraints from the instructions taking it (asmgen's
-   operand_values). The allocation's: the fixed ones as given, the most
-   constrained next, the rest by least recent use among the file's registers
-   (`--max-gregs`, the callee-saved priority), a column or a walker dead where
-   its loop ends. Then the emitter's `aregs` on first naming, its per-block
-   `release_aregs`, `release_pointers` and the columns' release go: it looks
-   the number up and forms the instruction from the operation's component.
-   Then spilling.
+   operand_values), and every constrained register's priority lowered - the
+   slice index's, a governing predicate's, an indexed operand's - so the
+   allocation takes it last for anything else (the emitter's
+   `_required_priorities`, the analysis'). The allocation's: the fixed ones as
+   given, the most constrained next, the rest by least recent use among the
+   file's registers (`--max-gregs`, the callee-saved priority), a column or a
+   walker dead where its loop ends. Then the emitter's `aregs` on first
+   naming, its per-block `release_aregs`, `release_pointers` and the columns'
+   release go: it looks the number up and forms the instruction from the
+   operation's component. Then spilling.
 
 Each step's check: the golden kernels, every shipped configuration's sizes
 (tools/allcfg.py), the qemu-run tests; from step 3 on, instruction counts and

@@ -792,10 +792,18 @@ class signature_specializer:
         there whatever iteration it is. The plan is the emitter's too
         """
         if op.info.get("count"):
-            # a run-time count (a masked tile's rows): its walks copied into
-            # registers of their own (the emitter's), its addresses not moving
-            op.info["slice_walkers"] = slice_walkers(op, self.program, self.ctx.component_dts)
-            return [op]
+            if "slice_walks" in op.info:
+                return [op]
+            # a run-time count (a masked tile's rows): its walks' pointers
+            # registers of the loop's own, set up before it and stepped in the
+            # body - the emitter allocating and emitting them (slice_walks)
+            walks = slice_walkers(op, self.program, self.ctx.component_dts)
+            setups, op.block, regs = self.slice_walks(op, walks)
+            for o in setups:
+                o.properties["slice_setup"] = True
+            op.info["slice_walks"] = regs
+            op.refresh()
+            return setups + [op]
         db = self.program.offsets
         order = []
         for b in op.block:
@@ -860,6 +868,48 @@ class signature_specializer:
         # it, after it
         op.refresh()
         return inserted + [op] + back
+
+    def slice_walks(self, op, walks: list) -> tuple[list, list, list]:
+        """
+        A loop over slices of a count known at run time with its walks'
+        pointers: each walk a register of the loop's own - the walks from the
+        same element by the same step one - set up before it from the element
+        its access starts at, the accesses at it, and one step a walker in the
+        body by the walk's step (times the copies of an unrolled one). Registers
+        of the IR's: the emitter allocates and emits them
+        (docs/ADDRESSING_PLAN.md 6.6, walkers and columns)
+        :return: (the setup operations before the loop, the block, the
+                 walkers' registers - theirs to free after it)
+        """
+        scale = op.subtiling.unroll if op.info.get("unrolled") else 1
+        walkers, regs, setups = {}, [], []
+        for w in walks:
+            if w["start"] in walkers:
+                continue
+            reg = self.new_reg(w["comp"])
+            walkers[w["start"]] = reg
+            regs.append((w["comp"], reg))
+            delta = w["elements"] - self.positions[(w["comp"], w["reg"])]
+            # a walker at its access's own element too: the copy, that its
+            # register exists and holds what the access starts at
+            setups.append(lsc_addr_compute(w["comp"], w["reg"], reg, delta, scalar_tile))
+            self.positions[(w["comp"], reg)] = w["elements"]
+        out = []
+        for b in op.block:
+            if isinstance(b, (lsc_load, lsc_store)):
+                w = walks[int(b.properties.get("walk", 0))]
+                b.indices[0] = lsc_reg_index(w["comp"], [walkers[w["start"]]])
+            out.append(b)
+        stepped = set()
+        for i, w in enumerate(walks):
+            if w["start"] in stepped:
+                continue
+            stepped.add(w["start"])
+            step = sym._make({f: c * scale for f, c in dict(op.walks[i].step.terms).items()})
+            if any(dict(step.terms).values()):
+                reg = walkers[w["start"]]
+                out.append(lsc_addr_compute(w["comp"], reg, reg, step, scalar_tile))
+        return setups, out, regs
 
     def slice_registers(self, op, plan: dict, pointers: dict,
                         column_of: dict) -> tuple[list, list, list]:

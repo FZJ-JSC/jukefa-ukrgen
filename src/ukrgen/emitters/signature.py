@@ -453,7 +453,8 @@ class signature_emitter:
         # accesses at their registers, the moves emitted as the steps they are
         # - placed by the scheduler, not here. (A loop's columns may all be its
         # home's: the keys are, a list of registers may be empty.)
-        moved_in_ir = "slice_moves" in op.info or "slice_registers" in op.info
+        moved_in_ir = "slice_moves" in op.info or "slice_registers" in op.info \
+            or "slice_walks" in op.info
 
         # the plan's registers walk themselves: where each stands, as an offset
         # from its home at this iteration's first slice
@@ -516,11 +517,12 @@ class signature_emitter:
             return []
         walkers, deltas, steps, shared = [], [], {}, {}
         # the specializer's walkers (slice_walkers): which walks share a
-        # pointer, which a step register - allocated and set here
+        # pointer, which a step register - allocated and set here. With its
+        # walks' registers the IR's (slice_walks) none is left to do.
         planned = op.info.get("slice_walkers")
-        if planned is None and not plan:
+        if planned is None and not plan and not moved_in_ir:
             planned = slice_walkers(op, self.program, self.ctx.component_dts)
-        for w in ([] if plan else planned):
+        for w in ([] if plan or moved_in_ir else (planned or [])):
             wcomp, wreg, elements, terms, key, start = (w["comp"], w["reg"], w["elements"], w["terms"],
                                                         w["key"], w["start"])
             wdt = self.ctx.component_dts[wcomp]
@@ -678,21 +680,24 @@ class signature_emitter:
             for k in dead_after.get(pos, ()):
                 if k in self.phys:
                     self.release(k)
-        if plan and not moved_in_ir:
-            # an iteration takes unroll slices (its copies, explicit)
-            lines += step_on(unroll)
-        elif not plan:
-            for walker, delta in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values():
-                lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
+        if not moved_in_ir:
+            if plan:
+                # an iteration takes unroll slices (its copies, explicit)
+                lines += step_on(unroll)
+            else:
+                for walker, delta in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values():
+                    lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
         lines.append(asmops.add_imm(self.gen, reg=index, imm=unroll))
         lines.append(asmops.add_imm(self.gen, reg=counter, imm=-unroll))
         lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
         for r in [counter, index] + list(shared.values()) + list(steps.values()):
             self.rt.unuse_reg("greg", r.idx)
         release_pointers()
-        if op.info.get("slice_registers"):
-            # its columns' registers, dead after the loop
-            self.release_aregs({k for k in op.info["slice_registers"] if k in self.aregs})
+        if op.info.get("slice_registers") or op.info.get("slice_walks"):
+            # its columns' and walkers' registers, dead after the loop (the
+            # emitter's until the allocation frees them where they die)
+            freed = set(op.info.get("slice_registers") or ()) | set(op.info.get("slice_walks") or ())
+            self.release_aregs({k for k in freed if k in self.aregs})
         lines += settle()
         return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
                 if l.strip()]
