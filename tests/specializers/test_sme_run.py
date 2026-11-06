@@ -447,11 +447,34 @@ class test_slice_preload(unittest.TestCase):
             "unroll_loops-factor": "2", "unroll_loops-registers": "2",
             "unroll_loops-preload": "1"})
         code = ctx.emitted[0].instructions()
-        start = next(i for i, l in enumerate(code) if l.endswith("_slices:")
+        # the loop's label - a software-pipelined block's, ukrN_loop, as
+        # every one: its counter down by the iteration's slices first, then
+        # the body
+        start = next(i for i, l in enumerate(code) if l.endswith("_loop:")
                      and sum(x.startswith("mova") for x in code[i:i + 30]) >= 4)
         before = [l.split()[0] for l in code[start - 8:start]]
         self.assertGreaterEqual(before.count("mova"), 4)
-        self.assertEqual("fmul", code[start + 1].split()[0])
+        self.assertEqual("fmul", code[start + 2].split()[0])
+        self.assertTrue(any(l.endswith("_last:") for l in code))
+
+    def test_runs_moved(self):
+        # the same through the passes that put an iteration's steps in the IR
+        # and schedule the block (docs/ADDRESSING_PLAN.md 6.6, preloading in
+        # the loop's sections): the prologue's loads and the body's last ones
+        # as any operation, the index stepped once an iteration
+        from ukrgen.flow.stages.irmods import post_specialize_irmod_stage
+        from ukrgen.flow.stages.scheduling import schedule_stage
+        ctx, outs = run_gemm(self, GEMM, passes=[post_specialize_irmod_stage, schedule_stage], **{
+            "pre-specialize-irmods": ["fuse_slices", "forward_slices", "hoist_slices",
+                                      "unroll_loops", "hoist"],
+            "unroll_loops-factor": "2", "unroll_loops-registers": "2",
+            "unroll_loops-preload": "1"})
+        code = ctx.emitted[0].instructions()
+        start = next(i for i, l in enumerate(code) if l.endswith("_loop:")
+                     and sum(x.startswith("mova") for x in code[i:i + 30]) >= 4)
+        end = next(i for i, l in enumerate(code) if i > start and l.startswith("cbnz"))
+        self.assertGreaterEqual([l.split()[0] for l in code[start - 8:start]].count("mova"), 4)
+        self.assertEqual(1, sum(l.startswith("add x12,x12,#") for l in code[start:end]))
         self.assertTrue(any(l.endswith("_last:") for l in code))
 
 

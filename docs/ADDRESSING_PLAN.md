@@ -226,12 +226,28 @@ in the IR, in order.
          (`list_scheduler.dependencies` with `loop` set - the operations
          twice, an edge carried where its reader is in the second copy), so a
          branch in the IR would be a second place to keep the same order. What
-         the emitter's `slices` still holds - the frame's registers, the slice
-         operands' index and immediate, the temporaries' freeing by last use,
-         the preloaded copies - goes with 7 and 6.
-      6. *Preloading in the loop's sections*: the pipelined copies' loads in
-         the prologue and at the body's end, the last iteration without - one
-         code with the mm STO's preload shift (below).
+         the emitter's `slices` still holds - the frame's counter and index,
+         the index and immediate every slice operand reads, the registers'
+         release where the loop ends - stays until the loop's body is an
+         `ir_block` (the loop-building stage above) and the allocation frees
+         the registers where they die (docs/REGISTER_ALLOCATION.md step 6).
+      6. *Preloading in the loop's sections* - done on the emitter's side. A
+         pipelined loop over slices is a block counted like every other
+         (`loop_code`): its prologue the first copies' loads, its body the
+         rest with the next iteration's loads at its end, its last iteration
+         the body without them - sections of the same code the mm STO's
+         preload shift feeds, not a control of its own. The counter is the
+         block's step down in the body and the prologue's off it
+         (emitted_block.prologue_step), the frame's index the advance; the
+         steps of an iteration being the IR's (4), the prologue's loads and
+         the body's last ones come with them - test_slice_preload's
+         scheduled run, right under qemu at both vector lengths. What is not
+         the mm STO's yet: the pipelined loads are the same operations run
+         again after the advance, not clones shifted along the index, and
+         which copies may be pipelined is still preload_depth's rule of
+         register sets - exact once the renamer knows the preloaded values'
+         names for values not to reuse. No shipped configuration preloads
+         (unroll_loops-preload is 0), so the golden kernels are unchanged.
       7. *The renamer in its body* - done. The scheduler renames a loop's own
          temporaries within the registers its section leaves
          (lsc_model.rename, rename_temporaries: a value keeps its own name

@@ -608,6 +608,10 @@ class signature_emitter:
                     out += self._emit_op(b)
             return out
         def advance():
+            if moved_in_ir:
+                # the iteration's address steps in the IR (slice_moves,
+                # slice_walks): the frame's index the emitter's
+                return [asmops.add_imm(self.gen, reg=index, imm=unroll)]
             if plan:
                 out = step_on(unroll)
             else:
@@ -620,23 +624,18 @@ class signature_emitter:
                 if preload else mem(op.block)
             placed, end = slice_placements(order, plan, walk_of)
         if preload:
-            loop = f"ukr{next(self.labels)}_slices"
-            lines.append(self.gen.label(label=loop))
+            # software pipelined as any block is (loop_code): the first
+            # copies' loads in the prologue, the next iteration's at the end
+            # of the body, the last iteration without them
             first = [b for b in op.block if early(b)]
             rest = [b for b in op.block if not early(b)]
-            last = f"{loop}_last"
-            # the label emitted above starts the steady state; the first
-            # loads go before it, the count is the slices after the last group
-            label_line = lines.pop()
-            lines += emit_ops(first)
-            lines.append(asmops.add_imm(self.gen, reg=counter, imm=-unroll))
-            lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.EZ, label=last))
-            lines.append(label_line)
-            lines += emit_ops(rest) + advance() + emit_ops(first)
-            lines.append(asmops.add_imm(self.gen, reg=counter, imm=-unroll))
-            lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
-            lines.append(self.gen.label(label=last))
-            lines += emit_ops(rest)
+            lines += self.loop_code(emitted_block(
+                name=f"{comp} slices", loop_index="slices",
+                sections={"prologue": emit_ops(first),
+                          "body": emit_ops(rest) + advance() + emit_ops(first),
+                          "epilogue": emit_ops(rest)},
+                counters=(counter, None), step=unroll, prologue_step=unroll,
+                label="slices"))
             for k in local:
                 if k in self.phys:
                     self.release(k)
@@ -2189,8 +2188,9 @@ class signature_emitter:
         code.extend(sec.get("init", []))
         code.extend(lines(gen.cb(reg1=n, reg2=None, cmp=ez, label=done)))
         code.extend(sec.get("prologue", []))
-        code.extend(lines(asmops.add_imm(gen, reg=n, imm=-1)))
-        counted(n, f"ukr{tag}_loop", sec.get("body", []) + block.advance, f"ukr{tag}_last")
+        code.extend(lines(asmops.add_imm(gen, reg=n, imm=-block.prologue_step)))
+        counted(n, f"ukr{tag}_loop", sec.get("body", []) + block.advance, f"ukr{tag}_last",
+                step=block.step)
         code.extend(sec.get("epilogue", []) + block.advance)
         code.extend(lines(gen.label(label=done)))
         if sec.get("tail") and left is not None:
