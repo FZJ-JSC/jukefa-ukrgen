@@ -836,11 +836,49 @@ class signature_specializer:
             self.positions[(comp, reg)] = p["home"]
         op.walk_plan = plan
         # its access columns planned here (the emitter allocates and emits)
-        op.info["slice_columns"] = slice_columns(op, plan, self.loop_gregs) if plan else None
+        columns, pointers, column_of = slice_columns(op, plan, self.loop_gregs) if plan else ({}, {}, {})
+        op.info["slice_columns"] = (columns, pointers, column_of) if plan else None
+        if plan and not pointers and not op.info.get("preload") and not op.info.get("slice_moves"):
+            # no pointer for its access columns: the iteration's moves in the
+            # IR - spoken for, spelled and placed like any other step
+            op.block = self.slice_moves(op, plan)
+            op.info["slice_moves"] = True
         # it moves them: the scheduler keeps what addresses through them after
         # it, after it
         op.refresh()
         return inserted + [op] + back
+
+    def slice_moves(self, op, plan: dict) -> list:
+        """
+        A loop over slices' block with the moves of one iteration in it: each
+        access at its plan register, moved there before it - the vector
+        lengths a signature takes as an immediate recorded with the access
+        (voffset) - and after the last, every register's step on to the next
+        iteration's home. Address computations of the IR's: the speller spells
+        them into their instructions, the scheduler places them among the
+        accesses (docs/ADDRESSING_PLAN.md 6.6, an iteration's address moves)
+        :return: the block, the moves among its operations
+        """
+        walk_of = {w: key for key, p in plan.items() for w in p["walks"]}
+        accesses = [b for b in op.block if isinstance(b, (lsc_load, lsc_store))]
+        placed, end = slice_placements(accesses, plan, walk_of)
+        out = []
+        for b in op.block:
+            if isinstance(b, (lsc_load, lsc_store)):
+                key, move, vectors = placed[id(b)]
+                if move is not None and any(dict(move.terms).values()):
+                    out.append(lsc_addr_compute(key[0], key[1], key[1], move, scalar_tile))
+                if vectors is not None:
+                    b.add_property("voffset", vectors)
+            out.append(b)
+        for (comp, reg), p in plan.items():
+            # an iteration takes unroll slices: the step on by them all, less
+            # where the last access left the register
+            step = sym._make({f: c * op.subtiling.unroll for f, c in dict(p["step"].terms).items()})
+            net = step - end[(comp, reg)]
+            if any(dict(net.terms).values()):
+                out.append(lsc_addr_compute(comp, reg, reg, net, scalar_tile))
+        return out
 
     def forms(self, op) -> None:
         """

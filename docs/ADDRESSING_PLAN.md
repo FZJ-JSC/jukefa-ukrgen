@@ -186,13 +186,15 @@ in the IR, in order.
          register every slice operand takes) a value operation before it
          (slice_frame), the loop reading both, scheduled as the operations
          before the loop.
-      3. *An iteration's address moves in the IR* - next. The moves placing
+      3. *An iteration's address moves in the IR* - done. The moves placing
          each access at its plan register (slice_placements) and the
-         iteration's step on (step_on) address computations of the loop's
-         block, the last on a register carrying the advance - as the k loop's
-         advances do - the vector lengths an access takes as an immediate
-         recorded with it. The emitter emits them, not their spelling: the
-         scheduler places them, addrmerge and the speller's merge see them.
+         iteration's step on address computations of the loop's block, the
+         vector lengths an access takes as an immediate recorded with it
+         (voffset). Where a column has a pointer of its own none is needed
+         (4); the emitter emits them (`--loop-gregs` leaving no pointer:
+         the moves, where they were the emitter's). The scheduler places
+         them within the block - test_slice_pointers' unrolled loop through
+         the spelling and the scheduling, right under qemu.
       4. *Walkers and columns, registers of the loop's own*: a walk's pointer
          (a loop of a count known at run time) and an access column
          (--loop-gregs) a register of the IR's own (new_reg), set up before
@@ -212,7 +214,10 @@ in the IR, in order.
       sizes, their microtiles, the split ones, the packing transposes - no
       kernel with a loop over slices among the records before), so every
       step's reordering shows; the runs under qemu
-      (tests/specializers/test_sme_run.py) say it right.
+      (tests/specializers/test_sme_run.py) say it right. The tests' stages
+      are the specializer's to the emitter's, the spelling and the scheduling
+      left out: a test that needs them asks for them
+      (test_unroll4_scheduled does).
    7. **General first**: the VLA element loops (RVV's `vla_lanes`,
       tests/specializers/test_vla_repeat.py under qemu at two VLENs; SVE's
       insr) before SME's slices (tests/stages/test_sme.py, the SME and SMESVE

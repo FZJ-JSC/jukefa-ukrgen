@@ -448,6 +448,10 @@ class signature_emitter:
                                        f"without its copies in the block (expand_slice_copies)")
         scale = op.subtiling.unroll if explicit else 1
         plan = op.walk_plan
+        # the iteration's moves in the IR already (specializers/signature.py
+        # slice_moves): the accesses at the plan's registers, the moves emitted
+        # as the steps they are - placed by the scheduler, not here
+        moved_in_ir = bool(op.info.get("slice_moves"))
 
         # the plan's registers walk themselves: where each stands, as an offset
         # from its home at this iteration's first slice
@@ -642,7 +646,11 @@ class signature_emitter:
                 b.properties.update(slice_reg=index, slice_imm=b.properties.get("copy", 0))
             if isinstance(b, (lsc_load, lsc_store)):
                 vectors = None
-                if plan:
+                if plan and moved_in_ir:
+                    # at its plan register, where the IR's move left it
+                    walker = self.aregs[walk_of[b.properties.get("walk", 0)]]
+                    vectors = int(b.properties["voffset"]) if "voffset" in b.properties else None
+                elif plan:
                     moves, walker, vectors = place(b)
                     lines += moves
                 else:
@@ -662,10 +670,10 @@ class signature_emitter:
             for k in dead_after.get(pos, ()):
                 if k in self.phys:
                     self.release(k)
-        if plan:
+        if plan and not moved_in_ir:
             # an iteration takes unroll slices (its copies, explicit)
             lines += step_on(unroll)
-        else:
+        elif not plan:
             for walker, delta in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values():
                 lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
         lines.append(asmops.add_imm(self.gen, reg=index, imm=unroll))
