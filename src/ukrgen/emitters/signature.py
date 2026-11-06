@@ -2373,10 +2373,15 @@ class signature_emitter:
                 # a stride its parameter's register - nothing to compute, and
                 # touching it here would keep a parameter the dispatch defers
                 return []
+            if "offset_value" == value[0] and (str(value[1]), value[2]) not in self.offset_plan:
+                # an offset the plan gave up (or never took): its steps spell
+                # their fallbacks
+                return []
             saved, started = self.late_setup, self.regions_started
             self.late_setup, self.regions_started = [], False
             try:
-                self.values[op.write_names[0]] = self.offsets.value_reg(value)
+                self.values[op.write_names[0]] = self.offsets.offset_value(value[1], value[2]) \
+                    if "offset_value" == value[0] else self.offsets.value_reg(value)
                 code = self.late_setup
             finally:
                 self.late_setup, self.regions_started = saved, started

@@ -506,7 +506,9 @@ def step_values(step: tuple) -> list:
     if "from_stride" == kind:
         return [("stride", step[1])]
     if "offset" == kind:
-        return [v for sub in step[3] for v in step_values(sub)]
+        # its offset's register (an option: the emitter's, by rank) and its
+        # fallback's values
+        return [("offset_value", step[2], step[1])] + [v for sub in step[3] for v in step_values(sub)]
     return []
 
 
@@ -526,15 +528,23 @@ def value_setup(program) -> int:
         for op in ops or []:
             if isinstance(op, lsc_loop):
                 visit(op.block)
-            step = (op.properties or {}).get("step")
-            if step is not None:
-                for value in step_values(step):
-                    values.setdefault(value_name(value), value)
+            for prop in ("step", "increment_step"):
+                step = (op.properties or {}).get(prop)
+                if step is not None:
+                    for value in step_values(step):
+                        values.setdefault(value_name(value), value)
     for block in program.blocks + [b for case in program.cases for b in case.blocks]:
         for section in SECTIONS:
             visit(getattr(block, section))
     if values:
-        ops = [lsc_value_op("value", writes=[name], reads=[], value=values[name]) for name in sorted(values)]
+        # the offsets after the others, the most valuable first (the plan's
+        # rank): registers to them in that order while registers last
+        rank = dict(program.offset_plan or {})
+        is_offset = lambda name: "offset_value" == values[name][0]
+        order = sorted(n for n in values if not is_offset(n)) + sorted(
+            (n for n in values if is_offset(n)),
+            key=lambda n: (-rank.get((str(values[n][1]), values[n][2]), 0), n))
+        ops = [lsc_value_op("value", writes=[name], reads=[], value=values[name]) for name in order]
         program.blocks = [ir_block(name=f"{START_BLOCK}values", body=ops)] + list(program.blocks)
     return len(values)
 
