@@ -41,6 +41,7 @@ from ..models.lsc.index import lsc_reg_index
 
 from .allocation import register_allocator
 from ..lsc_model import liveness
+from ..lsc_model.rename import rename_temporaries
 from ..specializers.signature import (
     specialization_error, _sigs, _masked, _all_true, _usable, slice_columns, slice_walkers, slice_placements)
 
@@ -339,17 +340,27 @@ class signature_emitter:
 
     def slices(self, op) -> list[str]:
         """
-        A loop over slices, its body as scheduled - its temporaries renamed
-        within the registers there are for them (lsc_model.rename), no order
-        of the scheduler's holds more; the values live at once in it
-        (peak_registers) checked against the room there is all the same
+        A loop over slices, its body as scheduled - its own temporaries under as
+        many names as there are registers for them (lsc_model.rename): the
+        scheduler's, within the section's budget, or here where nothing
+        scheduled the block - a name keeps its register the iteration long, so
+        nothing is freed by hand and no order the scheduler gives holds more of
+        them than there are registers
         """
-        peak, room = self.peak_registers(op.block, "vreg"), self.room("vreg")
-        if peak > room:
-            raise specialization_error(
-                f"{op.info.get('component')}: {peak} values live at once in a loop over slices, "
-                f"{room} registers of their file there - fewer data registers or a smaller "
-                f"microtile fit")
+        if not op.info.get("renamed"):
+            # its own temporaries under as many names as the room leaves once
+            # what the block reads first holds its registers - the peak after
+            # that no more than the room there is
+            room = self.room("vreg")
+            held = {k for k in liveness.exposed(op.block) if rgt.VEC == k[2]}
+            if rename_temporaries(op.block, max(1, room - len(held))):
+                op.refresh()
+            peak = self.peak_registers(op.block, "vreg")
+            if peak > room:
+                raise specialization_error(
+                    f"{op.info.get('component')}: {peak} values live at once in a loop over slices, "
+                    f"{room} registers of their file there - fewer data registers or a smaller "
+                    f"microtile fit")
         return self._slices(op)
 
     #: a value's register type, the tracker's tag for it
@@ -562,23 +573,8 @@ class signature_emitter:
             lines += self.add_bytes(ptr, self.bytes_of(key[0], column), key[0])
             pointer_regs[(key, name)] = ptr
         unroll = op.subtiling.unroll
-        def keys(b, positions):
-            types = b.rtypes or []
-            return [(b.indices[p].component, b.indices[p].indices[0], types[p] if p < len(types) else None)
-                    for p in positions]
         # the block's own vector temporaries: written before read (lsc_model.liveness)
         local = liveness.local(op.block)
-        # a temporary free again after its last use in the iteration - the
-        # next tile's slice takes its register (cluster and the scheduler's
-        # budget ordered the tiles' chains one by one; copies' own names)
-        dead_after = {}
-        last_use = {}
-        for pos, b in enumerate(op.block):
-            for k in keys(b, list(b.reads) + list(b.writes)):
-                if k in local:
-                    last_use[k] = pos
-        for k, pos in last_use.items():
-            dead_after.setdefault(pos, []).append(k)
         # software pipelined (preload): the first copy's loads - memory loads,
         # slices moved out of tiles - before the loop and, for the next
         # iteration, at the end of each; the last iteration without them
@@ -641,6 +637,9 @@ class signature_emitter:
             lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
             lines.append(self.gen.label(label=last))
             lines += emit_ops(rest)
+            for k in local:
+                if k in self.phys:
+                    self.release(k)
             for r in [counter, index] + list(shared.values()) + list(steps.values()):
                 self.rt.unuse_reg("greg", r.idx)
             release_pointers()
@@ -681,9 +680,6 @@ class signature_emitter:
                 body.append(self.move(b))
             else:
                 body += self._emit_op(b)
-            for k in dead_after.get(pos, ()):
-                if k in self.phys:
-                    self.release(k)
         if not moved_in_ir:
             if plan:
                 # an iteration takes unroll slices (its copies, explicit)
@@ -697,6 +693,13 @@ class signature_emitter:
         lines += self.loop_code(emitted_block(
             name=f"{comp} slices", loop_index="slices", sections={"body": body},
             counters=(counter, None), step=unroll, guarded=False, plain=True, label="slices"))
+        # the body's temporaries dead where the loop ends: a name held its
+        # register the iteration long (nothing freed by hand within it); the
+        # allocation's liveness frees them where they die
+        # (docs/REGISTER_ALLOCATION.md step 6)
+        for k in local:
+            if k in self.phys:
+                self.release(k)
         for r in [counter, index] + list(shared.values()) + list(steps.values()):
             self.rt.unuse_reg("greg", r.idx)
         release_pointers()

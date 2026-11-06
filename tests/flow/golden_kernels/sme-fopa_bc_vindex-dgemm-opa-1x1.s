@@ -145,9 +145,9 @@ add x1,x1,#-2
 mova z1.d,p0/m,za0v.d[w12,0]
 mova z2.d,p0/m,za0v.d[w12,1]
 fmul z3.d,z1.d,z0.d
-fmul z1.d,z2.d,z0.d
+fmul z4.d,z2.d,z0.d
 st1d {z3.d}, p0, [x0]
-st1d {z1.d}, p0, [x2]
+st1d {z4.d}, p0, [x2]
 add x0,x0,x6, LSL #1
 add x2,x2,x6, LSL #1
 add x12,x12,#2
@@ -218,12 +218,12 @@ mova z1.d,p0/m,za0v.d[w12,0]
 ld1d {z2.d}, p0/z, [x0]
 fmla z1.d,p0/m,z2.d,z0.d
 mova za0v.d[w12,0],p0/m,z1.d
-mova z2.d,p0/m,za0v.d[w12,1]
-ld1d {z3.d}, p0/z, [x2]
-fmla z2.d,p0/m,z3.d,z0.d
+mova z3.d,p0/m,za0v.d[w12,1]
+ld1d {z4.d}, p0/z, [x2]
+fmla z3.d,p0/m,z4.d,z0.d
 st1d {z1.d}, p0, [x3]
-st1d {z2.d}, p0, [x9]
-mova za0v.d[w12,1],p0/m,z2.d
+st1d {z3.d}, p0, [x9]
+mova za0v.d[w12,1],p0/m,z3.d
 add x0,x0,x6, LSL #1
 add x2,x2,x6, LSL #1
 add x3,x3,x6, LSL #1

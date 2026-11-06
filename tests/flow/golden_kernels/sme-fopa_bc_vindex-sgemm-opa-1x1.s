@@ -157,13 +157,13 @@ mova z2.s,p0/m,za0v.s[w12,1]
 mova z3.s,p0/m,za0v.s[w12,2]
 mova z4.s,p0/m,za0v.s[w12,3]
 fmul z5.s,z1.s,z0.s
-fmul z1.s,z2.s,z0.s
-fmul z2.s,z3.s,z0.s
-fmul z3.s,z4.s,z0.s
+fmul z6.s,z2.s,z0.s
+fmul z7.s,z3.s,z0.s
+fmul z16.s,z4.s,z0.s
 st1w {z5.s}, p0, [x0]
-st1w {z1.s}, p0, [x9]
-st1w {z2.s}, p0, [x10]
-st1w {z3.s}, p0, [x1]
+st1w {z6.s}, p0, [x9]
+st1w {z7.s}, p0, [x10]
+st1w {z16.s}, p0, [x1]
 add x0,x0,x6, LSL #2
 add x9,x9,x6, LSL #2
 add x10,x10,x6, LSL #2
@@ -278,22 +278,22 @@ mova z1.s,p0/m,za0v.s[w12,0]
 ld1w {z2.s}, p0/z, [x0]
 fmla z1.s,p0/m,z2.s,z0.s
 mova za0v.s[w12,0],p0/m,z1.s
-mova z2.s,p0/m,za0v.s[w12,1]
-ld1w {z3.s}, p0/z, [x10]
-fmla z2.s,p0/m,z3.s,z0.s
-mova za0v.s[w12,1],p0/m,z2.s
-mova z3.s,p0/m,za0v.s[w12,2]
-ld1w {z4.s}, p0/z, [x11]
+mova z3.s,p0/m,za0v.s[w12,1]
+ld1w {z4.s}, p0/z, [x10]
 fmla z3.s,p0/m,z4.s,z0.s
-mova za0v.s[w12,2],p0/m,z3.s
-mova z4.s,p0/m,za0v.s[w12,3]
-ld1w {z5.s}, p0/z, [x1]
-fmla z4.s,p0/m,z5.s,z0.s
+mova za0v.s[w12,1],p0/m,z3.s
+mova z5.s,p0/m,za0v.s[w12,2]
+ld1w {z6.s}, p0/z, [x11]
+fmla z5.s,p0/m,z6.s,z0.s
+mova za0v.s[w12,2],p0/m,z5.s
+mova z7.s,p0/m,za0v.s[w12,3]
+ld1w {z16.s}, p0/z, [x1]
+fmla z7.s,p0/m,z16.s,z0.s
 st1w {z1.s}, p0, [x3]
-st1w {z2.s}, p0, [x16]
-st1w {z3.s}, p0, [x17]
-st1w {z4.s}, p0, [x2]
-mova za0v.s[w12,3],p0/m,z4.s
+st1w {z3.s}, p0, [x16]
+st1w {z5.s}, p0, [x17]
+st1w {z7.s}, p0, [x2]
+mova za0v.s[w12,3],p0/m,z7.s
 add x0,x0,x6, LSL #2
 add x10,x10,x6, LSL #2
 add x11,x11,x6, LSL #2

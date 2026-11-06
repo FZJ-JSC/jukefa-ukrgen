@@ -286,6 +286,11 @@ class schedule_stage(stage):
                                     limit = max(1, inner_budget.registers["vreg"] - len(held))
                                     if rename_temporaries(op.block, limit):
                                         op.refresh()
+                                    # the body's names bound what's live at once:
+                                    # the emitter frees nothing by hand within it
+                                    # and checks no peak (ADDRESSING_PLAN 6.6.7)
+                                    op.info["renamed"] = bounded(
+                                        op.block, inner_budget.registers["vreg"], frozenset((rgt.VEC,)))
                                 inner, _ = scheduler(list(op.block), loop=True, budget=inner_budget,
                                                      groups=program.groups)
                                 op.block = inner

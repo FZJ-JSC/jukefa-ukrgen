@@ -232,9 +232,30 @@ in the IR, in order.
       6. *Preloading in the loop's sections*: the pipelined copies' loads in
          the prologue and at the body's end, the last iteration without - one
          code with the mm STO's preload shift (below).
-      7. *The renamer in its body*: the copies' temporaries virtual tiles of
-         it, renamed within the registers the enclosing section leaves - the
-         emitter's freeing after a last use and its peak check go.
+      7. *The renamer in its body* - done. The scheduler renames a loop's own
+         temporaries within the registers its section leaves
+         (lsc_model.rename, rename_temporaries: a value keeps its own name
+         while fewer than the limit are in use, else takes the one dead
+         longest of its data type - the reuse a dependency the order it gives
+         keeps), and marks the names bounded (op.info["renamed"]), so no
+         order it gives holds more of them than there are registers; where
+         nothing scheduled the block (the specializer's own stages) the
+         emitter does the same before emitting it, the values live at once
+         checked against the room only there. The temporaries' freeing after
+         a last use within the body is gone: a name keeps its register the
+         iteration long, and the loop's end frees them - the hand frees the
+         allocation's liveness deletes (docs/REGISTER_ALLOCATION.md step 6).
+
+      *Epilogue cases, a note.* With the sections in the IR the last iteration
+      is a section as the prologue is. The alternative weighed before the
+      loops were fused: each case its own kernel - kernels inside kernels -
+      the virtual operations fused rather than the loops, every expansion its
+      own code for its epilogue case. Merging the loops worked well
+      (`fuse_slices`) and made it less pressing; to be revalued when the
+      sections are built, for (no predication of the last iteration, each case
+      scheduled and allocated for itself, nothing carried across the loop's
+      edge) and against (a copy of the body a case in the code, a frame and a
+      register allocation a case, the dispatch between them).
 
       The SME and SMESVE kernels are recorded before the lowering starts
       (tests/flow/golden_kernels: each configuration's families at their first
