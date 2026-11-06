@@ -448,10 +448,12 @@ class signature_emitter:
                                        f"without its copies in the block (expand_slice_copies)")
         scale = op.subtiling.unroll if explicit else 1
         plan = op.walk_plan
-        # the iteration's moves in the IR already (specializers/signature.py
-        # slice_moves): the accesses at the plan's registers, the moves emitted
-        # as the steps they are - placed by the scheduler, not here
-        moved_in_ir = bool(op.info.get("slice_moves"))
+        # the iteration's address work in the IR already
+        # (specializers/signature.py slice_registers, slice_moves): the
+        # accesses at their registers, the moves emitted as the steps they are
+        # - placed by the scheduler, not here. (A loop's columns may all be its
+        # home's: the keys are, a list of registers may be empty.)
+        moved_in_ir = "slice_moves" in op.info or "slice_registers" in op.info
 
         # the plan's registers walk themselves: where each stands, as an offset
         # from its home at this iteration's first slice
@@ -467,6 +469,10 @@ class signature_emitter:
         if planned is None and plan:
             planned = slice_columns(op, plan, self.ctx.loop_gregs)
         columns, pointers, column_of = planned if planned else ({}, {}, {})
+        if moved_in_ir:
+            # its columns' registers are the IR's (slice_registers) - its
+            # accesses' moves the block's (slice_moves): nothing allocated here
+            pointers = {}
         def place(b):
             # the access where the register stands, or vector lengths past it
             # where a signature takes them ([x, #n, MUL VL]): no move; else the
@@ -646,9 +652,11 @@ class signature_emitter:
                 b.properties.update(slice_reg=index, slice_imm=b.properties.get("copy", 0))
             if isinstance(b, (lsc_load, lsc_store)):
                 vectors = None
-                if plan and moved_in_ir:
-                    # at its plan register, where the IR's move left it
-                    walker = self.aregs[walk_of[b.properties.get("walk", 0)]]
+                if moved_in_ir:
+                    # at its own register - the plan's, a column's - where the
+                    # IR's setup and its steps left it
+                    idx = b.indices[0]
+                    walker = self.aregs[(idx.component, idx.indices[0])]
                     vectors = int(b.properties["voffset"]) if "voffset" in b.properties else None
                 elif plan:
                     moves, walker, vectors = place(b)
@@ -682,6 +690,9 @@ class signature_emitter:
         for r in [counter, index] + list(shared.values()) + list(steps.values()):
             self.rt.unuse_reg("greg", r.idx)
         release_pointers()
+        if op.info.get("slice_registers"):
+            # its columns' registers, dead after the loop
+            self.release_aregs({k for k in op.info["slice_registers"] if k in self.aregs})
         lines += settle()
         return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
                 if l.strip()]

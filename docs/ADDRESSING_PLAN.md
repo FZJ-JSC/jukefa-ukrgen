@@ -195,10 +195,20 @@ in the IR, in order.
          the moves, where they were the emitter's). The scheduler places
          them within the block - test_slice_pointers' unrolled loop through
          the spelling and the scheduling, right under qemu.
-      4. *Walkers and columns, registers of the loop's own*: a walk's pointer
-         (a loop of a count known at run time) and an access column
-         (--loop-gregs) a register of the IR's own (new_reg), set up before
-         the loop, stepped in it - the emitter allocating, not choosing.
+      4. *Walkers and columns, registers of the loop's own* - the columns
+         done. An access column (--loop-gregs) a register of the IR's own
+         (new_reg), set up before the loop from the register it walks
+         (slice_registers) - one add where the ISA takes three operands, the
+         emitter's copy and add where not - the accesses at it, and one step
+         a register in the body: the emitter allocates and emits, nothing
+         chosen at emission. The columns' registers freed where the loop ends
+         (the emitter's, until address liveness frees them where they die);
+         the plan's own register the home column's, as it was. The frame goes
+         before the setups: its index among the registers the slice operands
+         allow (w12-w15) is taken first, or a column finds them. The SME and
+         SMESVE kernels 98 287 -> 95 359 instructions over their 12
+         configurations, none larger. A walk's pointer - a loop of a count
+         known at run time - is the emitter's still (slice_walkers).
       5. *The loop through `block`*: its control - the index's step, the
          counter's, the branch - as `loop_code` makes it; `slices` and
          `_slices` gone.

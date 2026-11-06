@@ -835,18 +835,68 @@ class signature_specializer:
                 back.append(lsc_addr_compute(comp, reg, reg, sym.const(0) - walk, scalar_tile))
             self.positions[(comp, reg)] = p["home"]
         op.walk_plan = plan
-        # its access columns planned here (the emitter allocates and emits)
+        # its access columns planned here - a register of the loop's own for
+        # each, the emitter allocating and emitting them
         columns, pointers, column_of = slice_columns(op, plan, self.loop_gregs) if plan else ({}, {}, {})
         op.info["slice_columns"] = (columns, pointers, column_of) if plan else None
-        if plan and not pointers and not op.info.get("preload") and not op.info.get("slice_moves"):
-            # no pointer for its access columns: the iteration's moves in the
-            # IR - spoken for, spelled and placed like any other step
-            op.block = self.slice_moves(op, plan)
-            op.info["slice_moves"] = True
+        if plan and not op.info.get("preload") \
+                and "slice_registers" not in op.info and "slice_moves" not in op.info:
+            if pointers:
+                # a register of the loop's own per access column, set up
+                # before it: the emitter allocates and emits, nothing chosen
+                # at emission. Their setup after the frame's - the slice index
+                # among the registers its operands allow (w12-w15), taken
+                # first - so the setups carry slice_setup (slice_frames)
+                setups, op.block, regs = self.slice_registers(op, plan, pointers, column_of)
+                for o in setups:
+                    o.properties["slice_setup"] = True
+                inserted += setups
+                op.info["slice_registers"] = regs
+            else:
+                # no pointer to be had: the iteration's moves in the IR
+                op.block = self.slice_moves(op, plan)
+                op.info["slice_moves"] = True
         # it moves them: the scheduler keeps what addresses through them after
         # it, after it
         op.refresh()
         return inserted + [op] + back
+
+    def slice_registers(self, op, plan: dict, pointers: dict,
+                        column_of: dict) -> tuple[list, list, list]:
+        """
+        A loop over slices with a register of its own per access column: each
+        access at its column's register - the home column's the register the
+        loop walks anyway - every other column's set up before the loop from
+        that register, and all of them stepped on in the body by an iteration.
+        Registers of the IR's: the emitter allocates and emits them, nothing
+        chosen at emission (docs/ADDRESSING_PLAN.md 6.6, walkers and columns)
+        :return: (the setup operations before the loop, the block, the
+                 columns' registers - theirs to free after it)
+        """
+        columns = {}
+        setups = []
+        for (key, name), column in pointers.items():
+            if column is None or not any(dict(column.terms).values()):
+                continue                # the home column: the register itself
+            reg = self.new_reg(key[0])
+            columns[(key, name)] = reg
+            setups.append(lsc_addr_compute(key[0], key[1], reg, column, scalar_tile))
+        out = []
+        for b in op.block:
+            if isinstance(b, (lsc_load, lsc_store)):
+                key, name, vectors = column_of[b.properties.get("walk", 0)]
+                if (key, name) in columns:
+                    b.indices[0] = lsc_reg_index(key[0], [columns[(key, name)]])
+                if vectors is not None:
+                    b.add_property("voffset", vectors)
+            out.append(b)
+        for (comp, reg), p in plan.items():
+            step = sym._make({f: c * op.subtiling.unroll for f, c in dict(p["step"].terms).items()})
+            if not any(dict(step.terms).values()):
+                continue
+            moved = [reg] + [r for (key, _), r in columns.items() if key == (comp, reg)]
+            out += [lsc_addr_compute(comp, r, r, step, scalar_tile) for r in moved]
+        return setups, out, sorted((key[0], reg) for (key, _), reg in columns.items())
 
     def slice_moves(self, op, plan: dict) -> list:
         """

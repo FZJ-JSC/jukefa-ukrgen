@@ -566,7 +566,18 @@ def slice_frames(program) -> int:
             for op in ops:
                 if isinstance(op, lsc_loop) and "slices" == op.info.get("kind") and not op.info.get("frame"):
                     names = [f"slices({id(op)}):count", f"slices({id(op)}):index"]
-                    out.append(lsc_value_op("slice_frame", writes=names, reads=[], loop=op))
+                    # before the loop's own setup (its columns' registers): the
+                    # frame's registers first, the slice index among those the
+                    # slice operands allow (SME's w12-w15) taken before any
+                    # column finds them
+                    at = len(out)
+                    while at and "slice_setup" in (out[at - 1].properties or {}):
+                        at -= 1
+                    run = out[at:]
+                    out.insert(at, lsc_value_op("slice_frame", writes=names, reads=[], loop=op))
+                    for setup in run:
+                        if "slice_setup" in (setup.properties or {}):
+                            del setup.properties["slice_setup"]
                     op.info["frame"] = names
                     op.refresh()
                     loops += 1

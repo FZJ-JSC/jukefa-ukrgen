@@ -171,6 +171,34 @@ class test_sme_gemm(unittest.TestCase):
                 self.assertIn(tile, r.stdout)
                 self.assertIn(", 0 wrong", r.stdout)
 
+    def test_runs_scheduled(self):
+        # the same through the passes that spell the address moves and place
+        # them: each access column a register of the loop's own, set up before
+        # it, stepped on in the body - docs/ADDRESSING_PLAN.md 6.6, walkers
+        # and columns - the kernel right at both vector lengths
+        from ukrgen.flow.stages.irmods import post_specialize_irmod_stage
+        from ukrgen.flow.stages.scheduling import schedule_stage
+        from ukrgen.lsc_model.ir import render_loop
+        from ukrgen.models.load_store_operations import lsc_addr_compute, lsc_load, lsc_store, lsc_loop
+        ctx, outs = run_gemm(self, GEMM, passes=[post_specialize_irmod_stage, schedule_stage])
+        program = ctx.programs[0]
+        loops = [op for b in program.blocks + [b for c in program.cases for b in c.blocks]
+                 for section in ("prologue", "body", "epilogue", "tail", "subtail")
+                 for op in (getattr(b, section) or [])
+                 if isinstance(op, lsc_loop) and op.info.get("slice_registers")]
+        self.assertTrue(loops, "no loop over slices with a register per access column")
+        for loop in loops:
+            with self.subTest(loop=render_loop(loop, program.offsets)[0]):
+                regs = set(loop.info["slice_registers"])
+                used = {(b.indices[0].component, b.indices[0].indices[0]) for b in loop.block
+                        if isinstance(b, (lsc_load, lsc_store))}
+                # a column's own register takes its accesses, and every one of
+                # them is stepped on by an address computation of the body
+                self.assertTrue(regs & used, (regs, used))
+                stepped = {(b.indices[0].component, b.indices[0].indices[0]) for b in loop.block
+                           if isinstance(b, lsc_addr_compute)}
+                self.assertLessEqual(regs, stepped, (regs, stepped))
+
 
 class test_slice_irmods(unittest.TestCase):
     """
