@@ -106,84 +106,45 @@ cbnz x9,.ukr1_tail
 mov x0,x6
 add x0,x0,#-8
 cmp x0,0
-b.eq .ukr0_ok0_0
-b .ukr0_try1
-.ukr0_ok0_0:
-ldr d4, [x5]
-fmov d5,xzr
-fcmp d4,d5
-b.ne .ukr0_try1
-ldr d4, [x4]
-mov x0,#4607182418800017408
-fmov d5,x0
-fcmp d4,d5
-b.ne .ukr0_try1
-b .ukr0_case0
-.ukr0_try1:
-mov x0,x6
-add x0,x0,#-8
-cmp x0,0
-b.eq .ukr0_ok1_0
-b .ukr0_try2
-.ukr0_ok1_0:
+b.eq .ukr0_ok1
+b .ukr0_try0
+.ukr0_ok1:
 ldr d4, [x5]
 fmov d5,xzr
 fcmp d4,d5
 b.ne .ukr0_try2
-b .ukr0_case1
-.ukr0_try2:
-mov x0,x6
-add x0,x0,#-8
-cmp x0,0
-b.eq .ukr0_ok2_0
-b .ukr0_try3
-.ukr0_ok2_0:
-ldr d4, [x5]
-mov x0,#4607182418800017408
-fmov d5,x0
-fcmp d4,d5
-b.ne .ukr0_try3
 ldr d4, [x4]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
 b.ne .ukr0_try3
-b .ukr0_case2
+b .ukr0_case0
 .ukr0_try3:
-mov x0,x6
-add x0,x0,#-8
-cmp x0,0
-b.eq .ukr0_ok3_0
-b .ukr0_try4
-.ukr0_ok3_0:
+b .ukr0_case1
+.ukr0_try2:
 ldr d4, [x5]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
 b.ne .ukr0_try4
-b .ukr0_case3
-.ukr0_try4:
-mov x0,x6
-add x0,x0,#-8
-cmp x0,0
-b.eq .ukr0_ok4_0
-b .ukr0_try5
-.ukr0_ok4_0:
 ldr d4, [x4]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
 b.ne .ukr0_try5
-b .ukr0_case4
+b .ukr0_case2
 .ukr0_try5:
-mov x0,x6
-add x0,x0,#-8
-cmp x0,0
-b.eq .ukr0_ok5_0
-b .ukr0_try6
-.ukr0_ok5_0:
-b .ukr0_case5
+b .ukr0_case3
+.ukr0_try4:
+ldr d4, [x4]
+mov x0,#4607182418800017408
+fmov d5,x0
+fcmp d4,d5
+b.ne .ukr0_try6
+b .ukr0_case4
 .ukr0_try6:
+b .ukr0_case5
+.ukr0_try0:
 ldr d4, [x5]
 fmov d5,xzr
 fcmp d4,d5
@@ -191,35 +152,26 @@ b.ne .ukr0_try7
 ldr d4, [x4]
 mov x0,#4607182418800017408
 fmov d5,x0
-fcmp d4,d5
-b.ne .ukr0_try7
-b .ukr0_case6
-.ukr0_try7:
-ldr d4, [x5]
-fmov d5,xzr
 fcmp d4,d5
 b.ne .ukr0_try8
-b .ukr0_case7
+b .ukr0_case6
 .ukr0_try8:
+b .ukr0_case7
+.ukr0_try7:
 ldr d4, [x5]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
 b.ne .ukr0_try9
 ldr d4, [x4]
-mov x0,#4607182418800017408
-fmov d5,x0
-fcmp d4,d5
-b.ne .ukr0_try9
-b .ukr0_case8
-.ukr0_try9:
-ldr d4, [x5]
 mov x0,#4607182418800017408
 fmov d5,x0
 fcmp d4,d5
 b.ne .ukr0_try10
-b .ukr0_case9
+b .ukr0_case8
 .ukr0_try10:
+b .ukr0_case9
+.ukr0_try9:
 ldr d4, [x4]
 mov x0,#4607182418800017408
 fmov d5,x0
@@ -228,7 +180,6 @@ b.ne .ukr0_try11
 b .ukr0_case10
 .ukr0_try11:
 b .ukr0_case11
-.ukr0_try12:
 b .ukr0_cases_end
 .ukr0_case0:
 mov x0,x3

@@ -1968,52 +1968,72 @@ class signature_emitter:
 
     def dispatch(self) -> list[str]:
         """
-        Find the first case whose conditions hold: alpha and beta loaded at
+        Find the first case whose conditions hold - a decision tree on them: a
+        condition tested once on any path, not again for each case naming it
+        (C's unit stride, beta 0 or 1, alpha 1). Alpha and beta loaded at
         their own size and compared as floating point (cb) to the values the
         conditions name - so -0.0 counts as 0, and NaN as no value named
         """
         import struct
         gen = self.gen
-        lines = []
         self.dispatch_tag = next(self.labels)
+        nodes = iter(range(1 << 16))
 
         def freg(dt):
             return gen.freg(self.alloc.reserve("freg"), dt)
 
-        for i, c in enumerate(self.program.cases):
-            following = f"ukr{self.dispatch_tag}_try{i + 1}"
-            for j, (var, value) in enumerate(c.when.items()):
-                if var.startswith("stride("):
-                    # C's storage: its stride along an index one element - in
-                    # bytes, as passed - tested in a general register
-                    comp = var[len("stride("):].split(",")[0]
-                    t = self.greg()
-                    ok = f"ukr{self.dispatch_tag}_ok{i}_{j}"
-                    lines.append(asmops.mov(gen, src=self.params[var], dst=t))
-                    lines.append(asmops.add_imm(gen, 
-                        reg=t, imm=-int(value) * adt_size(self.ctx.component_dts[comp])))
-                    lines.append(gen.jzero(reg=t, label=ok))
-                    lines.append(gen.jump(label=following))
-                    lines.append(gen.label(label=ok))
-                    self.rt.unuse_reg("greg", t.idx)
-                    continue
-                dt = self.ctx.component_dts[var]
-                size = adt_size(dt)
-                v, k, t = freg(dt), freg(dt), self.greg()
-                lines.append(asmops.load(gen, areg=self.params[f"base({var})"], offset=0, dst=v, dt=dt))
-                if 0 == float(value):
-                    lines.append(asmops.zero(gen, reg=k, dt=dt))
-                else:
-                    bits = struct.unpack("<Q" if 8 == size else "<I",
-                                         struct.pack("<d" if 8 == size else "<f", float(value)))[0]
-                    lines.append(asmops.set_imm(gen, reg=t, imm=bits))
-                    lines.append(asmops.bits_to_freg(gen, src=t, dst=k, dt=dt))
-                lines.append(gen.cb(reg1=v, reg2=k, cmp=comparison.NE, label=following, dt=dt, greg=t))
-                for r in (v, k):
-                    self.alloc.unreserve("freg", r.idx)
+        def test(var, value, fail) -> list:
+            """Branch to fail unless var holds value"""
+            out = []
+            if var.startswith("stride("):
+                # C's storage: its stride along an index one element - in
+                # bytes, as passed - tested in a general register
+                comp = var[len("stride("):].split(",")[0]
+                t = self.greg()
+                ok = f"ukr{self.dispatch_tag}_ok{next(nodes)}"
+                out.append(asmops.mov(gen, src=self.params[var], dst=t))
+                out.append(asmops.add_imm(gen,
+                    reg=t, imm=-int(value) * adt_size(self.ctx.component_dts[comp])))
+                out.append(gen.jzero(reg=t, label=ok))
+                out.append(gen.jump(label=fail))
+                out.append(gen.label(label=ok))
                 self.rt.unuse_reg("greg", t.idx)
-            lines.append(gen.jump(label=f"ukr{self.dispatch_tag}_case{i}"))
-            lines.append(gen.label(label=following))
+                return out
+            dt = self.ctx.component_dts[var]
+            size = adt_size(dt)
+            v, k, t = freg(dt), freg(dt), self.greg()
+            out.append(asmops.load(gen, areg=self.params[f"base({var})"], offset=0, dst=v, dt=dt))
+            if 0 == float(value):
+                out.append(asmops.zero(gen, reg=k, dt=dt))
+            else:
+                bits = struct.unpack("<Q" if 8 == size else "<I",
+                                     struct.pack("<d" if 8 == size else "<f", float(value)))[0]
+                out.append(asmops.set_imm(gen, reg=t, imm=bits))
+                out.append(asmops.bits_to_freg(gen, src=t, dst=k, dt=dt))
+            out.append(gen.cb(reg1=v, reg2=k, cmp=comparison.NE, label=fail, dt=dt, greg=t))
+            for r in (v, k):
+                self.alloc.unreserve("freg", r.idx)
+            self.rt.unuse_reg("greg", t.idx)
+            return out
+
+        def tree(cases) -> list:
+            """
+            The cases left, in order, each with the conditions not yet known:
+            the first's first condition tested - holding, the cases it leaves
+            possible, it known; failing, those not needing it (another value
+            of the same name still possible)
+            """
+            i, when = cases[0]
+            if not when:
+                return [gen.jump(label=f"ukr{self.dispatch_tag}_case{i}")]
+            var, value = next(iter(when.items()))
+            yes = [(j, {k: v for k, v in w.items() if k != var}) for j, w in cases if w.get(var, value) == value]
+            no = [(j, w) for j, w in cases if not (var in w and w[var] == value)]
+            fail = f"ukr{self.dispatch_tag}_try{next(nodes)}"
+            return test(var, value, fail) + tree(yes) + [gen.label(label=fail)] + tree(no)
+
+        cases = [(i, dict(c.when)) for i, c in enumerate(self.program.cases)]
+        lines = tree(cases) if cases else []
         return [l.strip() for chunk in lines for l in chunk.splitlines() if l.strip()]
 
     def memory_comps(self, blocks) -> set:

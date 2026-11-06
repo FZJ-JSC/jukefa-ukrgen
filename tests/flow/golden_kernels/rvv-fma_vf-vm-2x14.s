@@ -513,79 +513,45 @@ bne s1,zero,.ukr1_tail
 .ukr1_taildone:
 add t5,a6,0
 add t5,t5,-8
-beq t5,zero,.ukr0_ok0_0
-j .ukr0_try1
-.ukr0_ok0_0:
-fld f0, 0(a5)
-fcvt.d.w f1, zero
-feq.d t5,f0,f1
-beqz t5,.ukr0_try1
-fld f0, 0(a4)
-li t5,4607182418800017408
-fmv.d.x f1,t5
-feq.d t5,f0,f1
-beqz t5,.ukr0_try1
-j .ukr0_case0
-.ukr0_try1:
-add t5,a6,0
-add t5,t5,-8
-beq t5,zero,.ukr0_ok1_0
-j .ukr0_try2
-.ukr0_ok1_0:
+beq t5,zero,.ukr0_ok1
+j .ukr0_try0
+.ukr0_ok1:
 fld f0, 0(a5)
 fcvt.d.w f1, zero
 feq.d t5,f0,f1
 beqz t5,.ukr0_try2
-j .ukr0_case1
-.ukr0_try2:
-add t5,a6,0
-add t5,t5,-8
-beq t5,zero,.ukr0_ok2_0
-j .ukr0_try3
-.ukr0_ok2_0:
-fld f0, 0(a5)
-li t5,4607182418800017408
-fmv.d.x f1,t5
-feq.d t5,f0,f1
-beqz t5,.ukr0_try3
 fld f0, 0(a4)
 li t5,4607182418800017408
 fmv.d.x f1,t5
 feq.d t5,f0,f1
 beqz t5,.ukr0_try3
-j .ukr0_case2
+j .ukr0_case0
 .ukr0_try3:
-add t5,a6,0
-add t5,t5,-8
-beq t5,zero,.ukr0_ok3_0
-j .ukr0_try4
-.ukr0_ok3_0:
+j .ukr0_case1
+.ukr0_try2:
 fld f0, 0(a5)
 li t5,4607182418800017408
 fmv.d.x f1,t5
 feq.d t5,f0,f1
 beqz t5,.ukr0_try4
-j .ukr0_case3
-.ukr0_try4:
-add t5,a6,0
-add t5,t5,-8
-beq t5,zero,.ukr0_ok4_0
-j .ukr0_try5
-.ukr0_ok4_0:
 fld f0, 0(a4)
 li t5,4607182418800017408
 fmv.d.x f1,t5
 feq.d t5,f0,f1
 beqz t5,.ukr0_try5
-j .ukr0_case4
+j .ukr0_case2
 .ukr0_try5:
-add t5,a6,0
-add t5,t5,-8
-beq t5,zero,.ukr0_ok5_0
-j .ukr0_try6
-.ukr0_ok5_0:
-j .ukr0_case5
+j .ukr0_case3
+.ukr0_try4:
+fld f0, 0(a4)
+li t5,4607182418800017408
+fmv.d.x f1,t5
+feq.d t5,f0,f1
+beqz t5,.ukr0_try6
+j .ukr0_case4
 .ukr0_try6:
+j .ukr0_case5
+.ukr0_try0:
 fld f0, 0(a5)
 fcvt.d.w f1, zero
 feq.d t5,f0,f1
@@ -593,35 +559,26 @@ beqz t5,.ukr0_try7
 fld f0, 0(a4)
 li t5,4607182418800017408
 fmv.d.x f1,t5
-feq.d t5,f0,f1
-beqz t5,.ukr0_try7
-j .ukr0_case6
-.ukr0_try7:
-fld f0, 0(a5)
-fcvt.d.w f1, zero
 feq.d t5,f0,f1
 beqz t5,.ukr0_try8
-j .ukr0_case7
+j .ukr0_case6
 .ukr0_try8:
+j .ukr0_case7
+.ukr0_try7:
 fld f0, 0(a5)
 li t5,4607182418800017408
 fmv.d.x f1,t5
 feq.d t5,f0,f1
 beqz t5,.ukr0_try9
 fld f0, 0(a4)
-li t5,4607182418800017408
-fmv.d.x f1,t5
-feq.d t5,f0,f1
-beqz t5,.ukr0_try9
-j .ukr0_case8
-.ukr0_try9:
-fld f0, 0(a5)
 li t5,4607182418800017408
 fmv.d.x f1,t5
 feq.d t5,f0,f1
 beqz t5,.ukr0_try10
-j .ukr0_case9
+j .ukr0_case8
 .ukr0_try10:
+j .ukr0_case9
+.ukr0_try9:
 fld f0, 0(a4)
 li t5,4607182418800017408
 fmv.d.x f1,t5
@@ -630,7 +587,6 @@ beqz t5,.ukr0_try11
 j .ukr0_case10
 .ukr0_try11:
 j .ukr0_case11
-.ukr0_try12:
 j .ukr0_cases_end
 .ukr0_case0:
 add t5,a3,0
