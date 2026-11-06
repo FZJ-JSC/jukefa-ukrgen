@@ -230,6 +230,7 @@ add x19,x19,x6, LSL #1
 add x10,x10,x6, LSL #1
 add x1,x1,x6, LSL #1
 .ukr1_slices:
+add x24,x24,#-4
 st1w {za0v.s[w12, 0]}, p0, [x0]
 st1w {za1v.s[w12, 0]}, p0, [x25]
 st1w {za2v.s[w12, 0]}, p0, [x20]
@@ -263,7 +264,6 @@ add x19,x19,x6, LSL #2
 add x10,x10,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x24,x24,#-4
 cbnz x24,.ukr1_slices
 sub x0,x0,x8
 b .ukr0_cases_end
@@ -285,6 +285,7 @@ ld1rw {z0.s}, p0/z, [x4]
 add x1,x1,x6
 add x1,x1,x6, LSL #1
 .ukr2_slices:
+add x11,x11,#-4
 mova z1.s,p0/m,za0v.s[w12,0]
 fmul z2.s,z1.s,z0.s
 st1w {z2.s}, p0, [x0]
@@ -342,7 +343,6 @@ add x9,x9,x6, LSL #2
 add x10,x10,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x11,x11,#-4
 cbnz x11,.ukr2_slices
 sub x0,x0,x8
 b .ukr0_cases_end
@@ -375,6 +375,7 @@ add x17,x17,x6, LSL #1
 add x19,x19,x6, LSL #1
 add x2,x2,x6, LSL #1
 .ukr3_slices:
+add x20,x20,#-4
 mova z0.s,p0/m,za0v.s[w12,0]
 ld1w {z1.s}, p0/z, [x0]
 mova z2.s,p0/m,za1v.s[w12,0]
@@ -456,7 +457,6 @@ add x17,x17,x6, LSL #2
 add x19,x19,x6, LSL #2
 add x2,x2,x6, LSL #2
 add x12,x12,#4
-add x20,x20,#-4
 cbnz x20,.ukr3_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -491,6 +491,7 @@ add x22,x22,x6, LSL #1
 add x23,x23,x6, LSL #1
 add x20,x20,x6, LSL #1
 .ukr4_slices:
+add x11,x11,#-4
 mova z1.s,p0/m,za0v.s[w12,0]
 ld1w {z2.s}, p0/z, [x0]
 fmla z2.s,p0/m,z1.s,z0.s
@@ -572,7 +573,6 @@ add x22,x22,x6, LSL #2
 add x23,x23,x6, LSL #2
 add x20,x20,x6, LSL #2
 add x12,x12,#4
-add x11,x11,#-4
 cbnz x11,.ukr4_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -607,6 +607,7 @@ add x22,x22,x6, LSL #1
 add x23,x23,x6, LSL #1
 add x20,x20,x6, LSL #1
 .ukr5_slices:
+add x11,x11,#-4
 mova z1.s,p0/m,za0v.s[w12,0]
 ld1w {z2.s}, p0/z, [x0]
 mova z3.s,p0/m,za1v.s[w12,0]
@@ -704,7 +705,6 @@ add x22,x22,x6, LSL #2
 add x23,x23,x6, LSL #2
 add x20,x20,x6, LSL #2
 add x12,x12,#4
-add x11,x11,#-4
 cbnz x11,.ukr5_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -740,6 +740,7 @@ add x22,x22,x6, LSL #1
 add x23,x23,x6, LSL #1
 add x20,x20,x6, LSL #1
 .ukr6_slices:
+add x10,x10,#-4
 ld1w {z2.s}, p0/z, [x0]
 fmul z2.s,z2.s,z0.s
 mova z3.s,p0/m,za0v.s[w12,0]
@@ -837,7 +838,6 @@ add x22,x22,x6, LSL #2
 add x23,x23,x6, LSL #2
 add x20,x20,x6, LSL #2
 add x12,x12,#4
-add x10,x10,#-4
 cbnz x10,.ukr6_slices
 sub x0,x0,x8
 sub x3,x3,x8

@@ -292,6 +292,7 @@ add x9,x9,x6
 add x10,x10,x6
 add x1,x1,x6
 .ukr1_slices:
+add x24,x24,#-2
 st1d {za0v.d[w12, 0]}, p0, [x0]
 st1d {za1v.d[w12, 0]}, p0, [x25]
 st1d {za2v.d[w12, 0]}, p0, [x26]
@@ -325,7 +326,6 @@ add x9,x9,x6, LSL #1
 add x10,x10,x6, LSL #1
 add x1,x1,x6, LSL #1
 add x12,x12,#2
-add x24,x24,#-2
 cbnz x24,.ukr1_slices
 sub x0,x0,x8
 b .ukr0_cases_end
@@ -347,6 +347,7 @@ ld1rd {z0.d}, p0/z, [x4]
 add x1,x1,x8, LSL #1
 add x1,x1,x6
 .ukr2_slices:
+add x11,x11,#-2
 mova z1.d,p0/m,za0v.d[w12,0]
 fmul z2.d,z1.d,z0.d
 st1d {z2.d}, p0, [x0]
@@ -404,7 +405,6 @@ add x9,x9,x6, LSL #1
 add x10,x10,x6, LSL #1
 add x1,x1,x6, LSL #1
 add x12,x12,#2
-add x11,x11,#-2
 cbnz x11,.ukr2_slices
 sub x0,x0,x8
 b .ukr0_cases_end
@@ -437,6 +437,7 @@ add x17,x17,x6
 add x19,x19,x6
 add x2,x2,x6
 .ukr3_slices:
+add x20,x20,#-2
 mova z0.d,p0/m,za0v.d[w12,0]
 ld1d {z1.d}, p0/z, [x0]
 mova z2.d,p0/m,za1v.d[w12,0]
@@ -518,7 +519,6 @@ add x17,x17,x6, LSL #1
 add x19,x19,x6, LSL #1
 add x2,x2,x6, LSL #1
 add x12,x12,#2
-add x20,x20,#-2
 cbnz x20,.ukr3_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -553,6 +553,7 @@ add x22,x22,x6
 add x23,x23,x6
 add x20,x20,x6
 .ukr4_slices:
+add x11,x11,#-2
 mova z1.d,p0/m,za0v.d[w12,0]
 ld1d {z2.d}, p0/z, [x0]
 fmla z2.d,p0/m,z1.d,z0.d
@@ -634,7 +635,6 @@ add x22,x22,x6, LSL #1
 add x23,x23,x6, LSL #1
 add x20,x20,x6, LSL #1
 add x12,x12,#2
-add x11,x11,#-2
 cbnz x11,.ukr4_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -669,6 +669,7 @@ add x22,x22,x6
 add x23,x23,x6
 add x20,x20,x6
 .ukr5_slices:
+add x11,x11,#-2
 mova z1.d,p0/m,za0v.d[w12,0]
 ld1d {z2.d}, p0/z, [x0]
 mova z3.d,p0/m,za1v.d[w12,0]
@@ -766,7 +767,6 @@ add x22,x22,x6, LSL #1
 add x23,x23,x6, LSL #1
 add x20,x20,x6, LSL #1
 add x12,x12,#2
-add x11,x11,#-2
 cbnz x11,.ukr5_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -802,6 +802,7 @@ add x22,x22,x6
 add x23,x23,x6
 add x20,x20,x6
 .ukr6_slices:
+add x10,x10,#-2
 ld1d {z2.d}, p0/z, [x0]
 fmul z2.d,z2.d,z0.d
 mova z3.d,p0/m,za0v.d[w12,0]
@@ -899,7 +900,6 @@ add x22,x22,x6, LSL #1
 add x23,x23,x6, LSL #1
 add x20,x20,x6, LSL #1
 add x12,x12,#2
-add x10,x10,#-2
 cbnz x10,.ukr6_slices
 sub x0,x0,x8
 sub x3,x3,x8

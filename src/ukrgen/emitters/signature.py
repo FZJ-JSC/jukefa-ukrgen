@@ -561,8 +561,6 @@ class signature_emitter:
             lines.append(asmops.mov(self.gen, src=self.aregs[key], dst=ptr))
             lines += self.add_bytes(ptr, self.bytes_of(key[0], column), key[0])
             pointer_regs[(key, name)] = ptr
-        loop = f"ukr{next(self.labels)}_slices"
-        lines.append(self.gen.label(label=loop))
         unroll = op.subtiling.unroll
         def keys(b, positions):
             types = b.rtypes or []
@@ -626,6 +624,8 @@ class signature_emitter:
                 if preload else mem(op.block)
             placed, end = slice_placements(order, plan, walk_of)
         if preload:
+            loop = f"ukr{next(self.labels)}_slices"
+            lines.append(self.gen.label(label=loop))
             first = [b for b in op.block if early(b)]
             rest = [b for b in op.block if not early(b)]
             last = f"{loop}_last"
@@ -648,7 +648,11 @@ class signature_emitter:
             return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
                 if l.strip()]
         # one pass over the block: the copies (explicit) or the one slice an
-        # iteration takes
+        # iteration takes - its control loop_code's, the counter's decrement
+        # and the branch the emitter's still: no operation of the IR is a
+        # branch, the scheduler's back edge the dependencies carried into the
+        # next iteration (dependencies(loop=True))
+        body = []
         for pos, b in enumerate(op.block):
             if b in sliced:
                 b.properties.update(slice_reg=index, slice_imm=b.properties.get("copy", 0))
@@ -662,7 +666,7 @@ class signature_emitter:
                     vectors = int(b.properties["voffset"]) if "voffset" in b.properties else None
                 elif plan:
                     moves, walker, vectors = place(b)
-                    lines += moves
+                    body += moves
                 else:
                     walker = walkers[b.properties.get("walk", 0)]
                 line = self._mem(b, self.reg(b.indices[1], b.rtypes[1]), walker, 0,
@@ -672,24 +676,27 @@ class signature_emitter:
                                                f"of a slice's {b.indices[0].component} takes "
                                                f"a plain address at slice immediate "
                                                f"{b.properties.get('copy', 0)}")
-                lines.append(line)
+                body.append(line)
             elif isinstance(b, lsc_move):
-                lines.append(self.move(b))
+                body.append(self.move(b))
             else:
-                lines += self._emit_op(b)
+                body += self._emit_op(b)
             for k in dead_after.get(pos, ()):
                 if k in self.phys:
                     self.release(k)
         if not moved_in_ir:
             if plan:
                 # an iteration takes unroll slices (its copies, explicit)
-                lines += step_on(unroll)
+                body += step_on(unroll)
             else:
                 for walker, delta in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values():
-                    lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
-        lines.append(asmops.add_imm(self.gen, reg=index, imm=unroll))
-        lines.append(asmops.add_imm(self.gen, reg=counter, imm=-unroll))
-        lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
+                    body.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
+        # an iteration takes unroll slices: the index on by them, the counter
+        # down by them
+        body.append(asmops.add_imm(self.gen, reg=index, imm=unroll))
+        lines += self.loop_code(emitted_block(
+            name=f"{comp} slices", loop_index="slices", sections={"body": body},
+            counters=(counter, None), step=unroll, guarded=False, plain=True, label="slices"))
         for r in [counter, index] + list(shared.values()) + list(steps.values()):
             self.rt.unuse_reg("greg", r.idx)
         release_pointers()

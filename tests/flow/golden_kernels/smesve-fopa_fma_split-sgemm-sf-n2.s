@@ -219,6 +219,7 @@ add x9,x9,x6, LSL #1
 add x11,x11,x6, LSL #1
 add x1,x1,x6, LSL #1
 .ukr1_slices:
+add x16,x16,#-4
 st1w {za0h.s[w12, 0]}, p0, [x0]
 st1w {za1h.s[w12, 0]}, p0, [x10]
 st1w {za0h.s[w12, 1]}, p0, [x17]
@@ -236,7 +237,6 @@ add x9,x9,x6, LSL #2
 add x11,x11,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x16,x16,#-4
 cbnz x16,.ukr1_slices
 st1w {z0.s}, p0, [x0]
 st1w {z1.s}, p0, [x0, #1, MUL VL]
@@ -251,6 +251,7 @@ add x9,x0,x6
 add x10,x0,x6, LSL #1
 add x1,x1,x6, LSL #1
 .ukr2_slices:
+add x2,x2,#-4
 mova z3.s,p0/m,za0h.s[w12,0]
 mova z4.s,p0/m,za1h.s[w12,0]
 mova z5.s,p0/m,za0h.s[w12,1]
@@ -280,7 +281,6 @@ add x9,x9,x6, LSL #2
 add x10,x10,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x2,x2,#-4
 cbnz x2,.ukr2_slices
 sub x0,x0,x8
 fmul z3.s,z0.s,z2.s
@@ -302,6 +302,7 @@ add x16,x3,x6
 add x17,x3,x6, LSL #1
 add x2,x2,x6, LSL #1
 .ukr3_slices:
+add x9,x9,#-4
 mova z2.s,p0/m,za0h.s[w12,0]
 ld1w {z3.s}, p0/z, [x0]
 mova z4.s,p0/m,za1h.s[w12,0]
@@ -343,7 +344,6 @@ add x16,x16,x6, LSL #2
 add x17,x17,x6, LSL #2
 add x2,x2,x6, LSL #2
 add x12,x12,#4
-add x9,x9,#-4
 cbnz x9,.ukr3_slices
 sub x0,x0,x8
 add x0,x0,x8
@@ -370,6 +370,7 @@ add x16,x3,x6
 add x17,x3,x6, LSL #1
 add x2,x2,x6, LSL #1
 .ukr4_slices:
+add x9,x9,#-4
 mova z3.s,p0/m,za0h.s[w12,0]
 ld1w {z4.s}, p0/z, [x0]
 mova z5.s,p0/m,za1h.s[w12,0]
@@ -411,7 +412,6 @@ add x16,x16,x6, LSL #2
 add x17,x17,x6, LSL #2
 add x2,x2,x6, LSL #2
 add x12,x12,#4
-add x9,x9,#-4
 cbnz x9,.ukr4_slices
 sub x0,x0,x8
 add x0,x0,x8
@@ -438,6 +438,7 @@ add x16,x3,x6
 add x17,x3,x6, LSL #1
 add x2,x2,x6, LSL #1
 .ukr5_slices:
+add x9,x9,#-4
 mova z3.s,p0/m,za0h.s[w12,0]
 ld1w {z4.s}, p0/z, [x0]
 mova z5.s,p0/m,za1h.s[w12,0]
@@ -487,7 +488,6 @@ add x16,x16,x6, LSL #2
 add x17,x17,x6, LSL #2
 add x2,x2,x6, LSL #2
 add x12,x12,#4
-add x9,x9,#-4
 cbnz x9,.ukr5_slices
 sub x0,x0,x8
 add x0,x0,x8
@@ -515,6 +515,7 @@ add x16,x3,x6
 add x17,x3,x6, LSL #1
 add x2,x2,x6, LSL #1
 .ukr6_slices:
+add x9,x9,#-4
 ld1w {z4.s}, p0/z, [x0]
 ld1w {z5.s}, p0/z, [x0, #1, MUL VL]
 ld1w {z6.s}, p0/z, [x10]
@@ -564,7 +565,6 @@ add x16,x16,x6, LSL #2
 add x17,x17,x6, LSL #2
 add x2,x2,x6, LSL #2
 add x12,x12,#4
-add x9,x9,#-4
 cbnz x9,.ukr6_slices
 sub x0,x0,x8
 add x0,x0,x8
@@ -859,6 +859,7 @@ add x10,x10,x6, LSL #1
 add x16,x16,x6, LSL #1
 add x1,x1,x6, LSL #1
 .ukr1_slices:
+add x17,x17,#-4
 st1w {za0h.s[w12, 0]}, p0, [x0]
 st1w {za1h.s[w12, 0]}, p0, [x11]
 st1w {za0h.s[w12, 1]}, p0, [x19]
@@ -876,7 +877,6 @@ add x10,x10,x6, LSL #2
 add x16,x16,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x17,x17,#-4
 cbnz x17,.ukr1_slices
 st1w {z0.s}, p0, [x0]
 st1w {z1.s}, p0, [x0, #1, MUL VL]
@@ -894,6 +894,7 @@ add x10,x0,x6
 add x11,x0,x6, LSL #1
 add x1,x1,x6, LSL #1
 .ukr2_slices:
+add x2,x2,#-4
 mova z5.s,p0/m,za0h.s[w12,0]
 mova z6.s,p0/m,za1h.s[w12,0]
 mova z7.s,p0/m,za0h.s[w12,1]
@@ -923,7 +924,6 @@ add x10,x10,x6, LSL #2
 add x11,x11,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x2,x2,#-4
 cbnz x2,.ukr2_slices
 sub x0,x0,x8
 fmul z5.s,z0.s,z4.s
@@ -950,6 +950,7 @@ add x17,x3,x6
 add x19,x3,x6, LSL #1
 add x2,x2,x6, LSL #1
 .ukr3_slices:
+add x10,x10,#-4
 mova z4.s,p0/m,za0h.s[w12,0]
 ld1w {z5.s}, p0/z, [x0]
 mova z6.s,p0/m,za1h.s[w12,0]
@@ -991,7 +992,6 @@ add x17,x17,x6, LSL #2
 add x19,x19,x6, LSL #2
 add x2,x2,x6, LSL #2
 add x12,x12,#4
-add x10,x10,#-4
 cbnz x10,.ukr3_slices
 sub x0,x0,x8
 add x0,x0,x8
@@ -1026,6 +1026,7 @@ add x17,x3,x6
 add x19,x3,x6, LSL #1
 add x2,x2,x6, LSL #1
 .ukr4_slices:
+add x10,x10,#-4
 mova z5.s,p0/m,za0h.s[w12,0]
 ld1w {z6.s}, p0/z, [x0]
 mova z7.s,p0/m,za1h.s[w12,0]
@@ -1067,7 +1068,6 @@ add x17,x17,x6, LSL #2
 add x19,x19,x6, LSL #2
 add x2,x2,x6, LSL #2
 add x12,x12,#4
-add x10,x10,#-4
 cbnz x10,.ukr4_slices
 sub x0,x0,x8
 add x0,x0,x8
@@ -1102,6 +1102,7 @@ add x17,x3,x6
 add x19,x3,x6, LSL #1
 add x2,x2,x6, LSL #1
 .ukr5_slices:
+add x10,x10,#-4
 mova z5.s,p0/m,za0h.s[w12,0]
 ld1w {z6.s}, p0/z, [x0]
 mova z7.s,p0/m,za1h.s[w12,0]
@@ -1151,7 +1152,6 @@ add x17,x17,x6, LSL #2
 add x19,x19,x6, LSL #2
 add x2,x2,x6, LSL #2
 add x12,x12,#4
-add x10,x10,#-4
 cbnz x10,.ukr5_slices
 sub x0,x0,x8
 add x0,x0,x8
@@ -1187,6 +1187,7 @@ add x17,x3,x6
 add x19,x3,x6, LSL #1
 add x2,x2,x6, LSL #1
 .ukr6_slices:
+add x10,x10,#-4
 ld1w {z6.s}, p0/z, [x0]
 ld1w {z7.s}, p0/z, [x0, #1, MUL VL]
 ld1w {z16.s}, p0/z, [x11]
@@ -1236,7 +1237,6 @@ add x17,x17,x6, LSL #2
 add x19,x19,x6, LSL #2
 add x2,x2,x6, LSL #2
 add x12,x12,#4
-add x10,x10,#-4
 cbnz x10,.ukr6_slices
 sub x0,x0,x8
 add x0,x0,x8
@@ -1570,6 +1570,7 @@ add x10,x10,x6, LSL #1
 add x16,x16,x6, LSL #1
 add x1,x1,x6, LSL #1
 .ukr1_slices:
+add x17,x17,#-4
 st1w {za0h.s[w12, 0]}, p0, [x0]
 st1w {za1h.s[w12, 0]}, p0, [x11]
 st1w {za0h.s[w12, 1]}, p0, [x19]
@@ -1587,7 +1588,6 @@ add x10,x10,x6, LSL #2
 add x16,x16,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x17,x17,#-4
 cbnz x17,.ukr1_slices
 st1w {z0.s}, p0, [x0]
 st1w {z1.s}, p0, [x0, #1, MUL VL]
@@ -1608,6 +1608,7 @@ add x10,x0,x6
 add x11,x0,x6, LSL #1
 add x1,x1,x6, LSL #1
 .ukr2_slices:
+add x2,x2,#-4
 mova z7.s,p0/m,za0h.s[w12,0]
 mova z16.s,p0/m,za1h.s[w12,0]
 mova z17.s,p0/m,za0h.s[w12,1]
@@ -1637,7 +1638,6 @@ add x10,x10,x6, LSL #2
 add x11,x11,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x2,x2,#-4
 cbnz x2,.ukr2_slices
 sub x0,x0,x8
 fmul z7.s,z0.s,z6.s
@@ -1669,6 +1669,7 @@ add x17,x3,x6
 add x19,x3,x6, LSL #1
 add x2,x2,x6, LSL #1
 .ukr3_slices:
+add x10,x10,#-4
 mova z6.s,p0/m,za0h.s[w12,0]
 ld1w {z7.s}, p0/z, [x0]
 mova z16.s,p0/m,za1h.s[w12,0]
@@ -1710,7 +1711,6 @@ add x17,x17,x6, LSL #2
 add x19,x19,x6, LSL #2
 add x2,x2,x6, LSL #2
 add x12,x12,#4
-add x10,x10,#-4
 cbnz x10,.ukr3_slices
 sub x0,x0,x8
 add x0,x0,x8
@@ -1753,6 +1753,7 @@ add x17,x3,x6
 add x19,x3,x6, LSL #1
 add x2,x2,x6, LSL #1
 .ukr4_slices:
+add x10,x10,#-4
 mova z7.s,p0/m,za0h.s[w12,0]
 ld1w {z16.s}, p0/z, [x0]
 mova z17.s,p0/m,za1h.s[w12,0]
@@ -1794,7 +1795,6 @@ add x17,x17,x6, LSL #2
 add x19,x19,x6, LSL #2
 add x2,x2,x6, LSL #2
 add x12,x12,#4
-add x10,x10,#-4
 cbnz x10,.ukr4_slices
 sub x0,x0,x8
 add x0,x0,x8
@@ -1837,6 +1837,7 @@ add x17,x3,x6
 add x19,x3,x6, LSL #1
 add x2,x2,x6, LSL #1
 .ukr5_slices:
+add x10,x10,#-4
 mova z7.s,p0/m,za0h.s[w12,0]
 ld1w {z16.s}, p0/z, [x0]
 mova z17.s,p0/m,za1h.s[w12,0]
@@ -1886,7 +1887,6 @@ add x17,x17,x6, LSL #2
 add x19,x19,x6, LSL #2
 add x2,x2,x6, LSL #2
 add x12,x12,#4
-add x10,x10,#-4
 cbnz x10,.ukr5_slices
 sub x0,x0,x8
 add x0,x0,x8
@@ -1930,6 +1930,7 @@ add x17,x3,x6
 add x19,x3,x6, LSL #1
 add x2,x2,x6, LSL #1
 .ukr6_slices:
+add x10,x10,#-4
 ld1w {z16.s}, p0/z, [x0]
 ld1w {z17.s}, p0/z, [x0, #1, MUL VL]
 ld1w {z18.s}, p0/z, [x11]
@@ -1979,7 +1980,6 @@ add x17,x17,x6, LSL #2
 add x19,x19,x6, LSL #2
 add x2,x2,x6, LSL #2
 add x12,x12,#4
-add x10,x10,#-4
 cbnz x10,.ukr6_slices
 sub x0,x0,x8
 add x0,x0,x8
@@ -2365,6 +2365,7 @@ add x11,x11,x6, LSL #1
 add x20,x20,x6, LSL #1
 add x1,x1,x6, LSL #1
 .ukr1_slices:
+add x25,x25,#-4
 st1w {za0h.s[w12, 0]}, p0, [x0]
 st1w {za1h.s[w12, 0]}, p0, [x21]
 st1w {za2h.s[w12, 0]}, p0, [x26]
@@ -2398,7 +2399,6 @@ add x11,x11,x6, LSL #2
 add x20,x20,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x25,x25,#-4
 cbnz x25,.ukr1_slices
 sub x0,x0,x8
 add x0,x0,x8, LSL #1
@@ -2426,6 +2426,7 @@ ld1rw {z4.s}, p0/z, [x4]
 add x1,x1,x6
 add x1,x1,x6, LSL #1
 .ukr2_slices:
+add x16,x16,#-4
 mova z5.s,p0/m,za0h.s[w12,0]
 mova z6.s,p0/m,za1h.s[w12,0]
 mova z7.s,p0/m,za2h.s[w12,0]
@@ -2483,7 +2484,6 @@ add x10,x10,x6, LSL #2
 add x11,x11,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x16,x16,#-4
 cbnz x16,.ukr2_slices
 fmul z5.s,z0.s,z4.s
 fmul z0.s,z1.s,z4.s
@@ -2526,6 +2526,7 @@ add x22,x22,x6, LSL #1
 add x23,x23,x6, LSL #1
 add x24,x24,x6, LSL #1
 .ukr3_slices:
+add x16,x16,#-4
 mova z4.s,p0/m,za0h.s[w12,0]
 ld1w {z5.s}, p0/z, [x0]
 mova z6.s,p0/m,za1h.s[w12,0]
@@ -2607,7 +2608,6 @@ add x22,x22,x6, LSL #2
 add x23,x23,x6, LSL #2
 add x24,x24,x6, LSL #2
 add x12,x12,#4
-add x16,x16,#-4
 cbnz x16,.ukr3_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -2658,6 +2658,7 @@ add x23,x23,x6, LSL #1
 add x24,x24,x6, LSL #1
 add x21,x21,x6, LSL #1
 .ukr4_slices:
+add x16,x16,#-4
 mova z5.s,p0/m,za0h.s[w12,0]
 ld1w {z6.s}, p0/z, [x0]
 mova z7.s,p0/m,za1h.s[w12,0]
@@ -2739,7 +2740,6 @@ add x23,x23,x6, LSL #2
 add x24,x24,x6, LSL #2
 add x21,x21,x6, LSL #2
 add x12,x12,#4
-add x16,x16,#-4
 cbnz x16,.ukr4_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -2790,6 +2790,7 @@ add x23,x23,x6, LSL #1
 add x24,x24,x6, LSL #1
 add x21,x21,x6, LSL #1
 .ukr5_slices:
+add x16,x16,#-4
 mova z5.s,p0/m,za0h.s[w12,0]
 ld1w {z6.s}, p0/z, [x0]
 mova z7.s,p0/m,za1h.s[w12,0]
@@ -2887,7 +2888,6 @@ add x23,x23,x6, LSL #2
 add x24,x24,x6, LSL #2
 add x21,x21,x6, LSL #2
 add x12,x12,#4
-add x16,x16,#-4
 cbnz x16,.ukr5_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -2939,6 +2939,7 @@ add x23,x23,x6, LSL #1
 add x24,x24,x6, LSL #1
 add x21,x21,x6, LSL #1
 .ukr6_slices:
+add x11,x11,#-4
 ld1w {z6.s}, p0/z, [x0]
 ld1w {z7.s}, p0/z, [x0, #1, MUL VL]
 ld1w {z16.s}, p0/z, [x16]
@@ -3036,7 +3037,6 @@ add x23,x23,x6, LSL #2
 add x24,x24,x6, LSL #2
 add x21,x21,x6, LSL #2
 add x12,x12,#4
-add x11,x11,#-4
 cbnz x11,.ukr6_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -3487,6 +3487,7 @@ add x11,x11,x6, LSL #1
 add x20,x20,x6, LSL #1
 add x1,x1,x6, LSL #1
 .ukr1_slices:
+add x25,x25,#-4
 st1w {za0h.s[w12, 0]}, p0, [x0]
 st1w {za1h.s[w12, 0]}, p0, [x21]
 st1w {za2h.s[w12, 0]}, p0, [x26]
@@ -3520,7 +3521,6 @@ add x11,x11,x6, LSL #2
 add x20,x20,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x25,x25,#-4
 cbnz x25,.ukr1_slices
 sub x0,x0,x8
 add x0,x0,x8, LSL #1
@@ -3554,6 +3554,7 @@ ld1rw {z16.s}, p0/z, [x4]
 add x1,x1,x6
 add x1,x1,x6, LSL #1
 .ukr2_slices:
+add x16,x16,#-4
 mova z17.s,p0/m,za0h.s[w12,0]
 mova z18.s,p0/m,za1h.s[w12,0]
 mova z19.s,p0/m,za2h.s[w12,0]
@@ -3611,7 +3612,6 @@ add x10,x10,x6, LSL #2
 add x11,x11,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x16,x16,#-4
 cbnz x16,.ukr2_slices
 fmul z17.s,z0.s,z16.s
 fmul z0.s,z1.s,z16.s
@@ -3664,6 +3664,7 @@ add x22,x22,x6, LSL #1
 add x23,x23,x6, LSL #1
 add x24,x24,x6, LSL #1
 .ukr3_slices:
+add x16,x16,#-4
 mova z16.s,p0/m,za0h.s[w12,0]
 ld1w {z17.s}, p0/z, [x0]
 mova z18.s,p0/m,za1h.s[w12,0]
@@ -3745,7 +3746,6 @@ add x22,x22,x6, LSL #2
 add x23,x23,x6, LSL #2
 add x24,x24,x6, LSL #2
 add x12,x12,#4
-add x16,x16,#-4
 cbnz x16,.ukr3_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -3812,6 +3812,7 @@ add x23,x23,x6, LSL #1
 add x24,x24,x6, LSL #1
 add x21,x21,x6, LSL #1
 .ukr4_slices:
+add x16,x16,#-4
 mova z17.s,p0/m,za0h.s[w12,0]
 ld1w {z18.s}, p0/z, [x0]
 mova z19.s,p0/m,za1h.s[w12,0]
@@ -3893,7 +3894,6 @@ add x23,x23,x6, LSL #2
 add x24,x24,x6, LSL #2
 add x21,x21,x6, LSL #2
 add x12,x12,#4
-add x16,x16,#-4
 cbnz x16,.ukr4_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -3960,6 +3960,7 @@ add x23,x23,x6, LSL #1
 add x24,x24,x6, LSL #1
 add x21,x21,x6, LSL #1
 .ukr5_slices:
+add x16,x16,#-4
 mova z17.s,p0/m,za0h.s[w12,0]
 ld1w {z18.s}, p0/z, [x0]
 mova z19.s,p0/m,za1h.s[w12,0]
@@ -4057,7 +4058,6 @@ add x23,x23,x6, LSL #2
 add x24,x24,x6, LSL #2
 add x21,x21,x6, LSL #2
 add x12,x12,#4
-add x16,x16,#-4
 cbnz x16,.ukr5_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -4125,6 +4125,7 @@ add x23,x23,x6, LSL #1
 add x24,x24,x6, LSL #1
 add x21,x21,x6, LSL #1
 .ukr6_slices:
+add x11,x11,#-4
 ld1w {z18.s}, p0/z, [x0]
 ld1w {z19.s}, p0/z, [x0, #1, MUL VL]
 ld1w {z20.s}, p0/z, [x16]
@@ -4222,7 +4223,6 @@ add x23,x23,x6, LSL #2
 add x24,x24,x6, LSL #2
 add x21,x21,x6, LSL #2
 add x12,x12,#4
-add x11,x11,#-4
 cbnz x11,.ukr6_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -4751,6 +4751,7 @@ add x11,x11,x6, LSL #1
 add x20,x20,x6, LSL #1
 add x1,x1,x6, LSL #1
 .ukr1_slices:
+add x25,x25,#-4
 st1w {za0h.s[w12, 0]}, p0, [x0]
 st1w {za1h.s[w12, 0]}, p0, [x21]
 st1w {za2h.s[w12, 0]}, p0, [x26]
@@ -4784,7 +4785,6 @@ add x11,x11,x6, LSL #2
 add x20,x20,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x25,x25,#-4
 cbnz x25,.ukr1_slices
 sub x0,x0,x8
 add x0,x0,x8, LSL #1
@@ -4824,6 +4824,7 @@ ld1rw {z20.s}, p0/z, [x4]
 add x1,x1,x6
 add x1,x1,x6, LSL #1
 .ukr2_slices:
+add x16,x16,#-4
 mova z21.s,p0/m,za0h.s[w12,0]
 mova z22.s,p0/m,za1h.s[w12,0]
 mova z23.s,p0/m,za2h.s[w12,0]
@@ -4881,7 +4882,6 @@ add x10,x10,x6, LSL #2
 add x11,x11,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x16,x16,#-4
 cbnz x16,.ukr2_slices
 fmul z21.s,z0.s,z20.s
 fmul z0.s,z1.s,z20.s
@@ -4944,6 +4944,7 @@ add x22,x22,x6, LSL #1
 add x23,x23,x6, LSL #1
 add x24,x24,x6, LSL #1
 .ukr3_slices:
+add x16,x16,#-4
 mova z20.s,p0/m,za0h.s[w12,0]
 ld1w {z21.s}, p0/z, [x0]
 mova z22.s,p0/m,za1h.s[w12,0]
@@ -5025,7 +5026,6 @@ add x22,x22,x6, LSL #2
 add x23,x23,x6, LSL #2
 add x24,x24,x6, LSL #2
 add x12,x12,#4
-add x16,x16,#-4
 cbnz x16,.ukr3_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -5108,6 +5108,7 @@ add x23,x23,x6, LSL #1
 add x24,x24,x6, LSL #1
 add x21,x21,x6, LSL #1
 .ukr4_slices:
+add x16,x16,#-4
 mova z21.s,p0/m,za0h.s[w12,0]
 ld1w {z22.s}, p0/z, [x0]
 mova z23.s,p0/m,za1h.s[w12,0]
@@ -5189,7 +5190,6 @@ add x23,x23,x6, LSL #2
 add x24,x24,x6, LSL #2
 add x21,x21,x6, LSL #2
 add x12,x12,#4
-add x16,x16,#-4
 cbnz x16,.ukr4_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -5272,6 +5272,7 @@ add x23,x23,x6, LSL #1
 add x24,x24,x6, LSL #1
 add x21,x21,x6, LSL #1
 .ukr5_slices:
+add x16,x16,#-4
 mova z21.s,p0/m,za0h.s[w12,0]
 ld1w {z22.s}, p0/z, [x0]
 mova z23.s,p0/m,za1h.s[w12,0]
@@ -5369,7 +5370,6 @@ add x23,x23,x6, LSL #2
 add x24,x24,x6, LSL #2
 add x21,x21,x6, LSL #2
 add x12,x12,#4
-add x16,x16,#-4
 cbnz x16,.ukr5_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -5453,6 +5453,7 @@ add x23,x23,x6, LSL #1
 add x24,x24,x6, LSL #1
 add x21,x21,x6, LSL #1
 .ukr6_slices:
+add x11,x11,#-4
 ld1w {z22.s}, p0/z, [x0]
 ld1w {z23.s}, p0/z, [x0, #1, MUL VL]
 ld1w {z24.s}, p0/z, [x16]
@@ -5550,7 +5551,6 @@ add x23,x23,x6, LSL #2
 add x24,x24,x6, LSL #2
 add x21,x21,x6, LSL #2
 add x12,x12,#4
-add x11,x11,#-4
 cbnz x11,.ukr6_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -5952,6 +5952,7 @@ add x10,x10,x6, LSL #1
 add x19,x19,x6, LSL #1
 add x1,x1,x6, LSL #1
 .ukr1_slices:
+add x24,x24,#-4
 st1w {za0h.s[w12, 0]}, p0, [x0]
 st1w {za1h.s[w12, 0]}, p0, [x20]
 st1w {za2h.s[w12, 0]}, p0, [x25]
@@ -5985,7 +5986,6 @@ add x10,x10,x6, LSL #2
 add x19,x19,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x24,x24,#-4
 cbnz x24,.ukr1_slices
 sub x0,x0,x8
 add x0,x0,x8, LSL #1
@@ -6010,6 +6010,7 @@ ld1rw {z2.s}, p0/z, [x4]
 add x1,x1,x6
 add x1,x1,x6, LSL #1
 .ukr2_slices:
+add x11,x11,#-4
 mova z3.s,p0/m,za0h.s[w12,0]
 mova z4.s,p0/m,za1h.s[w12,0]
 fmul z5.s,z3.s,z2.s
@@ -6067,7 +6068,6 @@ add x9,x9,x6, LSL #2
 add x10,x10,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x11,x11,#-4
 cbnz x11,.ukr2_slices
 fmul z3.s,z0.s,z2.s
 fmul z0.s,z1.s,z2.s
@@ -6105,6 +6105,7 @@ add x21,x21,x6, LSL #1
 add x22,x22,x6, LSL #1
 add x23,x23,x6, LSL #1
 .ukr3_slices:
+add x11,x11,#-4
 mova z2.s,p0/m,za0h.s[w12,0]
 ld1w {z3.s}, p0/z, [x0]
 fadd z3.s,z2.s,z3.s
@@ -6186,7 +6187,6 @@ add x21,x21,x6, LSL #2
 add x22,x22,x6, LSL #2
 add x23,x23,x6, LSL #2
 add x12,x12,#4
-add x11,x11,#-4
 cbnz x11,.ukr3_slices
 sub x0,x0,x8
 add x0,x0,x8, LSL #1
@@ -6229,6 +6229,7 @@ add x22,x22,x6, LSL #1
 add x23,x23,x6, LSL #1
 add x20,x20,x6, LSL #1
 .ukr4_slices:
+add x11,x11,#-4
 mova z3.s,p0/m,za0h.s[w12,0]
 ld1w {z4.s}, p0/z, [x0]
 mova z5.s,p0/m,za1h.s[w12,0]
@@ -6310,7 +6311,6 @@ add x22,x22,x6, LSL #2
 add x23,x23,x6, LSL #2
 add x20,x20,x6, LSL #2
 add x12,x12,#4
-add x11,x11,#-4
 cbnz x11,.ukr4_slices
 sub x0,x0,x8
 add x0,x0,x8, LSL #1
@@ -6353,6 +6353,7 @@ add x22,x22,x6, LSL #1
 add x23,x23,x6, LSL #1
 add x20,x20,x6, LSL #1
 .ukr5_slices:
+add x11,x11,#-4
 mova z3.s,p0/m,za0h.s[w12,0]
 ld1w {z4.s}, p0/z, [x0]
 mova z5.s,p0/m,za1h.s[w12,0]
@@ -6450,7 +6451,6 @@ add x22,x22,x6, LSL #2
 add x23,x23,x6, LSL #2
 add x20,x20,x6, LSL #2
 add x12,x12,#4
-add x11,x11,#-4
 cbnz x11,.ukr5_slices
 sub x0,x0,x8
 add x0,x0,x8, LSL #1
@@ -6494,6 +6494,7 @@ add x22,x22,x6, LSL #1
 add x23,x23,x6, LSL #1
 add x20,x20,x6, LSL #1
 .ukr6_slices:
+add x10,x10,#-4
 ld1w {z4.s}, p0/z, [x0]
 ld1w {z5.s}, p0/z, [x0, #1, MUL VL]
 fmul z4.s,z4.s,z2.s
@@ -6591,7 +6592,6 @@ add x22,x22,x6, LSL #2
 add x23,x23,x6, LSL #2
 add x20,x20,x6, LSL #2
 add x12,x12,#4
-add x10,x10,#-4
 cbnz x10,.ukr6_slices
 sub x0,x0,x8
 add x0,x0,x8, LSL #1

@@ -128,6 +128,7 @@ add x9,x0,x6
 add x10,x0,x6, LSL #1
 add x1,x1,x6, LSL #1
 .ukr1_slices:
+add x2,x2,#-4
 st1w {za0v.s[w12, 0]}, p0, [x0]
 st1w {za0v.s[w12, 1]}, p0, [x9]
 st1w {za0v.s[w12, 2]}, p0, [x10]
@@ -137,7 +138,6 @@ add x9,x9,x6, LSL #2
 add x10,x10,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x2,x2,#-4
 cbnz x2,.ukr1_slices
 sub x0,x0,x8
 b .ukr0_cases_end
@@ -151,6 +151,7 @@ add x9,x0,x6
 add x10,x0,x6, LSL #1
 add x1,x1,x6, LSL #1
 .ukr2_slices:
+add x2,x2,#-4
 mova z1.s,p0/m,za0v.s[w12,0]
 mova z2.s,p0/m,za0v.s[w12,1]
 mova z3.s,p0/m,za0v.s[w12,2]
@@ -168,7 +169,6 @@ add x9,x9,x6, LSL #2
 add x10,x10,x6, LSL #2
 add x1,x1,x6, LSL #2
 add x12,x12,#4
-add x2,x2,#-4
 cbnz x2,.ukr2_slices
 sub x0,x0,x8
 b .ukr0_cases_end
@@ -185,6 +185,7 @@ add x16,x3,x6
 add x17,x3,x6, LSL #1
 add x2,x2,x6, LSL #1
 .ukr3_slices:
+add x9,x9,#-4
 mova z0.s,p0/m,za0v.s[w12,0]
 ld1w {z1.s}, p0/z, [x0]
 mova z2.s,p0/m,za0v.s[w12,1]
@@ -210,7 +211,6 @@ add x16,x16,x6, LSL #2
 add x17,x17,x6, LSL #2
 add x2,x2,x6, LSL #2
 add x12,x12,#4
-add x9,x9,#-4
 cbnz x9,.ukr3_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -229,6 +229,7 @@ add x16,x3,x6
 add x17,x3,x6, LSL #1
 add x2,x2,x6, LSL #1
 .ukr4_slices:
+add x9,x9,#-4
 mova z1.s,p0/m,za0v.s[w12,0]
 ld1w {z2.s}, p0/z, [x0]
 mova z3.s,p0/m,za0v.s[w12,1]
@@ -254,7 +255,6 @@ add x16,x16,x6, LSL #2
 add x17,x17,x6, LSL #2
 add x2,x2,x6, LSL #2
 add x12,x12,#4
-add x9,x9,#-4
 cbnz x9,.ukr4_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -273,6 +273,7 @@ add x16,x3,x6
 add x17,x3,x6, LSL #1
 add x2,x2,x6, LSL #1
 .ukr5_slices:
+add x9,x9,#-4
 mova z1.s,p0/m,za0v.s[w12,0]
 ld1w {z2.s}, p0/z, [x0]
 fmla z1.s,p0/m,z2.s,z0.s
@@ -302,7 +303,6 @@ add x16,x16,x6, LSL #2
 add x17,x17,x6, LSL #2
 add x2,x2,x6, LSL #2
 add x12,x12,#4
-add x9,x9,#-4
 cbnz x9,.ukr5_slices
 sub x0,x0,x8
 sub x3,x3,x8
@@ -322,6 +322,7 @@ add x16,x3,x6
 add x17,x3,x6, LSL #1
 add x2,x2,x6, LSL #1
 .ukr6_slices:
+add x9,x9,#-4
 ld1w {z2.s}, p0/z, [x0]
 ld1w {z3.s}, p0/z, [x10]
 ld1w {z4.s}, p0/z, [x11]
@@ -351,7 +352,6 @@ add x16,x16,x6, LSL #2
 add x17,x17,x6, LSL #2
 add x2,x2,x6, LSL #2
 add x12,x12,#4
-add x9,x9,#-4
 cbnz x9,.ukr6_slices
 sub x0,x0,x8
 sub x3,x3,x8

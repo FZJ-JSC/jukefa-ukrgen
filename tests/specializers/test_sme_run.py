@@ -426,8 +426,10 @@ class test_slice_scheduling(unittest.TestCase):
         code = ctx.emitted[0].instructions()
         start = next(i for i, l in enumerate(code) if l.endswith("_slices:")
                      and sum(x.startswith("mova") for x in code[i:i + 30]) >= 8)
-        body = [l.split()[0] for l in code[start + 1:start + 25]]
-        # every slice moved out before the first multiply: tiles and copies
+        # the counter down by the unroll first - the loop's control, loop_code's
+        # - then the body: every slice moved out before the first multiply,
+        # tiles and copies
+        body = [l.split()[0] for l in code[start + 2:start + 26]]
         self.assertEqual(["mova"] * 8, body[:8])
 
 

@@ -217,8 +217,18 @@ in the IR, in order.
          SME and SMESVE kernels 98 287 -> 94 939 instructions over their 12
          configurations, none larger (95 359 after the columns alone).
       5. *The loop through `block`*: its control - the index's step, the
-         counter's, the branch - as `loop_code` makes it; `slices` and
-         `_slices` gone.
+         counter's, the branch - as `loop_code` makes it. Done as far as it
+         goes without the loop's body in the IR: the slices loop counted by
+         `loop_code` like every other, its counter down and its branch there,
+         the index's step its advance. No operation of the IR's is a branch,
+         by design: the scheduler places a loop's body and its back edge is
+         the dependencies carried into the next iteration
+         (`list_scheduler.dependencies` with `loop` set - the operations
+         twice, an edge carried where its reader is in the second copy), so a
+         branch in the IR would be a second place to keep the same order. What
+         the emitter's `slices` still holds - the frame's registers, the slice
+         operands' index and immediate, the temporaries' freeing by last use,
+         the preloaded copies - goes with 7 and 6.
       6. *Preloading in the loop's sections*: the pipelined copies' loads in
          the prologue and at the body's end, the last iteration without - one
          code with the mm STO's preload shift (below).
