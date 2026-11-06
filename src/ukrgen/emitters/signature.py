@@ -388,22 +388,22 @@ class signature_emitter:
             peak = max(peak, len(live) + len(through))
         return peak
 
-    def _slices(self, op) -> list[str]:
+    def sliced_ops(self, op) -> list:
+        """A loop over slices' operations taking its slice index (_rowreg, _colreg)"""
+        return [b for b in op.block if b.sigs is not None and
+                any(n.endswith(("_rowreg", "_colreg")) for s in _sigs(b.sigs) for n in s.operands)]
+
+    def slice_frame(self, op) -> tuple:
         """
-        A loop over a tile's slices, as many as it has rows or columns at run
-        time: the slice index in a register every slice operand takes (SME:
-        w12-w15), counting up - an unrolled iteration's slices at its
-        immediates; a walking pointer per memory access, from its first
-        slice's address, by its step; every operation of the block for each
-        slice - tile slice accesses and moves at the slice index, memory
-        accesses at their pointers, the rest as anywhere
+        A loop over slices' frame: its index in a register every slice operand
+        takes - the values their signatures allow (asmgen's domains:
+        operand_values; SME: w12-w15) - set to 0, its count (slice_count) in a
+        counter. :return: the counter, the index, their setting
         """
         comp = op.info.get("component") or op.walks[0].anchor.indices[0].component
         dt = self.ctx.component_dts[comp]
-        sliced = [b for b in op.block if b.sigs is not None and
-                  any(n.endswith(("_rowreg", "_colreg")) for s in _sigs(b.sigs) for n in s.operands)]
         allowed = set(range(self.gen.max_gregs()))
-        for b in sliced:
+        for b in self.sliced_ops(op):
             for sig in _sigs(b.sigs):
                 for name in sig.operands:
                     if name.endswith(("_rowreg", "_colreg")):
@@ -416,8 +416,29 @@ class signature_emitter:
         self.rt.reserve_specific_reg("greg", number)
         index = self.gen.greg(number)
         counter = self.greg()
-        lines = [asmops.mov(self.gen, src=self.slice_count(op, dt), dst=counter),
-                 asmops.set_imm(self.gen, reg=index, imm=0)]
+        return counter, index, [asmops.mov(self.gen, src=self.slice_count(op, dt), dst=counter),
+                                asmops.set_imm(self.gen, reg=index, imm=0)]
+
+    def _slices(self, op) -> list[str]:
+        """
+        A loop over a tile's slices, as many as it has rows or columns at run
+        time: the slice index in a register every slice operand takes (SME:
+        w12-w15), counting up - an unrolled iteration's slices at its
+        immediates; a walking pointer per memory access, from its first
+        slice's address, by its step; every operation of the block for each
+        slice - tile slice accesses and moves at the slice index, memory
+        accesses at their pointers, the rest as anywhere
+        """
+        comp = op.info.get("component") or op.walks[0].anchor.indices[0].component
+        dt = self.ctx.component_dts[comp]
+        sliced = self.sliced_ops(op)
+        frame = op.info.get("frame")
+        if frame and frame[0] in self.values:
+            # the IR's frame (slice_frame): its count and index set before
+            counter, index = self.values.pop(frame[0]), self.values.pop(frame[1])
+            lines = []
+        else:
+            counter, index, lines = self.slice_frame(op)
         # explicit copies in the block (unroll_loops): emitted once an
         # iteration, every pointer stepping by the unroll; a step register
         # shared by walks of the same step
@@ -1909,6 +1930,11 @@ class signature_emitter:
                 code = self.late_setup
             finally:
                 self.late_setup, self.regions_started = saved, started
+            return [l.strip() for chunk in code for l in str(chunk).splitlines() if l.strip()]
+        if "slice_frame" == op.kind:
+            # a loop over slices' count and index, set before it (slice_frame)
+            counter, index, code = self.slice_frame(op.params["loop"])
+            self.values[op.write_names[0]], self.values[op.write_names[1]] = counter, index
             return [l.strip() for chunk in code for l in str(chunk).splitlines() if l.strip()]
         raise specialization_error(f"no value operation {op.kind} emitted yet")
 

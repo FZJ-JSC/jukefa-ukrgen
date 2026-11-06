@@ -549,6 +549,32 @@ def value_setup(program) -> int:
     return len(values)
 
 
+def slice_frames(program) -> int:
+    """
+    Each loop over slices' frame in the IR: a value operation before it, in its
+    section - its count (its tile's slices, or a masked tile's run-time rows)
+    and its index (from 0, in a register its slice operands take) - the loop
+    reading both (info frame) (docs/ADDRESSING_PLAN.md: lowering the loops
+    over slices, 2). :return: the loops
+    """
+    from ..models.load_store_operations import lsc_value_op
+    loops = 0
+    for block in program.blocks + [b for case in program.cases for b in case.blocks]:
+        for section in SECTIONS:
+            ops = getattr(block, section) or []
+            out = []
+            for op in ops:
+                if isinstance(op, lsc_loop) and "slices" == op.info.get("kind") and not op.info.get("frame"):
+                    names = [f"slices({id(op)}):count", f"slices({id(op)}):index"]
+                    out.append(lsc_value_op("slice_frame", writes=names, reads=[], loop=op))
+                    op.info["frame"] = names
+                    op.refresh()
+                    loops += 1
+                out.append(op)
+            setattr(block, section, out)
+    return loops
+
+
 #: an immediate two adds merge into - within every ISA's add of one
 #: (RISC-V's addi: 12 bits signed)
 MERGED_IMMEDIATE = 2047

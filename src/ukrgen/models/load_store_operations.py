@@ -561,6 +561,13 @@ class lsc_loop(lsc_operation):
                     self.reads.append(len(self.indices) - 1)
                 if p in op.writes:
                     self.writes.append(len(self.indices) - 1)
+        # its frame's values - a loop over slices' count and index (the IR's
+        # slice_frame): read by it
+        for name in (self.info.get("frame") or ()):
+            self.indices.append(lsc_reg_index(name, [0]))
+            self.rtypes.append(None)
+            self.reg_types.append(lsc_reg_type.value)
+            self.reads.append(len(self.indices) - 1)
         # the address registers it walks (its walk plan): moved by it - read
         # and written
         for comp, reg in (self.walk_plan or {}):
