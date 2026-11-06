@@ -76,6 +76,31 @@ class unroll_loops(lsc_irmod):
         return changed
 
 
+class expand_slice_copies(lsc_irmod):
+    """
+    A loop over slices unrolled - by unroll_loops or as its component's
+    subtiling sets it (--COMP-subtiling slices_col:unroll=2) - with its copies
+    in the block, explicit: each copy's slices at its immediates, its walks
+    shifted, its temporaries its own (expand_copies). The emitter's loop over
+    slices takes explicit copies only - no rotating register sets
+    (docs/ADDRESSING_PLAN.md: lowering the loops over slices, 1)
+    """
+    name = "expand_slice_copies"
+    description = "unrolled loops over slices with their copies in the block"
+    placement = irmod_placement.PRE_SPECIALIZE
+    default_enabled = True
+    params = []
+    constraints = ""
+
+    def apply(self, program) -> int:
+        changed = 0
+        for op in list(slice_loops(program)):
+            if op.subtiling.unroll > 1 and not op.info.get("unrolled"):
+                expand_copies(program, op)
+                changed += 1
+        return changed
+
+
 def slice_loops(program):
     from .vectorize import loop_of
     seen = set()

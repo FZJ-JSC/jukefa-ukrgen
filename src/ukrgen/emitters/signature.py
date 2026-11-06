@@ -422,6 +422,9 @@ class signature_emitter:
         # iteration, every pointer stepping by the unroll; a step register
         # shared by walks of the same step
         explicit = op.info.get("unrolled")
+        if op.subtiling.unroll > 1 and not explicit:
+            raise specialization_error(f"{comp}: a loop over slices unrolled {op.subtiling.unroll} times "
+                                       f"without its copies in the block (expand_slice_copies)")
         scale = op.subtiling.unroll if explicit else 1
         plan = op.walk_plan
 
@@ -528,29 +531,23 @@ class signature_emitter:
         loop = f"ukr{next(self.labels)}_slices"
         lines.append(self.gen.label(label=loop))
         unroll = op.subtiling.unroll
-        # the block's own vector temporaries - written before read - rotate
-        # through as many register sets as asked: an unrolled iteration's
-        # slices don't wait on each other's registers
-        rotate = 1 if explicit else max(1, min(op.subtiling.registers, unroll))
         def keys(b, positions):
             types = b.rtypes or []
             return [(b.indices[p].component, b.indices[p].indices[0], types[p] if p < len(types) else None)
                     for p in positions]
         # the block's own vector temporaries: written before read (lsc_model.liveness)
         local = liveness.local(op.block)
-        sets = [{} for _ in range(rotate)]
-        # with one register set, a temporary is free again after its last use
-        # in the iteration - the next tile's slice takes its register (cluster
-        # and the scheduler's budget ordered the tiles' chains one by one)
+        # a temporary free again after its last use in the iteration - the
+        # next tile's slice takes its register (cluster and the scheduler's
+        # budget ordered the tiles' chains one by one; copies' own names)
         dead_after = {}
-        if 1 == rotate:
-            last_use = {}
-            for pos, b in enumerate(op.block):
-                for k in keys(b, list(b.reads) + list(b.writes)):
-                    if k in local:
-                        last_use[k] = pos
-            for k, pos in last_use.items():
-                dead_after.setdefault(pos, []).append(k)
+        last_use = {}
+        for pos, b in enumerate(op.block):
+            for k in keys(b, list(b.reads) + list(b.writes)):
+                if k in local:
+                    last_use[k] = pos
+        for k, pos in last_use.items():
+            dead_after.setdefault(pos, []).append(k)
         # software pipelined (preload): the first copy's loads - memory loads,
         # slices moved out of tiles - before the loop and, for the next
         # iteration, at the end of each; the last iteration without them
@@ -617,54 +614,39 @@ class signature_emitter:
             lines += settle()
             return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
                 if l.strip()]
-        for u in range(1 if explicit else unroll):
-            group = u % rotate
-            saved = {}
-            if group:
-                for k in local:
-                    if k not in self.phys:
-                        continue
-                    if k not in sets[group]:
-                        n = self.alloc.reserve("vreg")
-                        sets[group][k] = (n, self.gen.vreg(n))
-                    saved[k] = self.phys[k]
-                    self.alloc.bind(k, sets[group][k][1])
-            for pos, b in enumerate(op.block):
-                if b in sliced:
-                    b.properties.update(slice_reg=index,
-                                        slice_imm=b.properties.get("copy", 0) if explicit else u)
-                if isinstance(b, (lsc_load, lsc_store)):
-                    vectors = None
-                    if plan:
-                        moves, walker, vectors = place(b)
-                        lines += moves
-                    else:
-                        walker = walkers[b.properties.get("walk", 0)]
-                    line = self._mem(b, self.reg(b.indices[1], b.rtypes[1]), walker, 0,
-                                     voffset=vectors)
-                    if line is None:
-                        raise specialization_error(f"{op.info.get('component')}: no {b.step.op} "
-                                                   f"of a slice's {b.indices[0].component} takes "
-                                                   f"a plain address at slice immediate {u}")
-                    lines.append(line)
-                elif isinstance(b, lsc_move):
-                    lines.append(self.move(b))
+        # one pass over the block: the copies (explicit) or the one slice an
+        # iteration takes
+        for pos, b in enumerate(op.block):
+            if b in sliced:
+                b.properties.update(slice_reg=index, slice_imm=b.properties.get("copy", 0))
+            if isinstance(b, (lsc_load, lsc_store)):
+                vectors = None
+                if plan:
+                    moves, walker, vectors = place(b)
+                    lines += moves
                 else:
-                    lines += self._emit_op(b)
-                for k in dead_after.get(pos, ()):
-                    if k in self.phys:
-                        self.release(k)
-            if plan:
-                # explicit copies are in the block: an iteration takes unroll
-                # slices; otherwise each copy one
-                lines += step_on(unroll if explicit else 1)
+                    walker = walkers[b.properties.get("walk", 0)]
+                line = self._mem(b, self.reg(b.indices[1], b.rtypes[1]), walker, 0,
+                                 voffset=vectors)
+                if line is None:
+                    raise specialization_error(f"{op.info.get('component')}: no {b.step.op} "
+                                               f"of a slice's {b.indices[0].component} takes "
+                                               f"a plain address at slice immediate "
+                                               f"{b.properties.get('copy', 0)}")
+                lines.append(line)
+            elif isinstance(b, lsc_move):
+                lines.append(self.move(b))
             else:
-                for walker, delta in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values():
-                    lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
-            self.phys.update(saved)
-        for group in sets:
-            for n, _ in group.values():
-                self.alloc.unreserve("vreg", n)
+                lines += self._emit_op(b)
+            for k in dead_after.get(pos, ()):
+                if k in self.phys:
+                    self.release(k)
+        if plan:
+            # an iteration takes unroll slices (its copies, explicit)
+            lines += step_on(unroll)
+        else:
+            for walker, delta in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values():
+                lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
         lines.append(asmops.add_imm(self.gen, reg=index, imm=unroll))
         lines.append(asmops.add_imm(self.gen, reg=counter, imm=-unroll))
         lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
