@@ -147,8 +147,10 @@ in the IR, in order.
       (0309: the k loop's building treats one as the loop it stands for - its
       copies a loop of their own; `vectorize_loops`, `unroll_loops`,
       `cluster`, `copyprop` see through it), the kernels the same; SME's
-      slices next (`hoist_slices` needless, `forward_slices` forwarding at
-      tile level).
+      slices too (the builder's `slice_loop` is the tile access with the loop
+      beside it) - the loops themselves lowered as 6.6 lowers them, not
+      re-modelled: `hoist_slices` needless there, `forward_slices` forwarding
+      at tile level.
    2. **The specializer split: forms, then addresses.** An access's signature
       depends on its address only through which forms take the immediate:
       every operation's forms first (0310: usable signatures, checks), the
@@ -172,7 +174,45 @@ in the IR, in order.
       register sets rotated, nothing freed by hand.
    6. **The emitter's `block` for nested blocks**: the count, the index (SME's
       w12-w15 a register class; the slice operand its index and the copy's
-      immediate); `slices` and `loop` gone.
+      immediate); `slices` and `loop` gone. The loops over slices lowered
+      where they stand - the standing operation 6.1 made of them kept, not
+      re-modelled as a whole tile's operations:
+      1. *The copies in the block* - done. A loop over slices unrolled with
+         its copies explicit (expand_slice_copies), each copy's temporaries
+         its own, its walks shifted along the index: the emitter's rotating
+         register sets, its passes over the block and their bookkeeping go.
+      2. *The frame in the IR* - done. Its count (a tile's vector length of
+         slices, or a masked tile's rows at run time) and its index (in the
+         register every slice operand takes) a value operation before it
+         (slice_frame), the loop reading both, scheduled as the operations
+         before the loop.
+      3. *An iteration's address moves in the IR* - next. The moves placing
+         each access at its plan register (slice_placements) and the
+         iteration's step on (step_on) address computations of the loop's
+         block, the last on a register carrying the advance - as the k loop's
+         advances do - the vector lengths an access takes as an immediate
+         recorded with it. The emitter emits them, not their spelling: the
+         scheduler places them, addrmerge and the speller's merge see them.
+      4. *Walkers and columns, registers of the loop's own*: a walk's pointer
+         (a loop of a count known at run time) and an access column
+         (--loop-gregs) a register of the IR's own (new_reg), set up before
+         the loop, stepped in it - the emitter allocating, not choosing.
+      5. *The loop through `block`*: its control - the index's step, the
+         counter's, the branch - as `loop_code` makes it; `slices` and
+         `_slices` gone.
+      6. *Preloading in the loop's sections*: the pipelined copies' loads in
+         the prologue and at the body's end, the last iteration without - one
+         code with the mm STO's preload shift (below).
+      7. *The renamer in its body*: the copies' temporaries virtual tiles of
+         it, renamed within the registers the enclosing section leaves - the
+         emitter's freeing after a last use and its peak check go.
+
+      The SME and SMESVE kernels are recorded before the lowering starts
+      (tests/flow/golden_kernels: each configuration's families at their first
+      sizes, their microtiles, the split ones, the packing transposes - no
+      kernel with a loop over slices among the records before), so every
+      step's reordering shows; the runs under qemu
+      (tests/specializers/test_sme_run.py) say it right.
    7. **General first**: the VLA element loops (RVV's `vla_lanes`,
       tests/specializers/test_vla_repeat.py under qemu at two VLENs; SVE's
       insr) before SME's slices (tests/stages/test_sme.py, the SME and SMESVE
