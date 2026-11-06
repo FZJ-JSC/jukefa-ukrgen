@@ -246,8 +246,14 @@ in the IR, in order.
          again after the advance, not clones shifted along the index, and
          which copies may be pipelined is still preload_depth's rule of
          register sets - exact once the renamer knows the preloaded values'
-         names for values not to reuse. No shipped configuration preloads
-         (unroll_loops-preload is 0), so the golden kernels are unchanged.
+         names for values not to reuse - and a loop whose first copies have
+         nothing to move ahead (no memory load, no slice moved out of a tile)
+         is not pipelined at all (unroll_loops' pipelined): its sections would
+         repeat the body for a last iteration that loads nothing.
+         No shipped configuration preloads (unroll_loops-preload is 0), so the
+         golden kernels are unchanged; turning it on for the reference SME and
+         SMESVE families is 6.6's next work, not a config's - the split
+         families' C epilogues came out wrong under qemu (see below).
       7. *The renamer in its body* - done. The scheduler renames a loop's own
          temporaries within the registers its section leaves
          (lsc_model.rename, rename_temporaries: a value keeps its own name
@@ -261,6 +267,22 @@ in the IR, in order.
          a last use within the body is gone: a name keeps its register the
          iteration long, and the loop's end frees them - the hand frees the
          allocation's liveness deletes (docs/REGISTER_ALLOCATION.md step 6).
+
+      *Preloading the references, a note.* unroll_loops-preload 1 with
+      registers = the unroll across the six gemm configurations: the simple
+      kernels right under qemu (test_slice_preload, unscheduled and scheduled),
+      the split families' C epilogues wrong - sf_2vx4v_4x4v 54 of 81 runs, the
+      mismatches at rows 6 and 7 of a 16-row tile, fopa_fma_split_n the same -
+      and 94 939 -> 108 763 instructions over the 12 configurations (+14.6%: a
+      pipelined loop repeats its body for the last iteration, and the reference
+      store loops are short, so the repetition is most of them). Reverted: a
+      reference must not be wrong. Open: which of the two sections' boundaries
+      is at fault - the trailing group, whose placement (`placed[id(b)]`) was
+      computed once over prologue-then-rest and is used again after the
+      advance, or the epilogue's addresses, which follow the loop's last body
+      having already stepped the pointers. Worth settling before the configs
+      turn it on; an `ir_block` body (the loop-building stage) makes both a
+      property of the block rather than of the emitter.
 
       *Epilogue cases, a note.* With the sections in the IR the last iteration
       is a section as the prologue is. The alternative weighed before the

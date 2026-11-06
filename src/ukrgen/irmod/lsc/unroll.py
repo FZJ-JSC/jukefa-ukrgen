@@ -70,7 +70,7 @@ class unroll_loops(lsc_irmod):
                     expand_copies(program, op)
                     depth = preload_depth(int(self.values["preload"]), op.subtiling.unroll,
                                           op.subtiling.registers)
-                    if depth:
+                    if depth and pipelined(op, depth):
                         op.info["preload"] = depth
                 changed += 1
         return changed
@@ -217,3 +217,19 @@ def preload_depth(asked: int, unroll: int, registers: int) -> int:
                 not any(u % registers in preloaded for u in range(depth, unroll)):
             return depth
     return 0
+
+
+def pipelined(loop, depth: int) -> bool:
+    """
+    Whether the first depth copies have anything to move ahead: a memory load,
+    a slice moved out of a tile - a loop whose copies are stores and
+    arithmetic only has nothing to pipeline, and pipelining it would repeat
+    its body for a last iteration that loads nothing
+    """
+    from ...models.load_store_operations import lsc_load, lsc_move
+    from asmgen.asmblocks.op import register_type as rgt
+    return any(b.properties.get("copy", 0) < depth and
+               (isinstance(b, lsc_load) or
+                (isinstance(b, lsc_move) and "slice" in b.properties
+                 and (b.rtypes or [])[:1] == [rgt.TILE]))
+               for b in loop.block)
