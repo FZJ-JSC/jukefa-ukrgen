@@ -526,22 +526,49 @@ class lsc_loop(lsc_operation):
     pointers moved after each. To the scheduler it reads and writes what its
     block does, and its walks' address registers.
 
+    Its sections: the body, one iteration (sections["body"], `block`), and
+    where it is software pipelined a prologue (what runs once before it) and
+    its last iteration (the epilogue, which is its body without the loads the
+    prologue and the body's end cover) - as an ir_block's are, for the passes
+    that place addresses and schedule to see the same operations the emitter
+    will.
+
     info: what the loop does as data - component, index, element stride,
         direction - for irmods turning it into a vector access where the ISA
         has one
     """
 
-    def __init__(self, *, block, subtiling, walks, info=None):
+    #: its sections, in the order they run
+    SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
+
+    def __init__(self, *, block, subtiling, walks, info=None, sections=None):
         super().__init__(tiles=[], indices=[], reads=[], writes=[], reg_types=[])
-        self.block = block
+        self.sections = {"body": list(block)}
+        self.sections.update(sections or {})
         self.subtiling = subtiling
         self.walks = walks
         self.info = info or {}
         self.refresh()
 
+    @property
+    def block(self) -> list:
+        """Its body: one iteration's operations"""
+        return self.sections["body"]
+
+    @block.setter
+    def block(self, ops: list) -> None:
+        # its own dict of sections: a copy of a loop (builder.shifted) moves
+        # its body without moving the original's
+        self.sections = {**self.sections, "body": ops}
+
+    def ops(self) -> list:
+        """Its operations, every section's, in the order they run"""
+        return [op for name in self.SECTIONS for op in self.sections.get(name) or []]
+
     def refresh(self):
         """
-        The registers the loop reads and writes, from its walks and block
+        The registers the loop reads and writes, from its walks and its
+        sections' operations
         """
         self.indices, self.rtypes, self.reads, self.writes = [], [], [], []
         self.reg_types = []
@@ -550,7 +577,7 @@ class lsc_loop(lsc_operation):
             self.rtypes.append(None)
             self.reg_types.append(w.anchor.reg_types[0])
             self.reads.append(len(self.indices) - 1)
-        for op in self.block:
+        for op in self.ops():
             types = op.rtypes or [None] * len(op.indices)
             kinds = op.reg_types or []
             for p, idx in enumerate(op.indices):

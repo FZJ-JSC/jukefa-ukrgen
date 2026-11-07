@@ -166,6 +166,16 @@ in the IR, in order.
       register classes (ZA's index registers). Element loops first; the k
       loop later - the model builder emitting one iteration and a loop
       descriptor, every loop built one way.
+      The two unrolls are decided apart today and ask different questions of
+      the ISA: the loop over slices in `unroll_loops` (an irmod, before the
+      forms are trimmed) - `count_unrolls` for the count, then
+      `immediates_take`: every slice operand must have a signature taking the
+      immediates 0..factor-1, SME's 4-bit row/column immediate bounding it at
+      16; the k loop in the model builder from the config's unroll - the
+      count's divisors alone, no immediate in play (its iterations are tiles
+      along k at register offsets). Same emission (`loop_code`, `step` the
+      unroll), different decision: one loop built one way asks the form once,
+      after `isa_specialize` has said which forms an address leaves usable.
    4. **Addresses after the loops**: positions, walks, moves back, advances,
       immediates, offsets over every section, nested or not - each copy its
       own address, its form the one that address allows.
