@@ -294,6 +294,24 @@ in the IR, in order.
       turn it on; an `ir_block` body (the loop-building stage) makes both a
       property of the block rather than of the emitter.
 
+      *The sections, tried.* With `lsc_loop.sections` in place the preload was
+      built by the pass - prologue clones (marked ahead), the same loads again
+      at the end of the body (marked preload), `slice_moves` placing prologue
+      and body in one chain (an iteration is a cycle, so an access is placed
+      alike wherever it is emitted) and the iteration's steps before the
+      trailing group, `slice_walks`/`slice_registers` rewriting the prologue's
+      accesses and stepping before the group too, the emitter emitting the
+      three sections, the renamer over `op.ops()` because the prologue writes
+      what the body reads. The simple kernels: right, under qemu, scheduled and
+      unscheduled. The references: the split families stop *building* - the
+      AB loop 27 local values plus 9 held across it, 36 names for 32 registers,
+      `rename_temporaries` able to rename the local ones alone - and the
+      earlier wrongness never got a chance to show. A name holding a register
+      the iteration long makes the loop need its names to fit the room, and
+      `room`, `bounded` and `peak` count three different things there: it is
+      the allocation (docs/REGISTER_ALLOCATION.md step 6) that decides this,
+      per section, with what is live across each boundary known. Reverted
+      until then; the step is blocked on the allocation, not on the sections.
       *Epilogue cases, a note.* With the sections in the IR the last iteration
       is a section as the prologue is. The alternative weighed before the
       loops were fused: each case its own kernel - kernels inside kernels -
