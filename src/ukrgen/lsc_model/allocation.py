@@ -279,3 +279,130 @@ def analyse(program, resources_: resources) -> allocation_problem:
             problem.deferred.append(deferred(key, "fixed by the model or the user",
                                              str(entry.fixed)))
     return problem
+
+
+@dataclass
+class allocation_result:
+    """The allocation's answer: a number per virtual register, and what it
+    couldn't place (a section whose names don't fit, a value no register of its
+    class meets)"""
+    bindings: dict = field(default_factory=dict)
+    unfitted: list = field(default_factory=list)
+
+    def number(self, key) -> tuple | None:
+        """The (tag, number) a value takes, or None where it wasn't placed"""
+        return self.bindings.get(key)
+
+    def report(self) -> str:
+        lines = [f"{len(self.bindings)} values placed, {len(self.unfitted)} not"]
+        for key, why in self.unfitted:
+            lines.append(f"  {key[0]}{key[1]}: {why}")
+        return "\n".join(lines)
+
+
+def _overlaps(a: value, b: value) -> bool:
+    """
+    Whether two values are live at once: a range of one intersecting a range of
+    the other in the same block - a carried range the whole of its loop, so it
+    meets everything there
+    """
+    for one in a.ranges:
+        for other in b.ranges:
+            if one.block != other.block:
+                continue
+            if one.carried or other.carried:
+                return True
+            if one.first <= other.last and other.first <= one.last:
+                return True
+    return False
+
+
+def allocate(problem: allocation_problem, resources_: resources) -> allocation_result:
+    """
+    The second pass: a static number per virtual register, no emission. The
+    fixed ones as given, then the most constrained - fewest registers of its
+    class to choose from, then longest lived, then by name - each taking the
+    lowest register of its class free of every value it is live at once with;
+    a group's registers consecutive and aligned, as its class says
+    """
+    result = allocation_result()
+    by_tag: dict = {}
+    for key, entry in problem.values.items():
+        if entry.cls is None:
+            result.unfitted.append((key, "no register class (not a data or address file yet)"))
+            continue
+        by_tag.setdefault(entry.cls.tag, []).append(key)
+
+    def choices(entry):
+        allowed = entry.cls.allowed
+        pool = resources_.pools.get(entry.cls.tag, 0)
+        return list(allowed) if allowed is not None else list(range(pool))
+
+    for tag, keys in sorted(by_tag.items()):
+        pool = resources_.pools.get(tag, 0)
+        if pool <= 0:
+            # a file the problem's resources say nothing of (the tiles' own,
+            # asmgen's tag by data type: the emitter's to name until step 4's)
+            for key in keys:
+                result.unfitted.append((key, f"no pool known for the {tag} file"))
+            continue
+        taken: list = []            # (key, entry, first of its units)
+        for key in sorted(keys, key=lambda k: (len(choices(problem.values[k])),
+                                               -_span(problem.values[k]), str(k))):
+            entry = problem.values[key]
+            size = max(1, entry.cls.size)
+            align = max(1, entry.cls.align)
+            free = [c for c in choices(entry)
+                    if c % align == 0 and c + size <= pool
+                    and all(abs(c - other) >= max(size, problem.values[k2].cls.size)
+                            for k2, other, _ in taken
+                            if _overlaps(entry, problem.values[k2]))]
+            if not free:
+                result.unfitted.append((key, f"no {tag} register free of the values it is live "
+                                             f"with ({len(choices(entry))} of the file's {pool})"))
+                continue
+            number = free[0]
+            result.bindings[key] = (tag, number)
+            taken.append((key, number, number))
+        if len(taken) > pool:
+            result.unfitted.append(((tag, 0), f"{len(taken)} names for {pool} {tag} registers"))
+    return result
+
+
+def _span(entry: value) -> int:
+    """How long a value is live, its ranges together: the longest first"""
+    return sum(r.last - r.first + 1 for r in entry.ranges)
+
+
+def validate(problem: allocation_problem, result: allocation_result,
+             resources_: resources) -> list:
+    """
+    What is wrong with a result, as text: a value left unplaced that some
+    register of its class could hold, two values live at once sharing a
+    register (or one of a group's), a number outside the file, an alignment or
+    an allowed register broken. Empty where it is right - the check the
+    allocation's tests and tools assert
+    """
+    wrong = []
+    for key, entry in problem.values.items():
+        placed = result.number(key)
+        if placed is None:
+            continue
+        tag, number = placed
+        pool = resources_.pools.get(tag, 0)
+        size, align = max(1, entry.cls.size), max(1, entry.cls.align)
+        if entry.cls.allowed is not None and number not in entry.cls.allowed:
+            wrong.append(f"{key[0]}{key[1]} at {number}, not one of {list(entry.cls.allowed)}")
+        if number % align or number + size > pool:
+            wrong.append(f"{key[0]}{key[1]} at {number} (size {size}, align {align}, {pool} registers)")
+    keys = [k for k in problem.values if result.number(k) is not None]
+    for pos, one in enumerate(keys):
+        for other in keys[pos + 1:]:
+            a, b = problem.values[one], problem.values[other]
+            if a.cls.tag != b.cls.tag or not _overlaps(a, b):
+                continue
+            gap = abs(result.number(one)[1] - result.number(other)[1])
+            if gap < max(a.cls.size, b.cls.size):
+                wrong.append(f"{one[0]}{one[1]} and {other[0]}{other[1]} share "
+                             f"{result.number(one)[1]} live at once")
+    return wrong
