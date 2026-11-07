@@ -105,6 +105,67 @@ The 33 of SMESVE's 2x4x4 (0329's fallback) is what this removes: the scheduler
 broke its own budget (a soft one) - after renaming there is no budget for it
 to break.
 
+## One allocator, two passes: where it lives
+
+`lsc_model/allocation.py`, one class over the IR - `allocation` - the stage's
+only driver. Two methods, no state carried between them but the problem it
+returns:
+
+`analyse(program) -> allocation_problem` - every virtual register (a data
+value, an address register, a value in a general register), with:
+
+- its **file and class**: the tracker's tag, its units (a group's ways, a
+  structfuse part's size), its alignment (RVV's groups, structure loads), the
+  dtype its instruction is formed from (`owner`);
+- its **constraints**: what its operands' signatures allow (`operand_values`:
+  SME's slice index in w12-w15, a governing predicate in p0-p7, an indexed
+  operand's 4-bit field), ties (accumulating FMAs), and what it shares with
+  another file (SVE's scalars the low halves of its vectors - one file with two
+  views, so the two must not cross);
+- its **live ranges**: positions over the program's linearised IR - block,
+  section, operation - with the two things that make a loop a loop written as
+  edges rather than as extra positions: a value live from the end of a body to
+  the start of the next is **carried** (one range spanning the back edge), and a
+  value in a loop's prologue is the same value its body reads (the sections are
+  one sequence, the loop one iteration);
+- **written in parts** (a lane, a block, a ZA slice): one value, never split
+  (`liveness.keeps`);
+- **fixed or flexible**: the user's and the model's fixed allocations (rings,
+  accumulators, the base parameters' and the calling convention's registers,
+  SME's slice index, a counter an ISA names) as given, everything else
+  flexible;
+- **demand**: per section the values live at once and the names a file needs,
+  and per program the demands that don't fit, with where.
+
+`allocate(problem) -> bindings` - static, in one order: the fixed ones first,
+then the most constrained (short bounds, ties, groups, slice indices), then the
+rest by least recent use over the file's registers left, the low ones kept for
+the scheduler to load ahead; a group's registers consecutive and aligned; the
+result one number each, bound into the program. No emission, no emitter state.
+
+The emitter then looks every number up: `reg()`, `aregs`, and forms the
+instruction from the operation's own component and register type. Which means
+these go, all of them the analysis' now: `take`'s lazy allocation,
+`free`/`release_aregs`/`release_pointers`/the columns' release/`straight()`'s
+per-block releases/`dead_after`, `reserve`/`unreserve`/`bind` (an anonymous
+register is an anonymous live range, a slice loop's set a set of ranges the
+allocation keeps together), `peak_registers`/`bounded`/`room` (the problem's
+demand), `_register_bounds` (the problem's constraints), and the tracker's
+priorities (the allocation's order).
+
+The migration, each step its own commit:
+
+1. **The analysis** - the module, the problem, its numbers; nothing allocated
+   from it yet, so the kernels are byte for byte the same. Its first use is
+   diagnostic: the counts explain the failures the emitter hits - a loop over
+   slices of 36 names for 32 registers, printed with the section and the values.
+2. **Data registers allocated from it** - the emitter's `take`/`free` become
+   lookups; kernels change (goldens, qemu, counts).
+3. **The emitter's dynamic machinery deleted** - the releases, the sets, the
+   peak check.
+4. **The address registers through the same two passes** (step 6) - `new_reg`'s
+   emitter-side numbering, `aregs`' laziness, `release_*`, `settle`.
+
 ## Steps
 
 1. **One allocator in the emitter** - done (0327).
