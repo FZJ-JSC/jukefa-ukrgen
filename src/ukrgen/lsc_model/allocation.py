@@ -164,6 +164,10 @@ class resources:
                     occupy come from (asmgen's `reg_tracker`) - its
                     `registered_types`, `max_regs`, `pool` and `storage` the
                     machine, no layout here
+    :param reserved: tag -> the numbers it can't give a value: what the
+                     machinery holds there before any value is placed (RVV's
+                     mask is its vector 0, one register of a file of its own
+                     sharing it) - a value placed there would clobber it
     """
     pools: dict[str, int] = field(default_factory=dict)
     groups: dict = field(default_factory=dict)
@@ -171,6 +175,7 @@ class resources:
     bounds: dict[tuple, list[int]] = field(default_factory=dict)
     tile_tag: Callable[[adt], str] | None = None
     tracker: reg_tracker | None = None
+    reserved: dict[str, set[int]] = field(default_factory=dict)
 
     def pool_of(self, tag: str) -> frozenset[str]:
         """
@@ -226,8 +231,17 @@ class resources:
             tile_tag = gen.treg_tag       # an ISA without tiles has none
         except AttributeError:
             tile_tag = None
+        # the machinery's registers: the mask file's numbers that are a value
+        # file's storage - RVV's m0 is v0, one register for the whole program's
+        # masks - so no value can have them. SME's tile views (treg8 is one
+        # register over the 64-bit tiles) are values' files, not this
+        reserved: dict[str, set[int]] = {}
+        for number in range(tracker.max_regs.get("mreg", 0)):
+            for storage_tag, storage_number in tracker.storage("mreg", number):
+                if storage_tag != "mreg" and storage_tag in pools:
+                    reserved.setdefault(storage_tag, set()).add(storage_number)
         return cls(pools=pools, groups=program.groups, dts=dts, tile_tag=tile_tag,
-                   tracker=tracker)
+                   tracker=tracker, reserved=reserved)
 
 
 @dataclass
@@ -536,7 +550,9 @@ def _rings(problem : allocation_problem, resources_ : resources) -> dict[str, tu
         need[ring] = max(need.get(ring, 0), entry.fixed.slot + 1)
         widths[ring] = max(widths.get(ring, 1), max(1, entry.register_class.size))
     blocks : dict[str, tuple[str, int, int]] = {}
-    used : dict[str, set[int]] = {}
+    # the machinery's own numbers are taken before any ring claims a block
+    used : dict[str, set[int]] = {tag: set(numbers)
+                                  for tag, numbers in resources_.reserved.items()}
     # in the order their values first appear - the emitter's own, the one the
     # kernel reaches first getting the bottom of the file
     first : dict[str, int] = {}
@@ -605,7 +621,9 @@ def allocate(problem : allocation_problem, resources_ : resources) -> allocation
         if klass is None:
             return []
         pool = resources_.pools.get(klass.tag, 0)
-        return list(klass.allowed) if klass.allowed is not None else list(range(pool))
+        held = resources_.reserved.get(klass.tag, set())
+        numbers = list(klass.allowed) if klass.allowed is not None else list(range(pool))
+        return [n for n in numbers if n not in held]
 
     def held(entry : virtual_register, number : int) -> frozenset:
         """The registers a value at a number occupies"""
@@ -695,6 +713,8 @@ def validate(problem : allocation_problem, result : allocation_result,
         tag, number = placed
         pool = resources_.pools.get(tag, 0)
         size, align = _units(entry)
+        if number in resources_.reserved.get(tag, set()):
+            wrong.append(f"{key[0]}{key[1]} at {number}, the machinery's own")
         allowed = entry.register_class.allowed
         if allowed is not None and number not in allowed:
             wrong.append(f"{key[0]}{key[1]} at {number}, not one of {list(allowed)}")

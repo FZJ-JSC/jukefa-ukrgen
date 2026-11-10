@@ -122,3 +122,17 @@ class test_allocation(unittest.TestCase):
         result = allocation.allocate(problem, res)
         self.assertTrue(result.unfitted)
         self.assertTrue(any("vreg" in why for _, why in result.unfitted), result.report())
+
+    def test_the_machinery_keeps_its_numbers(self):
+        # the machinery's own numbers are no value's: RVV's mask is vector 0,
+        # the tracker sharing the two, so nothing is placed there and validate
+        # keeps it clear
+        problem, res, _ = problem_and_resources()
+        res.reserved = {"vreg": {0}}
+        result = allocation.allocate(problem, res)
+        self.assertEqual([], result.unfitted)
+        for key in problem.values:
+            placed = result.number(key)
+            if placed is not None and "vreg" == placed[0]:
+                self.assertNotEqual(0, placed[1], key)
+        self.assertEqual([], allocation.validate(problem, result, res))
