@@ -13,7 +13,11 @@ instruction (the register's width and element type). Computed once, from the
 program, so the two can't disagree.
 """
 
+from asmgen.registers import asm_data_type as adt
+
 from ..models.load_store_operations import lsc_load, lsc_store
+from ..models.lsc.index import lsc_reg_index
+from .ir import ir_program
 
 from asmgen.registers import asm_data_type as adt
 from .ir import ir_program
@@ -43,7 +47,7 @@ def register_types(program : ir_program, component_dts : dict[str,adt]) -> dict[
     dts: dict[str,adt] = {}
     ops = ops_of(program)
 
-    def note(idx, dt):
+    def note(idx : lsc_reg_index, dt : adt) -> None:
         # by the value's own register (value(): a renamed value's owner) - its
         # data type the value's, whose register it is in or not
         dts.setdefault(idx.value(), dt)

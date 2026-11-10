@@ -15,7 +15,8 @@ The renames the MRU can't do are reported with what they require
 renamer can be taught them is a question with an answer, not a guess.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from typing import Callable
 
 from asmgen.asmblocks.noarch import asmgen
 from asmgen.asmblocks.op import register_type as rgt
@@ -28,9 +29,11 @@ from .ir import ir_program
 
 @dataclass(frozen=True)
 class live_range:
-    """Where a value is live: the block, the section it starts in, the first
+    """
+    Where a value is live: the block, the section it starts in, the first
     and last operation it appears in - `carried` for a value live across a
-    loop's back edge, one range over the whole iteration"""
+    loop's back edge, one range over the whole iteration
+    """
     block: str
     section: str
     first: int
@@ -39,16 +42,31 @@ class live_range:
 
 
 @dataclass(frozen=True)
+class fixed:
+    """
+    Where a value's register comes from although it isn't the allocation's to
+    choose: a slot of its component's ring (the model's - the ring's registers
+    a block of the file, the slot's number the block's base plus the slot), or
+    the one register an instruction takes (`ring` None)
+    """
+    slot: int
+    why: str
+    ring: str | None = None
+
+
+@dataclass(frozen=True)
 class value:
-    """A virtual register and what it needs"""
+    """
+    A virtual register and what it needs
+    """
     key: tuple
     cls: classes.register_class | None
     ranges: tuple
     #: written in parts - a lane, a block, a tile's slice: one value, never
     #: split, and a renamer's target only where it rewrites all of it
     parts: bool = False
-    #: the number it must take, where the user or the model fixed it
-    fixed: tuple | None = None
+    #: where its register isn't the allocation's to choose
+    fixed: fixed | None = None
     #: the component whose data type forms its instruction
     owner: str | None = None
 
@@ -59,8 +77,10 @@ class value:
 
 @dataclass
 class demand:
-    """What a file needs where: the values live at once and the names - a name
-    holds a register the iteration long, so the names are what must fit"""
+    """
+    What a file needs where: the values live at once and the names - a name
+    holds a register the iteration long, so the names are what must fit
+    """
     tag: str
     where: str
     live: int
@@ -93,7 +113,7 @@ class resources:
     bounds: dict = field(default_factory=dict)
     tile_tag: object = None
 
-    def class_of(self, key) -> classes.register_class | None:
+    def class_of(self, key : tuple) -> classes.register_class | None:
         return classes.register_class_of(key, self.groups, self.dts, self.bounds,
                                          tile_tag=self.tile_tag)
 
@@ -178,8 +198,9 @@ def _liveness(ops: list, live_out: set) -> tuple[list, set, set]:
     return before, live, set(live)
 
 
-def _analyse_sequence(ops: list, live_out: set, where: str, resources_: resources,
-                      problem: allocation_problem, section_of=None) -> tuple[set, set]:
+def _analyse_sequence(ops : list, live_out : set, where : str, resources_ : resources,
+                      problem : allocation_problem,
+                      section_of : Callable[[int], str] | None = None) -> tuple[set, set]:
     """
     A sequence of operations' values, ranges and demands
     :return: (what is live before it, what it reads from outside)
@@ -221,8 +242,8 @@ def _analyse_sequence(ops: list, live_out: set, where: str, resources_: resource
     return live_in, exposed
 
 
-def _analyse_loop(loop, live_out: set, resources_: resources,
-                  problem: allocation_problem) -> None:
+def _analyse_loop(loop : lsc_loop, live_out : set, resources_ : resources,
+                  problem : allocation_problem) -> None:
     """
     A loop's iteration: its sections one sequence (a prologue's write the
     value its body reads), the values across its back edge carried
@@ -243,7 +264,7 @@ def _demand(ops: list, live_out: set, where: str, resources_: resources,
     before, _, _ = _liveness(ops, live_out)
     tags = {}
 
-    def tag_of(key):
+    def tag_of(key : tuple) -> str | None:
         if key not in tags:
             entry = resources_.class_of(key)
             tags[key] = None if entry is None else entry.tag
@@ -285,6 +306,20 @@ def analyse(program : ir_program, resources_: resources) -> allocation_problem:
             continue
         _analyse_sequence(ops, live_out, block.name, resources_, problem,
                           section_of=lambda pos: names[pos])
+    # the values whose register isn't the allocation's to choose: a slot of
+    # the component's ring - the model says which component holds how many,
+    # so slot k is the k-th of them - and a value only one register meets
+    for key in list(problem.values):
+        entry = problem.values[key]
+        if entry.cls is None:
+            continue
+        ring = program.registers.get(key[0])
+        if ring is not None and ring[0] == key[2] and 0 <= key[1] < ring[1]:
+            problem.values[key] = replace(entry, fixed=fixed(
+                key[1], f"the model's {key[0]} ring, slot {key[1]}", ring=key[0]))
+        elif entry.cls.allowed is not None and 1 == len(entry.cls.allowed):
+            problem.values[key] = replace(entry, fixed=fixed(
+                int(entry.cls.allowed[0]), "the only register its instruction takes"))
     # the renames a renamer can't make, with what they need: a value written in
     # parts, one an instruction pins, one the model or the user fixed - the
     # question "must this be the allocation's" answered per value
@@ -299,8 +334,9 @@ def analyse(program : ir_program, resources_: resources) -> allocation_problem:
                 key, "an instruction pins it",
                 "one of the vector registers " + str(list(entry.cls.allowed))))
         elif entry.fixed is not None:
-            problem.deferred.append(deferred(key, "fixed by the model or the user",
-                                             str(entry.fixed)))
+            where = (f"register {entry.fixed.slot} of the {entry.fixed.ring} ring"
+                     if entry.fixed.ring is not None else f"register {entry.fixed.slot}")
+            problem.deferred.append(deferred(key, "fixed: " + entry.fixed.why, where))
     return problem
 
 
@@ -312,7 +348,7 @@ class allocation_result:
     bindings: dict = field(default_factory=dict)
     unfitted: list = field(default_factory=list)
 
-    def number(self, key) -> tuple | None:
+    def number(self, key : tuple) -> tuple | None:
         """The (tag, number) a value takes, or None where it wasn't placed"""
         return self.bindings.get(key)
 
@@ -323,7 +359,7 @@ class allocation_result:
         return "\n".join(lines)
 
 
-def _overlaps(a: value, b: value) -> bool:
+def _overlaps(a : value, b : value) -> bool:
     """
     Whether two values are live at once: a range of one intersecting a range of
     the other in the same block - a carried range the whole of its loop, so it
@@ -340,23 +376,75 @@ def _overlaps(a: value, b: value) -> bool:
     return False
 
 
+def _rings(problem : allocation_problem, resources_ : resources) -> dict:
+    """
+    Each ring's block in its file, the model's components given a run of
+    registers of their own: component -> (tag, base, size), the slot's number
+    the base plus the slot. Blocks from the bottom of each file, in the
+    components' order, as wide as their highest slot
+    """
+    need: dict[str, int] = {}
+    tags: dict[str, str] = {}
+    widths: dict[str, int] = {}
+    for key, entry in problem.values.items():
+        if entry.fixed is None or entry.fixed.ring is None or entry.cls is None:
+            continue
+        ring = entry.fixed.ring
+        tags[ring] = entry.cls.tag
+        need[ring] = max(need.get(ring, 0), entry.fixed.slot + 1)
+        widths[ring] = max(widths.get(ring, 1), max(1, entry.cls.size))
+    blocks, used = {}, {}
+    for comp in sorted(need):
+        tag, size, ways = tags[comp], need[comp], widths[comp]
+        pool = resources_.pools.get(tag, 0)
+        taken = used.setdefault(tag, set())
+        base = next((b for b in range(0, pool - size + 1, ways)
+                     if not any(b + i in taken for i in range(size))), None)
+        if base is None:
+            continue
+        taken.update(range(base, base + size))
+        blocks[comp] = (tag, base, size)
+    return blocks
+
+
 def allocate(problem: allocation_problem, resources_: resources) -> allocation_result:
     """
     The second pass: a static number per virtual register, no emission. The
-    fixed ones as given, then the most constrained - fewest registers of its
-    class to choose from, then longest lived, then by name - each taking the
-    lowest register of its class free of every value it is live at once with;
-    a group's registers consecutive and aligned, as its class says
+    fixed ones as given - a ring's block of the file, the slot's number the
+    block's base plus the slot, an instruction's only register - then the most
+    constrained - fewest registers of its class to choose from, then longest
+    lived, then by name - each taking the lowest register of its class free of
+    every value it is live at once with; a group's registers consecutive and
+    aligned, as its class says
     """
     result = allocation_result()
+    # the model's rings first: they claim their blocks before anything else
+    # of their file is placed
+    rings = _rings(problem, resources_)
+    for key in sorted(problem.values, key=str):
+        entry = problem.values[key]
+        if entry.fixed is None or entry.cls is None:
+            continue
+        if entry.fixed.ring is not None:
+            block = rings.get(entry.fixed.ring)
+            if block is None:
+                result.unfitted.append((key, f"no room in the {entry.cls.tag} file for the "
+                                             f"{entry.fixed.ring} ring"))
+                continue
+            tag, base, _ = block
+            result.bindings[key] = (tag, base + entry.fixed.slot)
+        else:
+            result.bindings[key] = (entry.cls.tag, entry.fixed.slot)
     by_tag: dict = {}
     for key, entry in problem.values.items():
         if entry.cls is None:
             result.unfitted.append((key, "no register class (not a data or address file yet)"))
             continue
+        if result.number(key) is not None:
+            continue
         by_tag.setdefault(entry.cls.tag, []).append(key)
 
-    def choices(entry):
+    def choices(entry : value) -> list[int]:
         allowed = entry.cls.allowed
         pool = resources_.pools.get(entry.cls.tag, 0)
         return list(allowed) if allowed is not None else list(range(pool))
@@ -369,7 +457,10 @@ def allocate(problem: allocation_problem, resources_: resources) -> allocation_r
             for key in keys:
                 result.unfitted.append((key, f"no pool known for the {tag} file"))
             continue
-        taken: list = []            # (key, entry, first of its units)
+        # what the fixed ones of this file already hold
+        taken: list = [(k, result.number(k)[1], 0) for k, entry in problem.values.items()
+                       if entry.cls is not None and entry.cls.tag == tag
+                       and result.number(k) is not None]
         for key in sorted(keys, key=lambda k: (len(choices(problem.values[k])),
                                                -_span(problem.values[k]), str(k))):
             entry = problem.values[key]
@@ -392,7 +483,7 @@ def allocate(problem: allocation_problem, resources_: resources) -> allocation_r
     return result
 
 
-def _span(entry: value) -> int:
+def _span(entry : value) -> int:
     """How long a value is live, its ranges together: the longest first"""
     return sum(r.last - r.first + 1 for r in entry.ranges)
 
