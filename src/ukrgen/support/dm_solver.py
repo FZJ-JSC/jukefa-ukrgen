@@ -596,3 +596,45 @@ class resolved_operation_chain:
         """
         constructs the chain from its string representation
         """
+
+
+
+@dataclass(frozen=True)
+class store_candidate:
+    """
+    One way to write a component to memory
+
+    :param component: component stored
+    :param rtype: register type it is stored from
+    :param rsln: data movement resolution doing it
+    """
+    component : str
+    rtype : rgt
+    rsln : transformation_resolution
+    loc : dml = dml.MEMORY
+
+    def encode(self) -> str:
+        return f"{self.component}.{self.rtype.name}:{self.rsln.unique_tag}"
+
+
+@dataclass(frozen=True)
+class store_choice:
+    """
+    One way to store every component of a store STO
+    """
+    stores : tuple[store_candidate, ...]
+
+    def encode(self) -> str:
+        return " ; ".join(s.encode() for s in self.stores)
+
+
+@dataclass(frozen=True)
+class chosen_to:
+    """
+    The implementation chosen for one STO in one part
+
+    :param encoding: its selection string
+    :param impl: the implementation - an operation chain or a store choice
+    """
+    encoding : str
+    impl : resolved_operation_chain | store_choice

@@ -185,10 +185,6 @@ def main():
         print(f"error: unrecognized arguments: {' '.join(unrecognized())}", file=sys.stderr)
         sys.exit(2)
 
-    if "full_function" in ukr_ctx.asmblocks:
-        print(ukr_ctx.asmblocks["full_function"])
-        return
-
     for sto in ukr_ctx.to_parts[0]:
         encodings = [part[sto].encoding for part in ukr_ctx.to_parts]
         if 1 == len(set(encodings)):

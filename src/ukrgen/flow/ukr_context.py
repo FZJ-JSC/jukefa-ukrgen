@@ -9,21 +9,17 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from asmgen.asmblocks.noarch import asmgen
-from asmgen.registers import asm_data_type as adt
+from asmgen.registers import asm_data_type as adt, reg_tracker
 
+from .stages.ukr.ukr import ukr_composition
 from .stage_param import stage_param
+from ..models.load_store_operations import lsc_operation
+from ..support.op import op_support_builder
+from ..support.dm_solver import chosen_to
 
 if TYPE_CHECKING:
-    # TODO: Fix/rewrite model/specializer/generator
-    #       For now the TYPE_CHECKING enables import from already-reworked stages
-    from asmgen.registers import reg_tracker
-    from ..models.load_store_operations import lsc_operation
-    from ..models.offset_mapper import offset_mapper
-    from ..specializers.asm import lsc_specializer, op_support
-    from ..support.op import op_support_builder
-    from .stages.ukr.ukr import ukr_composition
-    from .stages.solve import chosen_to
     from .stages.sto import sto_tiling
+
 
 class ukr_context:
     """
@@ -51,15 +47,8 @@ class ukr_context:
         self.auto_offset_budget : int | None = None
         #: the fewest general registers left free in the emission (emit stage)
         self.min_free_gregs  : int | None = None
-        self.specializer     : lsc_specializer = None
-        self.op_support_list : list[op_support] = list()
         self.component_dts   : dict[str,adt] = dict()
-        self.sup             : op_support = None
-        self.mappers         : dict[str,offset_mapper] = dict()
         self.strides         : dict[str,tuple[int|None,int|None]] = dict()
-        self.mru_map         : dict[str,tuple[list[str],list[str]]] = dict()
-        self.sched_map       : dict[str,tuple[list[str],bool]] = dict()
-        self.specialization_order : list[str] = list()
 
         # one dict per part of the microtile: STO name -> its tiling
         self.stos            : list[dict[str,sto_tiling]] = list()
@@ -76,7 +65,6 @@ class ukr_context:
         self.subtail_stos    : list[dict] = list()
         self.order           : tuple[str,...] = tuple()
         self.irs             : dict[str,list[lsc_operation]] = dict()
-        self.asmblocks       : dict[str,str] = dict()
         #: hooks run around stages (flow.hooks), parsed by the setup stage
         self.hooks           : list = list()
 
