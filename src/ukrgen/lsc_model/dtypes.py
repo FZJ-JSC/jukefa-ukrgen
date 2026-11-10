@@ -19,35 +19,46 @@ from ..models.load_store_operations import lsc_load, lsc_store
 from ..models.lsc.index import lsc_reg_index
 from .ir import ir_program
 
-from asmgen.registers import asm_data_type as adt
-from .ir import ir_program
-
 #: the sections whose operations carry data registers (the emitter's own list:
 #: init's zeroing and a subtail's are not where a value's type is first seen)
 SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
 
 
 def ops_of(program : ir_program) -> list:
-    """Every operation of a program: its blocks' sections, its cases' - a loop's
-    own through the loop's indices (its refresh)"""
-    out = []
+    """
+    Every operation of a program: its blocks' sections, its cases'
+    :param program: the IR
+    :return: the operations, a loop's own through the loop's indices (its
+             refresh) - the ones whose data registers carry a type
+    """
+    out : list = []
     for block in list(program.blocks) + [b for case in program.cases for b in case.blocks]:
         for section in SECTIONS:
             out.extend(getattr(block, section, None) or [])
     return out
 
 
-def register_types(program : ir_program, component_dts : dict[str,adt]) -> dict[str,adt]:
+def register_types(program : ir_program,
+                   component_dts : dict[str, adt]) -> dict[tuple[str, int], adt]:
     """
-    Data type of every virtual data register (keyed by the index's value()): the
-    loaded or stored memory component's, else the component the value holds,
-    else the kernel's default - the first, for a value none of those name
+    Data type of every virtual data register
+    :param program: the IR
+    :param component_dts: component -> its data type (the ctx's)
+    :return: an index's value() (its component and number) -> its data type: the
+             loaded or stored memory component's, else the component the value
+             holds, else the kernel's default - the first, for a value none of
+             those name
     """
     comps = component_dts
-    dts: dict[str,adt] = {}
+    dts: dict[tuple[str, int], adt] = {}
     ops = ops_of(program)
 
     def note(idx : lsc_reg_index, dt : adt) -> None:
+        """
+        A value's data type, unless a better one was noted
+        :param idx: the index a value sits in
+        :param dt: the data type to note
+        """
         # by the value's own register (value(): a renamed value's owner) - its
         # data type the value's, whose register it is in or not
         dts.setdefault(idx.value(), dt)
