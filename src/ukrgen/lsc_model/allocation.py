@@ -20,7 +20,7 @@ from typing import Callable
 
 from asmgen.asmblocks.noarch import asmgen
 from asmgen.asmblocks.op import register_type as rgt
-from asmgen.registers import asm_data_type as adt
+from asmgen.registers import asm_data_type as adt, reg_tracker
 
 from . import classes, dtypes, liveness
 from ..models.load_store_operations import lsc_loop
@@ -148,9 +148,11 @@ class deferred:
 @dataclass
 class resources:
     """
-    What the machine offers, as both passes need it: the files' sizes, the
-    groups, and what a register's class is computed from
-    :param pools: file (the tracker's tag) -> the registers it has
+    What the machine offers, as both passes need it: the register files, their
+    sizes, the groups, and what a register's class is computed from
+    :param pools: the tracker's tag -> the numbers it can take (a file's
+                  several views each have their own, the scalars' the vectors'
+                  where they are their low halves)
     :param groups: component -> its register group (ways, and a structfuse
                    part's sizes), the model's
     :param dts: a virtual data register's data type (`dtypes.register_types`)
@@ -158,12 +160,43 @@ class resources:
                    limit them
     :param tile_tag: a data type's tile file, asmgen's tag - None for an ISA
                      without tiles
+    :param tracker: the register tracker the files and what their registers
+                    occupy come from (asmgen's `reg_tracker`) - its
+                    `registered_types`, `max_regs`, `pool` and `storage` the
+                    machine, no layout here
     """
     pools: dict[str, int] = field(default_factory=dict)
     groups: dict = field(default_factory=dict)
     dts: dict[tuple, adt] = field(default_factory=dict)
     bounds: dict[tuple, list[int]] = field(default_factory=dict)
     tile_tag: Callable[[adt], str] | None = None
+    tracker: reg_tracker | None = None
+
+    def pool_of(self, tag: str) -> frozenset[str]:
+        """
+        The register file a tag's numbers belong to: the types sharing them
+        (NEON's and SVE's scalars are their vectors' low halves, SME's smaller
+        tiles the 64-bit ones, RVV's masks its vector 0)
+        :param tag: the tracker's tag
+        :return: the tags whose registers hold it, the tag alone without a
+                 tracker to say
+        """
+        if self.tracker is None:
+            return frozenset({tag})
+        return self.tracker.pool(tag)
+
+    def units(self, klass : classes.register_class, number : int) -> frozenset:
+        """
+        What a value of a class occupies at a number - what must be dead for it
+        to take the register: a group's consecutive ones, a tile's the storage
+        it shares
+        :param klass: the value's register class
+        :param number: the number
+        :return: (tag, number) of each register it covers
+        """
+        if self.tracker is None:
+            return frozenset((klass.tag, number + k) for k in range(max(1, klass.size)))
+        return classes.units(klass, number, self.tracker)
 
     def class_of(self, key : register_key) -> classes.register_class | None:
         """
@@ -175,26 +208,26 @@ class resources:
                                          tile_tag=self.tile_tag)
 
     @classmethod
-    def of(cls, program : ir_program, gen : asmgen, component_dts : dict[str, adt]) -> "resources":
+    def of(cls, program : ir_program, gen : asmgen, component_dts : dict[str, adt],
+           tracker : reg_tracker | None = None) -> "resources":
         """
-        The machine as the emitter knows it
+        The machine as the tracker knows it
         :param program: the IR the values' data types come from
-        :param gen: the ISA's generator - its files' sizes and tile tags
+        :param gen: the ISA's generator - its tracker, and the tile tags
         :param component_dts: component -> its data type (the ctx's)
-        :return: the resources, the tiles' pools included where the ISA has them
+        :param tracker: the register tracker to read the machine from - the
+                        generator's own where None
+        :return: the resources, every file the tracker has a pool for
         """
         dts = dtypes.register_types(program, component_dts)
-        pools = {"vreg": gen.max_vregs(), "greg": gen.max_gregs()}
+        tracker = gen.get_reg_tracker() if tracker is None else tracker
+        pools = {tag: size for tag, size in tracker.max_regs.items()}
         try:
             tile_tag = gen.treg_tag       # an ISA without tiles has none
         except AttributeError:
             tile_tag = None
-        if tile_tag is not None:
-            for dt in set(dts.values()):
-                tag = tile_tag(dt)
-                if tag:
-                    pools.setdefault(tag, gen.max_tregs(dt))
-        return cls(pools=pools, groups=program.groups, dts=dts, tile_tag=tile_tag)
+        return cls(pools=pools, groups=program.groups, dts=dts, tile_tag=tile_tag,
+                   tracker=tracker)
 
 
 @dataclass
@@ -504,7 +537,13 @@ def _rings(problem : allocation_problem, resources_ : resources) -> dict[str, tu
         widths[ring] = max(widths.get(ring, 1), max(1, entry.register_class.size))
     blocks : dict[str, tuple[str, int, int]] = {}
     used : dict[str, set[int]] = {}
-    for comp in sorted(need):
+    # in the order their values first appear - the emitter's own, the one the
+    # kernel reaches first getting the bottom of the file
+    first : dict[str, int] = {}
+    for pos, entry in enumerate(problem.values.values()):
+        if entry.fixed is not None and entry.fixed.ring is not None:
+            first.setdefault(entry.fixed.ring, pos)
+    for comp in sorted(need, key=lambda c: (first.get(c, 0), c)):
         tag, size, ways = tags[comp], need[comp], widths[comp]
         pool = resources_.pools.get(tag, 0)
         taken = used.setdefault(tag, set())
@@ -549,14 +588,16 @@ def allocate(problem : allocation_problem, resources_ : resources) -> allocation
             result.bindings[key] = (tag, base + entry.fixed.slot)
         else:
             result.bindings[key] = (entry.register_class.tag, entry.fixed.slot)
-    by_tag: dict[str, list[register_key]] = {}
+    # the values the rings and the instructions didn't place, by the file
+    # their numbers come from: its views conflict with one another
+    by_pool: dict[frozenset[str], list[register_key]] = {}
     for key, entry in problem.values.items():
         if entry.register_class is None:
             result.unfitted.append((key, "no register class (not a data or address file yet)"))
             continue
         if result.number(key) is not None:
             continue
-        by_tag.setdefault(entry.register_class.tag, []).append(key)
+        by_pool.setdefault(resources_.pool_of(entry.register_class.tag), []).append(key)
 
     def choices(entry : virtual_register) -> list[int]:
         """The numbers a value's class lets it take"""
@@ -566,42 +607,44 @@ def allocate(problem : allocation_problem, resources_ : resources) -> allocation
         pool = resources_.pools.get(klass.tag, 0)
         return list(klass.allowed) if klass.allowed is not None else list(range(pool))
 
-    for tag, keys in sorted(by_tag.items()):
-        pool = resources_.pools.get(tag, 0)
+    def held(entry : virtual_register, number : int) -> frozenset:
+        """The registers a value at a number occupies"""
+        klass = entry.register_class
+        return frozenset() if klass is None else resources_.units(klass, number)
+
+    for pool_tags, keys in sorted(by_pool.items(), key=lambda item: sorted(item[0])):
+        pool = max((resources_.pools.get(tag, 0) for tag in pool_tags), default=0)
         if pool <= 0:
-            # a file the problem's resources say nothing of (the tiles' own,
-            # asmgen's tag by data type: the emitter's to name until step 4's)
             for key in keys:
-                result.unfitted.append((key, f"no pool known for the {tag} file"))
+                result.unfitted.append((key, f"no pool known for the "
+                                             f"{'/'.join(sorted(pool_tags))} file"))
             continue
-        # what the fixed ones of this file already hold: (virtual register, its
-        # number, the width it occupies)
-        taken: list[tuple[register_key, int, int]] = []
+        # what the fixed ones of this file already hold: (the value, its number)
+        taken: list[tuple[virtual_register, int]] = []
         for k, entry in problem.values.items():
             placed = result.number(k)
             if placed is None or entry.register_class is None \
-                    or entry.register_class.tag != tag:
+                    or resources_.pool_of(entry.register_class.tag) != pool_tags:
                 continue
-            taken.append((k, placed[1], 0))
+            taken.append((entry, placed[1]))
         for key in sorted(keys, key=lambda k: (len(choices(problem.values[k])),
                                                -_span(problem.values[k]), str(k))):
             entry = problem.values[key]
             size, align = _units(entry)
             free = [c for c in choices(entry)
-                    if c % align == 0 and c + size <= pool
-                    and all(abs(c - other) >= max(size, _units(problem.values[k2])[0])
-                            for k2, other, _ in taken
-                            if _overlaps(entry, problem.values[k2]))]
+                    if c % align == 0 and c + size <= resources_.pools.get(_tag(entry) or "", 0)
+                    and all(not (held(entry, c) & held(other, number))
+                            for other, number in taken if _overlaps(entry, other))]
             if not free:
-                result.unfitted.append((key, f"no {tag} register free of the values it is live "
-                                             f"with ({len(choices(entry))} of the file's {pool})"))
+                result.unfitted.append((key, f"no {'/'.join(sorted(pool_tags))} register free "
+                                             f"of the values it is live with "
+                                             f"({len(choices(entry))} of the file's "
+                                             f"{resources_.pools.get(_tag(entry) or '', 0)})"))
                 continue
             number = free[0]
-            result.bindings[key] = (tag, number)
-            taken.append((key, number, number))
-        if len(taken) > pool:
-            result.unfitted.append(((tag, 0, None),
-                                    f"{len(taken)} names for {pool} {tag} registers"))
+            # the value's own tag: its instruction's view of the file
+            result.bindings[key] = (_tag(entry) or sorted(pool_tags)[0], number)
+            taken.append((entry, number))
     return result
 
 
@@ -658,18 +701,17 @@ def validate(problem : allocation_problem, result : allocation_result,
         if number % align or number + size > pool:
             wrong.append(f"{key[0]}{key[1]} at {number} (size {size}, align {align}, "
                          f"{pool} registers)")
-    # the placed values that have a file, with their numbers
-    bound : list[tuple[register_key, virtual_register, register_number]] = []
+    # the placed values, with the registers each occupies: two live at once
+    bound : list[tuple[register_key, frozenset, virtual_register]] = []
     for key, entry in problem.values.items():
-        at = result.number(key)
-        if at is not None and entry.register_class is not None:
-            bound.append((key, entry, at))
-    for pos, (one_key, one, one_at) in enumerate(bound):
-        for other_key, other, other_at in bound[pos + 1:]:
-            if _tag(one) is None or _tag(one) != _tag(other) or not _overlaps(one, other):
-                continue
-            gap = abs(one_at[1] - other_at[1])
-            if gap < max(_units(one)[0], _units(other)[0]):
-                wrong.append(f"{one_key[0]}{one_key[1]} and {other_key[0]}{other_key[1]} share "
-                             f"{one_at[1]} live at once")
+        placed = result.number(key)
+        if placed is None or entry.register_class is None:
+            continue
+        bound.append((key, resources_.units(entry.register_class, placed[1]), entry))
+    for pos, (one_key, one_held, one) in enumerate(bound):
+        for other_key, other_held, other in bound[pos + 1:]:
+            if _overlaps(one, other) and one_held & other_held:
+                shared = ", ".join(f"{tag}{number}" for tag, number in sorted(one_held & other_held))
+                wrong.append(f"{one_key[0]}{one_key[1]} and {other_key[0]}{other_key[1]} "
+                             f"share {shared} live at once")
     return wrong
