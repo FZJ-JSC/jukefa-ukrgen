@@ -40,7 +40,7 @@ from ..models.load_store_operations import (lsc_state,
 from ..models.lsc.index import lsc_reg_index
 
 from .allocation import register_allocator
-from ..lsc_model import liveness
+from ..lsc_model import dtypes, liveness
 from ..lsc_model.rename import rename_temporaries
 from ..specializers.signature import (
     specialization_error, _sigs, _masked, _all_true, _usable, slice_columns, slice_walkers, slice_placements)
@@ -139,33 +139,13 @@ class signature_emitter:
     def _register_types(self) -> dict[tuple, object]:
         """
         Data type of every virtual data register: the memory component it is
-        loaded from or stored to, or the component it holds
+        loaded from or stored to, or the component it holds - the analysis'
+        own (lsc_model.dtypes), so the allocation and the instruction agree
         """
-        comps = self.ctx.component_dts
-        dts: dict[tuple, object] = {}
-
-        # by the value's own register (value(): a renamed value's owner) -
-        # its data type the value's, whose register it is in or not
-        def note(idx, dt):
-            dts.setdefault(idx.value(), dt)
-
-        for op in self._all_ops():
-            if isinstance(op, (lsc_load, lsc_store)):
-                note(op.indices[1], comps[op.indices[0].component])
-        for op in self._all_ops():
-            for idx in op.indices:
-                if idx.value()[0] in comps:
-                    note(idx, comps[idx.value()[0]])
-        default = next(iter(comps.values()))
-        for op in self._all_ops():
-            for idx in op.indices:
-                note(idx, default)
-        return dts
+        return dtypes.register_types(self.program, self.ctx.component_dts)
 
     def _all_ops(self):
-        for block in self.program.blocks + [b for c in self.program.cases for b in c.blocks]:
-            for section in ("prologue", "body", "epilogue", "tail", "subtail"):
-                yield from getattr(block, section)
+        return dtypes.ops_of(self.program)
 
     def reg(self, idx, rtype):
         """The physical register for a virtual one (register_allocator.take)"""

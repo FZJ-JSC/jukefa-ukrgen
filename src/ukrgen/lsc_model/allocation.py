@@ -17,10 +17,13 @@ renamer can be taught them is a question with an answer, not a guess.
 
 from dataclasses import dataclass, field
 
+from asmgen.asmblocks.noarch import asmgen
 from asmgen.asmblocks.op import register_type as rgt
+from asmgen.registers import asm_data_type as adt
 
-from . import classes, liveness
+from . import classes, dtypes, liveness
 from ..models.load_store_operations import lsc_loop
+from .ir import ir_program
 
 
 @dataclass(frozen=True)
@@ -93,6 +96,26 @@ class resources:
     def class_of(self, key) -> classes.register_class | None:
         return classes.register_class_of(key, self.groups, self.dts, self.bounds,
                                          tile_tag=self.tile_tag)
+
+    @classmethod
+    def of(cls, program : ir_program, gen : asmgen, component_dts : dict[str,adt]) -> "resources":
+        """
+        The machine as the emitter knows it: the files' sizes - a tile's by its
+        data type, asmgen's tag - the values' data types (the emitter's own
+        dtypes.register_types, so the two can't disagree) and the groups
+        """
+        dts = dtypes.register_types(program, component_dts)
+        pools = {"vreg": gen.max_vregs(), "greg": gen.max_gregs()}
+        try:
+            tile_tag = gen.treg_tag       # an ISA without tiles has none
+        except AttributeError:
+            tile_tag = None
+        if tile_tag is not None:
+            for dt in set(dts.values()):
+                tag = tile_tag(dt)
+                if tag:
+                    pools.setdefault(tag, gen.max_tregs(dt))
+        return cls(pools=pools, groups=program.groups, dts=dts, tile_tag=tile_tag)
 
 
 @dataclass
@@ -239,7 +262,7 @@ def _demand(ops: list, live_out: set, where: str, resources_: resources,
                                       resources_.pools.get(tag, 0)))
 
 
-def analyse(program, resources_: resources) -> allocation_problem:
+def analyse(program : ir_program, resources_: resources) -> allocation_problem:
     """
     A program's allocation problem: every block's sections, its loops' own,
     the k loop's ring values and its sections

@@ -22,13 +22,12 @@ def problem_and_resources(pools=None):
     """An SME gemm's programs analysed, its files' sizes as the emitter has them"""
     ctx, _ = sme.run(**UNROLL)
     gen = ctx.gen
-    sizes = {"vreg": gen.max_vregs(), "greg": gen.max_gregs()}
-    if pools is not None:
-        sizes = {**sizes, **pools}
-    res = allocation.resources(pools=sizes)
     problem = allocation.allocation_problem()
-    for one in ctx.programs:
-        res.groups = one.groups
+    for pos, one in enumerate(ctx.programs):
+        # the machine's files and the values' data types, as the emitter has them
+        res = allocation.resources.of(one, gen, ctx.component_dts)
+        if pools is not None:
+            res.pools.update(pools)
         part = allocation.analyse(one, res)
         problem.values.update(part.values)
         problem.demands += part.demands
@@ -75,12 +74,14 @@ class test_analysis(unittest.TestCase):
 
 class test_allocation(unittest.TestCase):
 
-    def test_places_the_vector_values(self):
+    def test_places_every_value(self):
+        # vectors and the tiles' own file - its pool asmgen's tag by data type
         problem, res = problem_and_resources()
+        self.assertIn("treg64", res.pools)
         result = allocation.allocate(problem, res)
-        placed = [k for k in problem.values if problem.values[k].tag == "vreg"]
-        self.assertTrue(placed)
-        for key in placed:
+        self.assertTrue(problem.values)
+        self.assertEqual([], result.unfitted)
+        for key in problem.values:
             self.assertIsNotNone(result.number(key), key)
         # no two values live at once share a register, within the file, aligned
         self.assertEqual([], allocation.validate(problem, result, res))
