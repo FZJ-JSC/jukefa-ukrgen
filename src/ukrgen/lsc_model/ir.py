@@ -145,6 +145,11 @@ def is_start_block(block) -> bool:
     return block.name.startswith(START_BLOCK)
 
 
+#: a block's sections, in the order they run: a straight-line block fills its
+#: body, a loop its prologue, body, epilogue and the tail's own
+SECTIONS = ("init", "prologue", "body", "epilogue", "tail", "subtail")
+
+
 @dataclass
 class ir_block:
     """
@@ -177,18 +182,107 @@ class ir_block:
     step : sym = field(default_factory=lambda: sym.const(1))
     unroll : int = 1
     tail_step : sym | None = None
-    subtail : list = field(default_factory=list)
     subtail_step : sym | None = None
     requires_multiple : sym | None = None
-    prologue : list = field(default_factory=list)
-    body : list = field(default_factory=list)
-    epilogue : list = field(default_factory=list)
-    tail : list = field(default_factory=list)
     advance : dict[str, int] = field(default_factory=dict)
     #: its components' address registers advanced in the IR (not the emitter's)
     advance_in_ir : bool = False
     #: how far ahead its loads run of the body's iteration
     preload_shift : object = None
+    #: section -> its operations, every section of `SECTIONS` a key
+    sections : dict[str, list] = field(
+        default_factory=lambda: {section: [] for section in SECTIONS})
+
+    def ops(self) -> list:
+        """
+        Every operation of the block, in the order its sections run
+        :return: the operations, a straight-line block's its body
+        """
+        return [op for section in SECTIONS for op in self.sections[section]]
+
+    def section(self, name : str) -> list:
+        """
+        One section's operations
+        :param name: the section, one of `SECTIONS`
+        :return: its list, to append to
+        """
+        return self.sections.setdefault(name, [])
+
+    @property
+    def init(self) -> list:
+        """
+        The operations before the loop's prologue: a value's setup, the frame
+        :return: the section's operations
+        """
+        return self.sections["init"]
+
+    @init.setter
+    def init(self, ops : list) -> None:
+        self.sections["init"] = ops
+
+    @property
+    def prologue(self) -> list:
+        """
+        The operations the loop runs once, before its body: the first iteration's
+        loads where they run ahead of it
+        :return: the section's operations
+        """
+        return self.sections["prologue"]
+
+    @prologue.setter
+    def prologue(self, ops : list) -> None:
+        self.sections["prologue"] = ops
+
+    @property
+    def body(self) -> list:
+        """
+        The operations the loop runs once per iteration
+        :return: the section's operations
+        """
+        return self.sections["body"]
+
+    @body.setter
+    def body(self, ops : list) -> None:
+        self.sections["body"] = ops
+
+    @property
+    def epilogue(self) -> list:
+        """
+        The operations after the last iteration's body: what the last
+        iteration leaves unsaid
+        :return: the section's operations
+        """
+        return self.sections["epilogue"]
+
+    @epilogue.setter
+    def epilogue(self, ops : list) -> None:
+        self.sections["epilogue"] = ops
+
+    @property
+    def tail(self) -> list:
+        """
+        The operations of the iterations left over when the loop count isn't a
+        multiple of an iteration's extent
+        :return: the section's operations
+        """
+        return self.sections["tail"]
+
+    @tail.setter
+    def tail(self, ops : list) -> None:
+        self.sections["tail"] = ops
+
+    @property
+    def subtail(self) -> list:
+        """
+        The operations of what a tail iteration leaves, where its step covers
+        more than one
+        :return: the section's operations
+        """
+        return self.sections["subtail"]
+
+    @subtail.setter
+    def subtail(self, ops : list) -> None:
+        self.sections["subtail"] = ops
 
 
 @dataclass
@@ -272,8 +366,8 @@ class ir_program:
                     head += (f"; {block.loop_index} must be a multiple of "
                              f"{block.requires_multiple}")
             lines.append(head)
-            for section in ("prologue", "body", "epilogue", "tail", "subtail"):
-                ops = getattr(block, section)
+            for section in SECTIONS:
+                ops = block.sections[section]
                 if ops:
                     lines.append(f"{indent}  {section}:")
                     lines.extend(render_ops(ops, db, f"{indent}    "))

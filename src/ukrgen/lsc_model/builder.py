@@ -1439,7 +1439,9 @@ class program_builder:
             items = self.emit_section(self.items(block.stos))
         finally:
             self.unique_scratch = False
-        return ir_block(name="+".join(block.stos), body=_flatten(items))
+        out = ir_block(name="+".join(block.stos))
+        out.body = _flatten(items)
+        return out
 
     def build(self) -> ir_program:
         blocks = [self.build_block(b) for b in self.comp.get_blocks()

@@ -1292,7 +1292,9 @@ class signature_specializer:
                     ops.append(lsc_value_op("counts", writes=[f"iter({block.name})", f"left({block.name})"],
                                             reads=[block.loop_index], step=block.step, loop=block.name))
                 if ops:
-                    out.append(ir_block(name=f"{START_BLOCK}{block.name}", body=ops))
+                    start = ir_block(name=f"{START_BLOCK}{block.name}")
+                    start.body = ops
+                    out.append(start)
                     started = started | set(new)
                 out.append(block)
             return out, started

@@ -545,8 +545,11 @@ def value_setup(program) -> int:
             (n for n in values if is_offset(n)),
             key=lambda n: (-rank.get((str(values[n][1]), values[n][2]), 0), n))
         ops = [lsc_value_op("value", writes=[name], reads=[], value=values[name]) for name in order]
-        program.blocks = [ir_block(name=f"{START_BLOCK}values", body=ops)] + list(program.blocks)
-    return len(values)
+        setup = ir_block(name=f"{START_BLOCK}values")
+        setup.body = ops
+        program.blocks = [setup] + list(program.blocks)
+        return len(ops)
+    return 0
 
 
 def slice_frames(program) -> int:
