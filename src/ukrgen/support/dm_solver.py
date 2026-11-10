@@ -610,7 +610,7 @@ class store_candidate:
     """
     component : str
     rtype : rgt
-    rsln : transformation_resolution
+    rsln : tr
     loc : dml = dml.MEMORY
 
     def encode(self) -> str:
