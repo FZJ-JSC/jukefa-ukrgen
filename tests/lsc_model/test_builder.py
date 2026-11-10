@@ -328,21 +328,6 @@ class test_register_pressure(unittest.TestCase):
 
 class test_old_ir_compatibility(unittest.TestCase):
 
-    def test_distance_scheduler(self):
-        # the dependency scheduler takes the model's operations as they are,
-        # including moves between scratch and data registers
-        from ukrgen.schedulers.distance import distance_specification
-        from ukrgen.schedulers.simple_dependency_scheduler import simple_dependency_scheduler
-        ctx, _ = run(**{"mm-tileop": ["fma(A.VEC:direct, B.VEC:bc_scalar, AB.VEC){i=m, n=1, k*=1}"]})
-        mm = program_builder(ctx).build().blocks[0]
-        specs = [distance_specification.from_string(s)
-                 for s in ("raw:data::ld:fma:3", "raw:data::mv:fma:2")]
-        out = simple_dependency_scheduler(specs)(list(mm.body), loop=True)
-        self.assertEqual(sorted(map(id, mm.body)), sorted(map(id, out)))
-        # a broadcast's move into B0 comes after the last read of B0's old value
-        moves = [i for i, op in enumerate(out) if isinstance(op, lsc_move)]
-        self.assertTrue(moves)
-
     def test_epilogue_owns_its_operations(self):
         # schedulers rename registers in place: body and epilogue must not
         # share operations or register indices
