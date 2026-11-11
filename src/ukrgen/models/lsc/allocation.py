@@ -23,7 +23,7 @@ from asmgen.asmblocks.op import register_type as rgt
 from asmgen.registers import asm_data_type as adt, reg_tracker
 
 from . import classes, dtypes, liveness
-from ..models.load_store_operations import lsc_loop
+from .operations import lsc_loop
 from .ir import ir_program
 
 #: A virtual register's name: its component, its number within it and the kind

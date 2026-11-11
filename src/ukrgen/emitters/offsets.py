@@ -12,11 +12,11 @@ from . import asmops
 from asmgen.asmblocks.op.opset import opset_modifier
 from asmgen.registers import adt_size
 
-from ..lsc_model.addressing import offpoly
+from ..models.lsc.addressing import offpoly
 
 
 from ..specializers.signature import specialization_error
-from ..offset_polynomial import offset_polynomial as offpoly
+from ..models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 class offset_planner:

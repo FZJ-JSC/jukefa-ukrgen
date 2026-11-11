@@ -8,16 +8,16 @@ from dataclasses import replace
 from asmgen.registers import adt_size
 
 from ...support.sig_group import sig_group
-from ...lsc_model import liveness
+from ...models.lsc import liveness
 from .base import irmod_param, irmod_placement, lsc_irmod
 from .vectorize import repeats
 from .base import blocks_and_sections
-from ...models.load_store_operations import lsc_loop, loop_walk, lsc_load, lsc_store
+from ...models.lsc.operations import lsc_loop, loop_walk, lsc_load, lsc_store
 from ...models.lsc.index import lsc_reg_index
-from ...lsc_model.addressing import offpoly
+from ...models.lsc.addressing import offpoly
 from asmgen.asmblocks.op import register_type as rgt
 from ...support.domains import operand_values
-from ...offset_polynomial import offset_polynomial as offpoly
+from ...models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 
@@ -169,7 +169,7 @@ def expand_copies(program, loop):
     if unroll < 2 or loop.info.get("unrolled"):
         return
     index = loop.info.get("index")
-    # the block's own vector temporaries: written before read (lsc_model.liveness)
+    # the block's own vector temporaries: written before read (models.lsc.liveness)
     local = liveness.local(loop.block)
     base, walks = list(loop.block), list(loop.walks)
     for b in base:
@@ -227,7 +227,7 @@ def pipelined(loop, depth: int) -> bool:
     arithmetic only has nothing to pipeline, and pipelining it would repeat
     its body for a last iteration that loads nothing
     """
-    from ...models.load_store_operations import lsc_load, lsc_move
+    from ...models.lsc.operations import lsc_load, lsc_move
     from asmgen.asmblocks.op import register_type as rgt
     return any(b.properties.get("copy", 0) < depth and
                (isinstance(b, lsc_load) or

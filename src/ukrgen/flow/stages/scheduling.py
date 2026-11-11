@@ -4,7 +4,7 @@ Scheduling the specialized LSC IR
 
 import logging
 
-from ...models.load_store_operations import lsc_loop
+from ...models.lsc.operations import lsc_loop
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
@@ -12,9 +12,9 @@ from ...models.lsc.reg import lsc_reg_type
 from ...schedulers.distance import distance_specification
 from asmgen.asmblocks.op import register_type as rgt
 
-from ...lsc_model import liveness
-from ...lsc_model import classes
-from ...lsc_model.rename import bounded, rename_straight, rename_temporaries
+from ...models.lsc import liveness
+from ...models.lsc import classes
+from ...models.lsc.rename import bounded, rename_straight, rename_temporaries
 from ...schedulers.list_scheduler import list_scheduler, register_budget, _key, TAGS
 
 SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
@@ -45,7 +45,7 @@ def _scheduler_key(groups=None):
 def _read_before_written(blocks) -> set:
     """
     Data registers the blocks read before writing them: alive into them
-    (lsc_model.liveness)
+    (models.lsc.liveness)
     """
     return liveness.read_before_written(blocks, _scheduler_key())
 
@@ -54,7 +54,7 @@ def _across(order: list, pos: int, live_out: set, groups) -> dict:
     """
     The data registers live across order[pos] (a loop) it neither reads nor
     writes - read after it, in its section or the blocks after - per register
-    tag: held while it runs, not its iterations' (lsc_model.liveness)
+    tag: held while it runs, not its iterations' (models.lsc.liveness)
     """
     counts = {}
     for k in liveness.across(order, pos, live_out, _scheduler_key(groups)):
@@ -70,7 +70,7 @@ def _index_vectors(block) -> int:
     per component and stride - a vector register held besides the tiles)
     """
     from ...specializers.signature import _sigs
-    from ...models.load_store_operations import lsc_load, lsc_store
+    from ...models.lsc.operations import lsc_load, lsc_store
     keys = set()
     for section in SECTIONS:
         for op in getattr(block, section) or []:
@@ -165,7 +165,7 @@ class schedule_stage(stage):
     def _rename(self, ops: list, block, after_sections, budget, program) -> bool:
         """
         A straight-line section's flexible values renamed onto dead registers
-        within the vector file's registers there are (lsc_model.rename): what's
+        within the vector file's registers there are (models.lsc.rename): what's
         live after it - the block's later sections', the blocks after's - its
         end, those held through it untouched taken off the limit. Whether its
         names then bound what's live at once (rename.bounded): the register

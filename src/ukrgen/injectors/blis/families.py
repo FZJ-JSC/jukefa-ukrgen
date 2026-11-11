@@ -27,8 +27,8 @@ from ...flow.stages.loops import loop_stage
 from ...flow.stages.scheduling import schedule_stage
 from ...emitters.signature import AUTO_OFFSET_REGISTERS
 from ...flow.stages.emit import emit_stage
-from ...lsc_model.addressing import offpoly
-from ...offset_polynomial import offset_polynomial as offpoly
+from ...models.lsc.addressing import offpoly
+from ...models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 #: the flow as the command line runs it
 PIPELINE = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage,

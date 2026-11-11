@@ -10,13 +10,13 @@ from asmgen.asmblocks.op import register_type as rgt, opmem_modifier as memmod
 from asmgen.asmblocks.op.opmove import opmove_modifier as mvmod
 from asmgen.registers import adt_size
 
-from ...lsc_model.addressing import offpoly
-from ...models.load_store_operations import lsc_permute, lsc_store
+from ...models.lsc.addressing import offpoly
+from ...models.lsc.operations import lsc_permute, lsc_store
 from ...models.lsc.index import lsc_reg_index
 from ...support.transpose import transpose_network
 from .base import lsc_irmod, irmod_placement, blocks_and_sections
 from .structfuse import runs, _record
-from ...offset_polynomial import offset_polynomial as offpoly
+from ...models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 def plain_store_sigs(gen, dt) -> list:

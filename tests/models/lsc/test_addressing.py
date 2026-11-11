@@ -4,8 +4,8 @@ Symbolic offsets, layout strides, the offset database and address patterns
 
 import unittest
 
-from ukrgen.lsc_model.addressing import offpoly, layout_strides, offset_db, addr_pattern
-from ukrgen.offset_polynomial import offset_polynomial as offpoly
+from ukrgen.models.lsc.addressing import offpoly, layout_strides, offset_db, addr_pattern
+from ukrgen.models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 class test_sym(unittest.TestCase):
@@ -112,7 +112,7 @@ class test_patterns(unittest.TestCase):
 
     def test_functions(self):
         # min and max: a window kept to (max-imm-offset), a floor
-        from ukrgen.lsc_model.addressing import arg_value, kernel_values
+        from ukrgen.models.lsc.addressing import arg_value, kernel_values
         values = kernel_values({"m": 2, "n": 14, "k": 4}, 8, 2)
         self.assertEqual({"m": 2, "n": 14, "k": 4, "e": 8, "R": 2}, values)
         self.assertEqual(112, arg_value("min(ne, 16e-1)", values))

@@ -7,7 +7,7 @@ import unittest
 
 from ukrgen.flow.stages.irmods import post_specialize_irmod_stage, pre_specialize_irmod_stage
 from ukrgen.flow.stages.emit import emit_stage
-from ukrgen.models.load_store_operations import lsc_load, lsc_addr_compute, ldst_modifier
+from ukrgen.models.lsc.operations import lsc_load, lsc_addr_compute, ldst_modifier
 
 from tests.specializers.test_signature import mm, assembles, STAGES
 

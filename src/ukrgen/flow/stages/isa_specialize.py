@@ -9,7 +9,7 @@ from asmgen.registers import adt_size
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
-from ...lsc_model.addressing import arg_value, kernel_values
+from ...models.lsc.addressing import arg_value, kernel_values
 from ...specializers.signature import signature_specializer, specialization_error
 
 

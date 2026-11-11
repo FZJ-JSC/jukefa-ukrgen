@@ -14,9 +14,9 @@ from ukrgen.flow.stages.dimension import dimension_stage
 from ukrgen.flow.stages.sto import sto_stage
 from ukrgen.flow.stages.model import model_stage
 from ukrgen.flow.stages.stage import stage_error
-from ukrgen.lsc_model.builder import program_builder, addressing_plan, model_error
-from ukrgen.lsc_model.addressing import addr_pattern
-from ukrgen.models.load_store_operations import (
+from ukrgen.models.lsc.builder import program_builder, addressing_plan, model_error
+from ukrgen.models.lsc.addressing import addr_pattern
+from ukrgen.models.lsc.operations import (
     lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation)
 
 TO_STAGES = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage]
@@ -226,7 +226,7 @@ class test_builder_resolutions(unittest.TestCase):
         # each element is loaded into the lane the FMA uses it from; lanefuse
         # makes the two lanes of a register one load, as B is contiguous
         from ukrgen.irmod.lsc import lanefuse
-        from ukrgen.models.load_store_operations import ldst_modifier
+        from ukrgen.models.lsc.operations import ldst_modifier
         ctx, res = run(isa="neon", n="4", m="1", **{
             "mm-tileop": ["fma[bdreg:ILANE](A.VEC:direct, B.VEC:use_lane, AB.VEC){i=m, n=1, k*=1}"]})
         prog = program_builder(ctx, preload=False).build()

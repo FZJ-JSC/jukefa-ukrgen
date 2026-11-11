@@ -6,7 +6,7 @@ The analysis pass's register classes against what the emitter allocates
 import unittest
 
 import ukrgen.emitters.allocation as A
-from ukrgen.lsc_model.classes import register_class_of
+from ukrgen.models.lsc.classes import register_class_of
 
 
 class test_register_classes(unittest.TestCase):
@@ -74,7 +74,7 @@ class test_units(unittest.TestCase):
         self.rt = make_generator("sme").get_reg_tracker()
 
     def test_tiles(self):
-        from ukrgen.lsc_model.classes import register_class, units, fits, compatible
+        from ukrgen.models.lsc.classes import register_class, units, fits, compatible
         d, s, h = register_class("treg64"), register_class("treg32"), register_class("treg16")
         self.assertTrue(units(s, 0, self.rt) & units(h, 0, self.rt))
         self.assertTrue(units(s, 1, self.rt) & units(d, 5, self.rt))
@@ -87,7 +87,7 @@ class test_units(unittest.TestCase):
         self.assertTrue(compatible(s, d, self.rt))
 
     def test_groups_and_files(self):
-        from ukrgen.lsc_model.classes import register_class, units, fits, compatible
+        from ukrgen.models.lsc.classes import register_class, units, fits, compatible
         g = register_class("vreg", size=2, align=2)
         self.assertEqual({("vreg", 4), ("vreg", 5)}, units(g, 4, self.rt))
         self.assertFalse(fits(g, 3, self.rt))

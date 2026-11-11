@@ -7,11 +7,11 @@ import unittest
 
 from asmgen.asmblocks.op import register_type as rgt
 
-from ukrgen.lsc_model import allocation
-from ukrgen.lsc_model.addressing import offset_db, offpoly
-from ukrgen.lsc_model.ir import ir_block, ir_program
-from ukrgen.models.load_store_operations import lsc_set, set_index, set_mask
-from ukrgen.offset_polynomial import offset_polynomial as offpoly
+from ukrgen.models.lsc import allocation
+from ukrgen.models.lsc.addressing import offset_db, offpoly
+from ukrgen.models.lsc.ir import ir_block, ir_program
+from ukrgen.models.lsc.operations import lsc_set, set_index, set_mask
+from ukrgen.models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 def program_with(*ops) -> ir_program:

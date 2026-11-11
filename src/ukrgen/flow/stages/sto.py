@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from ...support.dm_solver import resolved_operation_chain
 from ...components.tile import tile, dimension_properties as dimp, dimension_type as dimt
-from ...lsc_model.addressing import offpoly
+from ...models.lsc.addressing import offpoly
 from ...components.operation import operation
 from ...generators.tiling import generate_tiling, generators
 from ...support.tiles import lane_factors, index_extents, kernel_groups, operand_tiles, lane_axes, register_tiles, ONE
@@ -17,7 +17,7 @@ from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
 from .ukr.ukr import sto_kind, block_description
-from ...offset_polynomial import offset_polynomial as offpoly
+from ...models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 VLA_ONE = dimp(dt=dimt.vla, size=1)

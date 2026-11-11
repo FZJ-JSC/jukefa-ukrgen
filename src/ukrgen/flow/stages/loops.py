@@ -5,7 +5,7 @@ The loops stage: the loops of the specialized IR made
 from ..ukr_context import ukr_context
 from .stage import stage, stage_error
 from ...specializers.signature import specialization_error
-from ...offset_polynomial import offset_polynomial as offpoly
+from ...models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 #: the walking pointer's address register: no component's own
@@ -33,7 +33,7 @@ def copies(loop, program=None) -> None:
     its order (each access's element is the walker's steps before it - not IR
     steps yet: ADDRESSING_PLAN 6.4)
     """
-    from ...lsc_model.builder import _clone
+    from ...models.lsc.builder import _clone
     if "slices" == loop.info.get("kind") or loop.info.get("copies") \
             or loop.info.get("direction") not in ("load", "store"):
         return
@@ -56,8 +56,8 @@ def copies(loop, program=None) -> None:
     # element count its counter): each access at it, then a step of it - an
     # address step of the IR, so an access's element is the steps before it
     # whatever the order the scheduler gives the rest
-    from ...models.load_store_operations import lsc_addr_compute, lsc_reg_index, scalar_tile
-    from ...lsc_model.addressing import offpoly
+    from ...models.lsc.operations import lsc_addr_compute, lsc_reg_index, scalar_tile
+    from ...models.lsc.addressing import offpoly
     comp = loop.walks[0].anchor.indices[0].component
 
     index = loop.info.get("index")

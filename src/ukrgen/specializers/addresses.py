@@ -23,13 +23,13 @@ from asmgen.registers import adt_size, asm_data_type as adt
 
 from ..components.tile import scalar_tile
 from ..emitters import asmops
-from ..lsc_model.addressing import offpoly
-from ..lsc_model.ir import ir_program
+from ..models.lsc.addressing import offpoly
+from ..models.lsc.ir import ir_program
 from ..models.lsc.index import lsc_reg_index
 from ..models.lsc.reg import lsc_reg_type
-from ..models.load_store_operations import lsc_addr_compute, lsc_loop
+from ..models.lsc.operations import lsc_addr_compute, lsc_loop
 from .signature import specialization_error
-from ..offset_polynomial import offset_polynomial as offpoly
+from ..models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 #: address moves spelled as steps before emitting - the kernels byte for byte
 #: the same either way; off for comparing
@@ -521,8 +521,8 @@ def value_setup(program) -> int:
     (docs/ADDRESSING_PLAN.md setup values, 2). A value of a stride deferred to
     the dispatch the emitter leaves there. :return: the values
     """
-    from ..lsc_model.ir import ir_block, START_BLOCK
-    from ..models.load_store_operations import lsc_value_op
+    from ..models.lsc.ir import ir_block, START_BLOCK
+    from ..models.lsc.operations import lsc_value_op
     values = {}
 
     def visit(ops):
@@ -561,7 +561,7 @@ def slice_frames(program) -> int:
     reading both (info frame) (docs/ADDRESSING_PLAN.md: lowering the loops
     over slices, 2). :return: the loops
     """
-    from ..models.load_store_operations import lsc_value_op
+    from ..models.lsc.operations import lsc_value_op
     loops = 0
     for block in program.blocks + [b for case in program.cases for b in case.blocks]:
         for section in SECTIONS:

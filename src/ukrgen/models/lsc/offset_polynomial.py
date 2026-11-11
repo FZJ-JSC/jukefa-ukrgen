@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .components.tile import dimension_properties as dimp, dimension_type as dimt
+from ...components.tile import dimension_properties as dimp, dimension_type as dimt
 
 
 @dataclass(frozen=True)

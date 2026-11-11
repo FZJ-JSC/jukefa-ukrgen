@@ -8,8 +8,8 @@ scheduler's: the IR's register class, a group's members its first)
 
 from asmgen.asmblocks.op import register_type as rgt
 
-from ..models.load_store_operations import lsc_load, lsc_loop, lsc_move
-from ..support.data_move import dm_step
+from .operations import lsc_load, lsc_loop, lsc_move
+from ...support.data_move import dm_step
 
 SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
 #: the register types holding values: what renaming and allocation move - a

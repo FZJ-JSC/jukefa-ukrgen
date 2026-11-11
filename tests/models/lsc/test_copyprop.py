@@ -10,8 +10,9 @@ import unittest
 from asmgen.asmblocks.op import register_type as rgt
 
 from ukrgen.irmod.lsc.copyprop import copyprop, copyprop_tiles
-from ukrgen.models.load_store_operations import lsc_move
+from ukrgen.models.lsc.operations import lsc_move
 from ukrgen.models.lsc.index import lsc_reg_index
+from tests import repo_root
 
 V, T = rgt.VEC, rgt.TILE
 X0, Y0, X1 = lsc_reg_index("X", [0]), lsc_reg_index("Y", [0]), lsc_reg_index("X", [1])
@@ -75,7 +76,7 @@ class test_copyprop(unittest.TestCase):
 
     def test_in_a_loop(self):
         # a slice loop's row (load, copy, insert): renamed in its block
-        from ukrgen.models.load_store_operations import lsc_loop
+        from ukrgen.models.lsc.operations import lsc_loop
         loop = lsc_loop(block=[op(X0, True), copy(), op(Y0, False)], subtiling=None, walks=[])
         changed, body = run([loop])
         self.assertEqual(1, changed)
@@ -84,7 +85,7 @@ class test_copyprop(unittest.TestCase):
 
     def test_read_after_its_loop(self):
         # the destination read after the loop - the last row's: kept
-        from ukrgen.models.load_store_operations import lsc_loop
+        from ukrgen.models.lsc.operations import lsc_loop
         loop = lsc_loop(block=[op(X0, True), copy(), op(Y0, False)], subtiling=None, walks=[])
         changed, body = run([loop, op(Y0, False)])
         self.assertEqual(0, changed)
@@ -142,7 +143,7 @@ class test_copyprop_kernels(unittest.TestCase):
         import os
         from ukrgen.injectors.blis.families import configuration, build_packm
         from ukrgen.injectors.blis.cgen import asm_source
-        root = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "ukrconfig")
+        root = os.path.join(repo_root(), "ukrconfig")
         cfg = configuration.from_files({("packm", "FP64"): os.path.join(root, "rvv/k3-x100/dpackm.yaml")})
         checked = 0
         for fam in cfg.families:
@@ -163,7 +164,7 @@ class test_copyprop_kernels(unittest.TestCase):
         import os
         from ukrgen.injectors.blis.families import configuration, build_packm
         from ukrgen.injectors.blis.cgen import asm_source
-        root = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "ukrconfig")
+        root = os.path.join(repo_root(), "ukrconfig")
         cfg = configuration.from_files({("packm", "FP64"): os.path.join(root, "sme/fopa_bc_vindex/dpackm.yaml")})
         fam = cfg.families[0]
         fam.cases = [c for c in fam.cases if "ztrans" == c[0]]
@@ -185,7 +186,7 @@ class test_copyprop_kernels(unittest.TestCase):
         import os, re
         from ukrgen.injectors.blis.families import configuration, build_packm
         from ukrgen.injectors.blis.cgen import asm_source
-        root = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "ukrconfig")
+        root = os.path.join(repo_root(), "ukrconfig")
         cfg = configuration.from_files({("packm", "FP64"): os.path.join(root, "sme/fopa_bc_vindex/dpackm.yaml")})
         fam = cfg.families[0]
         fam.cases = [c for c in fam.cases if "ztrans" == c[0]][:1]

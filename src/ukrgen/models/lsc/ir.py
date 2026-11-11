@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from asmgen.asmblocks.op import register_type as rgt
 
 from .addressing import offset_db, offpoly
-from ..offset_polynomial import offset_polynomial as offpoly
+from .offset_polynomial import offset_polynomial as offpoly
 
 
 @dataclass(frozen=True)
@@ -48,7 +48,7 @@ def render_ops(ops, db: offset_db, indent: str = "") -> list[str]:
     """
     Operations as lines, a loop as the operations it runs - loops among them
     """
-    from ..models.load_store_operations import lsc_loop
+    from .operations import lsc_loop
     out = []
     for op in ops:
         if isinstance(op, lsc_loop):
@@ -101,7 +101,7 @@ def render_op(op, db: offset_db) -> str:
     One LSC operation as built by the model, with addresses from the offset
     database and register files from the operation's rtypes
     """
-    from ..models.load_store_operations import (
+    from .operations import (
         lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute)
 
     def reg(pos: int) -> str:

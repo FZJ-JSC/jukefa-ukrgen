@@ -12,7 +12,7 @@ import unittest
 
 import tests.specializers.test_signature as t
 from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage
-from ukrgen.offset_polynomial import offset_polynomial as offpoly
+from ukrgen.models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PARAMS = {"sme-F64F64": "on", "mm-tileop": ["fopa(A.VEC:direct, B.VEC:direct, C.TILE){i=m, j=n, k*=1}"],
@@ -179,8 +179,8 @@ class test_sme_gemm(unittest.TestCase):
         # and columns - the kernel right at both vector lengths
         from ukrgen.flow.stages.irmods import post_specialize_irmod_stage
         from ukrgen.flow.stages.scheduling import schedule_stage
-        from ukrgen.lsc_model.ir import render_loop
-        from ukrgen.models.load_store_operations import lsc_addr_compute, lsc_load, lsc_store, lsc_loop
+        from ukrgen.models.lsc.ir import render_loop
+        from ukrgen.models.lsc.operations import lsc_addr_compute, lsc_load, lsc_store, lsc_loop
         ctx, outs = run_gemm(self, GEMM, passes=[post_specialize_irmod_stage, schedule_stage])
         program = ctx.programs[0]
         loops = [op for b in program.blocks + [b for c in program.cases for b in c.blocks]
@@ -515,8 +515,8 @@ class test_slice_pointers(unittest.TestCase):
         # docs/ADDRESSING_PLAN.md 6.6, an iteration's address moves
         from ukrgen.flow.stages.irmods import post_specialize_irmod_stage
         from ukrgen.flow.stages.scheduling import schedule_stage
-        from ukrgen.lsc_model.ir import render_loop
-        from ukrgen.models.load_store_operations import lsc_addr_compute, lsc_load, lsc_store, lsc_loop
+        from ukrgen.models.lsc.ir import render_loop
+        from ukrgen.models.lsc.operations import lsc_addr_compute, lsc_load, lsc_store, lsc_loop
         ctx, outs = run_gemm(self, GEMM32, defines=UNROLL4_DEFINES, march="armv9-a+sme",
                              ctype="float", passes=[post_specialize_irmod_stage, schedule_stage],
                              **UNROLL4)
@@ -526,7 +526,7 @@ class test_slice_pointers(unittest.TestCase):
                  for op in (getattr(b, section) or [])
                  if isinstance(op, lsc_loop) and op.info.get("slice_moves")]
         self.assertTrue(loops, "no loop over slices with its moves in the IR")
-        from ukrgen.lsc_model.addressing import offpoly
+        from ukrgen.models.lsc.addressing import offpoly
         for loop in loops:
             with self.subTest(loop=render_loop(loop, program.offsets)[0]):
                 moves = [b for b in loop.block if isinstance(b, lsc_addr_compute)]

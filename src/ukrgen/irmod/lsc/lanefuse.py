@@ -7,13 +7,13 @@ from __future__ import annotations
 from asmgen.asmblocks.op import register_type as rgt
 from asmgen.registers import adt_size
 
-from ...models.load_store_operations import lsc_load, ldst_modifier
+from ...models.lsc.operations import lsc_load, ldst_modifier
 from ...models.lsc.index import lsc_reg_index
-from ...lsc_model.addressing import offpoly
+from ...models.lsc.addressing import offpoly
 from ...support.data_move import dm_step, orig_ref, filter_by_step_requirements
 from ...support.sig_group import group_sigs
 from .base import lsc_irmod, irmod_placement, blocks_and_sections
-from ...offset_polynomial import offset_polynomial as offpoly
+from ...models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 class lanefuse(lsc_irmod):

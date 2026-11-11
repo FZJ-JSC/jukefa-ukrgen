@@ -62,7 +62,7 @@ class test_families(unittest.TestCase):
     def test_imm_expression(self):
         # max-imm-offset as the flow evaluates it (isa_specialize): the
         # kernel's sizes and its element size e - as blocked:'s expressions
-        from ukrgen.lsc_model.addressing import arg_value, kernel_values
+        from ukrgen.models.lsc.addressing import arg_value, kernel_values
         imm = lambda expr, m, n, k, dt: arg_value(str(expr), kernel_values({"m": m, "n": n, "k": k},
                                                                           {"FP32": 4, "FP64": 8}[dt]))
         # one k step of the scalar side's walk: 14 and 12 floats, 14 doubles

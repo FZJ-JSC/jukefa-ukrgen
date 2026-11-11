@@ -7,11 +7,11 @@ import copy
 
 from asmgen.asmblocks.op import register_type as rgt, opmem_modifier as memmod
 
-from ...lsc_model.addressing import offpoly
-from ...models.load_store_operations import lsc_store, lsc_addr_compute
+from ...models.lsc.addressing import offpoly
+from ...models.lsc.operations import lsc_store, lsc_addr_compute
 from .base import lsc_irmod, irmod_param, irmod_placement, blocks_and_sections
 from .widen import struct_sigs
-from ...offset_polynomial import offset_polynomial as offpoly
+from ...models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 def _constant(delta) -> int | None:

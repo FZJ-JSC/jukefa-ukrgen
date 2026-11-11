@@ -29,19 +29,19 @@ from asmgen.asmblocks.op import (
 from asmgen.asmblocks.op.opset import opset_modifier
 from asmgen.registers import adt_size
 
-from ..lsc_model.state import merge_switches
-from ..lsc_model.addressing import offpoly
-from ..lsc_model.ir import ir_program, ir_block, BASE_REGISTER, is_start_block
+from ..models.lsc.state import merge_switches
+from ..models.lsc.addressing import offpoly
+from ..models.lsc.ir import ir_program, ir_block, BASE_REGISTER, is_start_block
 
 from ..specializers.addresses import address_speller
-from ..models.load_store_operations import (lsc_state, 
+from ..models.lsc.operations import (lsc_state, 
     lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop, lsc_permute,
     lsc_value_op)
 from ..models.lsc.index import lsc_reg_index
 
 from .allocation import register_allocator
-from ..lsc_model import dtypes, liveness
-from ..lsc_model.rename import rename_temporaries
+from ..models.lsc import dtypes, liveness
+from ..models.lsc.rename import rename_temporaries
 from ..specializers.signature import (
     specialization_error, _sigs, _masked, _all_true, _usable, slice_columns, slice_walkers, slice_placements)
 
@@ -49,7 +49,7 @@ SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
 
 from .emitted import _labels, emitted_block, emitted_program  # noqa: F401 (their home now)
 from .offsets import offset_planner  # noqa: F401
-from ..offset_polynomial import offset_polynomial as offpoly
+from ..models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 class signature_emitter:
@@ -141,7 +141,7 @@ class signature_emitter:
         """
         Data type of every virtual data register: the memory component it is
         loaded from or stored to, or the component it holds - the analysis'
-        own (lsc_model.dtypes), so the allocation and the instruction agree
+        own (models.lsc.dtypes), so the allocation and the instruction agree
         """
         return dtypes.register_types(self.program, self.ctx.component_dts)
 
@@ -322,7 +322,7 @@ class signature_emitter:
     def slices(self, op) -> list[str]:
         """
         A loop over slices, its body as scheduled - its own temporaries under as
-        many names as there are registers for them (lsc_model.rename): the
+        many names as there are registers for them (models.lsc.rename): the
         scheduler's, within the section's budget, or here where nothing
         scheduled the block - a name keeps its register the iteration long, so
         nothing is freed by hand and no order the scheduler gives holds more of
@@ -554,7 +554,7 @@ class signature_emitter:
             lines += self.add_bytes(ptr, self.bytes_of(key[0], column), key[0])
             pointer_regs[(key, name)] = ptr
         unroll = op.subtiling.unroll
-        # the block's own vector temporaries: written before read (lsc_model.liveness)
+        # the block's own vector temporaries: written before read (models.lsc.liveness)
         local = liveness.local(op.block)
         # software pipelined (preload): the first copy's loads - memory loads,
         # slices moved out of tiles - before the loop and, for the next
@@ -1556,15 +1556,15 @@ class signature_emitter:
         return lines
 
     def exposed(self, ops: list) -> set:
-        """The data registers operations read before they write them (lsc_model.liveness)"""
+        """The data registers operations read before they write them (models.lsc.liveness)"""
         return liveness.exposed(ops)
 
     def live_afters(self, ops: list, end: set) -> list:
-        """What's live after each operation (lsc_model.liveness)"""
+        """What's live after each operation (models.lsc.liveness)"""
         return liveness.live_afters(ops, end)
 
     def reads_writes(self, op) -> tuple[set, set]:
-        """The data registers an operation reads and writes (lsc_model.liveness)"""
+        """The data registers an operation reads and writes (models.lsc.liveness)"""
         return liveness.reads_writes(op)
 
     def data_keys(self, op) -> list:

@@ -22,8 +22,8 @@ from dataclasses import dataclass, field
 from asmgen.asmblocks.op import register_type as rgt
 
 from ..models.lsc.reg import lsc_reg_type
-from ..lsc_model import liveness
-from ..models.load_store_operations import lsc_transformation
+from ..models.lsc import liveness
+from ..models.lsc.operations import lsc_transformation
 from .dependency import dependency_type as dept
 from .distance import distance_specification
 

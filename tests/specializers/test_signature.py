@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import unittest
 
-from ukrgen.lsc_model.ir import is_start_block
+from ukrgen.models.lsc.ir import is_start_block
 
 from ukrgen.flow.ukr_context import ukr_context
 from ukrgen.flow.stage_engine import stage_engine
@@ -24,7 +24,7 @@ from ukrgen.flow.stages.isa_specialize import isa_specialize_stage
 from ukrgen.flow.stages.addresses import address_stage
 from ukrgen.flow.stages.loops import loop_stage
 from ukrgen.flow.stages.emit import emit_stage
-from ukrgen.models.load_store_operations import lsc_load, lsc_store, lsc_addr_compute
+from ukrgen.models.lsc.operations import lsc_load, lsc_store, lsc_addr_compute
 
 STAGES = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage,
           model_stage, isa_specialize_stage, loop_stage, address_stage, emit_stage]

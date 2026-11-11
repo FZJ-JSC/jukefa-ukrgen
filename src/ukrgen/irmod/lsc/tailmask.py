@@ -6,12 +6,12 @@ from __future__ import annotations
 from asmgen.asmblocks.op import register_type as rgt
 from asmgen.asmblocks.op.opset import opset_modifier
 
-from ...lsc_model.addressing import offpoly
-from ...models.load_store_operations import lsc_load, lsc_state, lsc_store
+from ...models.lsc.addressing import offpoly
+from ...models.lsc.operations import lsc_load, lsc_state, lsc_store
 from ...specializers.signature import _sigs
 from .base import lsc_irmod, irmod_param, irmod_placement, blocks_and_sections
 from .slices import slice_loop, tiles_of
-from ...offset_polynomial import offset_polynomial as offpoly
+from ...models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 def _masked(gen, op) -> list:

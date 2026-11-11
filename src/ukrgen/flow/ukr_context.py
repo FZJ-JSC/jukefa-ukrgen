@@ -13,7 +13,7 @@ from asmgen.registers import asm_data_type as adt, reg_tracker
 
 from .stages.ukr.ukr import ukr_composition
 from .stage_param import stage_param
-from ..models.load_store_operations import lsc_operation
+from ..models.lsc.operations import lsc_operation
 from ..support.op import op_support_builder
 from ..support.dm_solver import chosen_to
 

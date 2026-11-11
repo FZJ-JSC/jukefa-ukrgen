@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Type
 
 from ..components.tile import determine_dreg_tag
-from ..models.load_store_operations import (
+from ..models.lsc.operations import (
         lsc_operation,
         lsc_load,
         lsc_store,

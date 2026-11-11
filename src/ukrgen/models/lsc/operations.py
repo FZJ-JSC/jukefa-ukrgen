@@ -8,12 +8,12 @@ from dataclasses import dataclass
 import string
 from typing import Callable
 from enum import Enum,auto
-from ..components.tile import tile,scalar_tile
-from ..components.operation import dimension_type
+from ...components.tile import tile,scalar_tile
+from ...components.operation import dimension_type
 
-from .lsc.index import lsc_reg_index 
-from .lsc.reg import lsc_reg_type
-from ..offset_polynomial import offset_polynomial as offpoly
+from .index import lsc_reg_index 
+from .reg import lsc_reg_type
+from .offset_polynomial import offset_polynomial as offpoly
 
 
 # TODO: fractional offsets
@@ -109,7 +109,7 @@ class ldst_modifier(Enum):
 
 def _flat(groups) -> list:
     """the signatures in a signature group, a list of them, or one"""
-    from ..support.sig_group import sig_group
+    from ...support.sig_group import sig_group
     if groups is None:
         return []
     if isinstance(groups, (list, tuple)):

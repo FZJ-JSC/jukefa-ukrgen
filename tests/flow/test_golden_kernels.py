@@ -92,7 +92,7 @@ class test_spelled_addresses(unittest.TestCase):
         from tests.specializers.gemm_helper import gemm
         import tests.specializers.test_signature as t
         from ukrgen.flow.stages.irmods import post_specialize_irmod_stage
-        from ukrgen.models.load_store_operations import lsc_addr_compute, lsc_loop
+        from ukrgen.models.lsc.operations import lsc_addr_compute, lsc_loop
         # the spelling is the post-specialize stage's (before scheduling): the
         # helper's pipeline with it, after the specialization
         stages = list(t.STAGES)

@@ -21,7 +21,7 @@ from ukrgen.flow.stages.loops import loop_stage
 from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage, post_specialize_irmod_stage
 from ukrgen.flow.stages.scheduling import schedule_stage
 from ukrgen.flow.stages.emit import emit_stage
-from ukrgen.models.load_store_operations import lsc_load, lsc_transformation
+from ukrgen.models.lsc.operations import lsc_load, lsc_transformation
 from ukrgen.schedulers.dependency import dependency_type as dept
 from ukrgen.schedulers.distance import distance_specification
 from ukrgen.schedulers.list_scheduler import list_scheduler, dependencies

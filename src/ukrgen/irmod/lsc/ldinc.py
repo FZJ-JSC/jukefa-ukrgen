@@ -8,13 +8,13 @@ from typing import ClassVar
 
 from asmgen.registers import adt_size
 
-from ...models.load_store_operations import (
+from ...models.lsc.operations import (
     lsc_load, lsc_store, lsc_addr_compute, ldst_modifier)
 from ...models.lsc.reg import lsc_reg_type
-from ...lsc_model.addressing import offpoly
+from ...models.lsc.addressing import offpoly
 from ...specializers.signature import _sigs, _masked, _accepts
 from .base import lsc_irmod, irmod_placement, irmod_param, blocks_and_sections
-from ...offset_polynomial import offset_polynomial as offpoly
+from ...models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 class ldinc(lsc_irmod):

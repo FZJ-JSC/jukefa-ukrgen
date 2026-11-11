@@ -15,8 +15,8 @@ import re
 from dataclasses import dataclass
 from fractions import Fraction
 
-from ..components.tile import dimension_properties as dimp, dimension_type as dimt
-from ..offset_polynomial import offset_polynomial as offpoly
+from ...components.tile import dimension_properties as dimp, dimension_type as dimt
+from .offset_polynomial import offset_polynomial as offpoly
 
 
 def layout_strides(component: str,

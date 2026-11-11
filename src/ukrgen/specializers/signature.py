@@ -36,15 +36,15 @@ from asmgen.asmblocks.op import (
 from asmgen.registers import reg_tracker, adt_size
 from asmgen.asmblocks.op.constraint import ConstraintDoesNotApplyError
 
-from ..lsc_model.addressing import offpoly
-from ..lsc_model.ir import ir_program, ir_block, BASE_REGISTER, START_BLOCK
+from ..models.lsc.addressing import offpoly
+from ..models.lsc.ir import ir_program, ir_block, BASE_REGISTER, START_BLOCK
 from ..components.tile import scalar_tile
-from ..models.load_store_operations import (
+from ..models.lsc.operations import (
     lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop,
     lsc_value_op)
 from ..models.lsc.index import lsc_reg_index
 from ..models.lsc.reg import lsc_reg_type
-from ..offset_polynomial import offset_polynomial as offpoly
+from ..models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 class specialization_error(Exception):
@@ -1216,7 +1216,7 @@ class signature_specializer:
         transformation whose signatures need different ones left to the
         emitter (vtype_dynamic), as it was
         """
-        from ..models.load_store_operations import lsc_state
+        from ..models.lsc.operations import lsc_state
         from ..irmod.lsc.base import blocks_and_sections
         setup = (adt_size(dt), 1)
         def need(op, sig):
@@ -1328,7 +1328,7 @@ class signature_specializer:
         # signatures those whose requirements hold where it is - decided here,
         # with the forms, before scheduling
         # (imported here: the state module reaches the irmods, tailmask this module)
-        from ..lsc_model.state import check_state
+        from ..models.lsc.state import check_state
         dt = min(self.ctx.component_dts.values(), key=adt_size)
         if self.ctx.gen.isa_setup().element_type_is_state():
             self.element_types(dt)
@@ -1338,7 +1338,7 @@ class signature_specializer:
             # the engine on before every path and off after them, as state the
             # emitter writes through the ISA's signatures (set's ENGINE): the
             # state before it the setup's without its own switch
-            from ..models.load_store_operations import lsc_state
+            from ..models.lsc.operations import lsc_state
             on, off = engine
             if all(self.assumed.get(k) == v for k, v in on.items()):
                 # the caller's: the engine on around the kernel, no switch

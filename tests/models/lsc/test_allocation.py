@@ -8,7 +8,7 @@ numbers the allocation gives them
 import unittest
 
 import tests.specializers.test_sme_run as sme
-from ukrgen.lsc_model import allocation
+from ukrgen.models.lsc import allocation
 
 
 #: the loop over slices unrolled into explicit copies: enough values in one

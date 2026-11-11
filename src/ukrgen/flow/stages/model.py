@@ -10,8 +10,8 @@ from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
 from .ukr.ukr import storage_class, read_access, write_access, sto_kind
-from ...lsc_model.addressing import addr_pattern, arg_value, kernel_values
-from ...lsc_model.builder import program_builder, addressing_plan, model_error
+from ...models.lsc.addressing import addr_pattern, arg_value, kernel_values
+from ...models.lsc.builder import program_builder, addressing_plan, model_error
 
 
 class model_stage(stage):
@@ -237,7 +237,7 @@ def subtiling_listing(context, programs) -> list[str]:
     count, the unrolls keeping it whole, order and settings
     """
     from asmgen.registers import adt_size
-    from ...models.load_store_operations import lsc_loop
+    from ...models.lsc.operations import lsc_loop
     from ...irmod.lsc.vectorize import loop_of
     from ...irmod.lsc.base import all_blocks
     lines, seen = [], set()

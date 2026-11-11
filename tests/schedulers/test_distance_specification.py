@@ -6,7 +6,7 @@
 
 import unittest
 
-from ukrgen.models.load_store_operations import (
+from ukrgen.models.lsc.operations import (
         lsc_load,
         lsc_store,
         lsc_transformation

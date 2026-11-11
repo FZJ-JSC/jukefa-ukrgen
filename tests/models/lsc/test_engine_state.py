@@ -8,7 +8,8 @@ before every path, its exit off after them - written through asmgen's set
 
 import unittest
 
-from ukrgen.lsc_model.state import check_state
+from ukrgen.models.lsc.state import check_state
+from tests import repo_root
 
 
 class test_engine_state(unittest.TestCase):
@@ -17,7 +18,7 @@ class test_engine_state(unittest.TestCase):
         from ukrgen.injectors.blis.families import configuration, build_packm
         from ukrgen.injectors.blis.cgen import asm_source
         import os
-        root = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "ukrconfig")
+        root = os.path.join(repo_root(), "ukrconfig")
         cfg = configuration.from_files({("packm", "FP64"): os.path.join(root, "sme/fopa_bc_vindex/dpackm.yaml")})
         fam = cfg.families[0]
         fam.cases = [c for c in fam.cases if "ztrans" == c[0]][:1]
@@ -60,7 +61,7 @@ class test_engine_state(unittest.TestCase):
         from ukrgen.injectors.blis.families import configuration, build_packm
         from ukrgen.injectors.blis.cgen import asm_source
         import os
-        root = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "ukrconfig")
+        root = os.path.join(repo_root(), "ukrconfig")
         for assume in (["sm=1", "za=1"], {"sm": 1, "za": 1}):
             with self.subTest(assume=assume):
                 cfg = configuration.from_files({("packm", "FP64"): os.path.join(root, "sme/fopa_bc_vindex/dpackm.yaml")})

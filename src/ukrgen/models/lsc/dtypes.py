@@ -15,8 +15,8 @@ program, so the two can't disagree.
 
 from asmgen.registers import asm_data_type as adt
 
-from ..models.load_store_operations import lsc_load, lsc_store
-from ..models.lsc.index import lsc_reg_index
+from .operations import lsc_load, lsc_store
+from .index import lsc_reg_index
 from .ir import ir_program
 
 #: the sections whose operations carry data registers (the emitter's own list:

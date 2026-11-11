@@ -10,7 +10,7 @@ second run with saved and restored state.
 
 from __future__ import annotations
 from asmgen.asmblocks.op import register_type as rgt
-from ..components.tile import (
+from ...components.tile import (
     tile, subtiling, dimension_properties as dimp, dimension_type as dimt,
 )
 
@@ -21,26 +21,26 @@ from dataclasses import dataclass, field
 from asmgen.asmblocks.op import operand_modifier as omod
 from asmgen.registers import adt_size
 
-from ..flow.stages.ukr.ukr import read_access, write_access, sto_kind, block_description
-from ..matching.math import get_operand_io
-from ..support.data_move import resident_ref
-from ..support.domains import operand_values
-from ..support.data_move import (
+from ...flow.stages.ukr.ukr import read_access, write_access, sto_kind, block_description
+from ...matching.math import get_operand_io
+from ...support.data_move import resident_ref
+from ...support.domains import operand_values
+from ...support.data_move import (
     dm_direction as dmd,
     orig_ref,
     filter_by_step_requirements,
 )
-from ..support.dm_solver import repeat_fits, resolved_operation_chain
-from ..support.sig_group import group_sigs, sig_group
+from ...support.dm_solver import repeat_fits, resolved_operation_chain
+from ...support.sig_group import group_sigs, sig_group
 from .addressing import offpoly, offset_db, layout_strides, addr_pattern
-from ..components.tile import scalar_tile
-from ..models.load_store_operations import (
+from ...components.tile import scalar_tile
+from .operations import (
     lsc_loop,
     loop_walk,
     lsc_operation, lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, ldst_modifier)
-from ..models.lsc.index import lsc_reg_index
+from .index import lsc_reg_index
 from .ir import vreg, addr_ref, ir_block, ir_case, ir_program
-from ..offset_polynomial import offset_polynomial as offpoly
+from .offset_polynomial import offset_polynomial as offpoly
 
 
 
@@ -1239,7 +1239,7 @@ class program_builder:
     # --- blocks ----------------------------------------------------------------
 
     def zero_accumulators(self, block: block_description) -> list[lsc_operation]:
-        from ..flow.stages.solve import produced_rtype
+        from ...flow.stages.solve import produced_rtype
         ops = []
         for sto in block.stos:
             for acc in sorted(self.comp.accumulators(sto)):
@@ -1324,7 +1324,7 @@ class program_builder:
                     reg = whole(items[pos].reg)
                     # a load into one lane (ld1 {v.d}[1]) - not a dup from a
                     # lane, which writes the whole register
-                    from ..models.load_store_operations import ldst_modifier
+                    from .operations import ldst_modifier
                     lane = next((op.properties.get("lane") for op in items[pos].ops
                                  if isinstance(op, lsc_load)
                                  and ldst_modifier.lane in op.mods), None)

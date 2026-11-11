@@ -8,11 +8,11 @@ from ...support.domains import operand_values
 from asmgen.asmblocks.op import register_type as rgt
 from asmgen.registers import adt_size
 
-from ...lsc_model.addressing import offpoly
-from ...models.load_store_operations import lsc_load, lsc_store, lsc_transformation, lsc_zero, lsc_loop
+from ...models.lsc.addressing import offpoly
+from ...models.lsc.operations import lsc_load, lsc_store, lsc_transformation, lsc_zero, lsc_loop
 from ...support.tiles import widening_ways
 from .base import irmod_placement, lsc_irmod, blocks_and_sections
-from ...offset_polynomial import offset_polynomial as offpoly
+from ...models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 #: the widening methods this modification carries out
 IMPLEMENTED = {"SPLIT_CONTIGUOUS", "SPLIT_INTERLEAVED", "VEC_GROUP"}

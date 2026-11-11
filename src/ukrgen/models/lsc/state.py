@@ -6,8 +6,8 @@ whose requirements hold where it is
 """
 from __future__ import annotations
 
-from ..irmod.lsc.base import blocks_and_sections, first_blocks
-from ..models.load_store_operations import lsc_load, lsc_loop, lsc_move, lsc_state, lsc_store
+from ...irmod.lsc.base import blocks_and_sections, first_blocks
+from .operations import lsc_load, lsc_loop, lsc_move, lsc_state, lsc_store
 
 
 def satisfied(requires: dict[str, str], state: dict[str, str]) -> bool:

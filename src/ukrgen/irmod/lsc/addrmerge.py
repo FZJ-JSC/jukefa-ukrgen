@@ -3,10 +3,10 @@ addrmerge: an address register's moves with nothing between using it, one
 """
 from __future__ import annotations
 
-from ...lsc_model.addressing import offpoly
-from ...models.load_store_operations import lsc_addr_compute, lsc_loop
+from ...models.lsc.addressing import offpoly
+from ...models.lsc.operations import lsc_addr_compute, lsc_loop
 from .base import lsc_irmod, irmod_placement, blocks_and_sections
-from ...offset_polynomial import offset_polynomial as offpoly
+from ...models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 def _key(idx) -> tuple:
