@@ -166,6 +166,88 @@ The migration, each step its own commit:
 4. **The address registers through the same two passes** (step 6) - `new_reg`'s
    emitter-side numbering, `aregs`' laziness, `release_*`, `settle`.
 
+## The signatures' operands in the IR: the registers an operation never named
+
+An operation's `indices` are the register operands the *model* made: a load's
+address and destination, a store's, a transformation's (through `hw_operands`,
+the names the builder paired with them). Everything else the chosen signature
+names - a governing predicate (`mask(m)`), SME's slice index (`slice_reg`), an
+instruction's clobbered operand (AVX's `amreg`) - is not in the operation. The
+emitter carries those in `properties`, in `self.masks` and `self.tails`, or as
+state (`lsc_state`'s `mask(m)`), and binds them by name while it forms the
+instruction (`_predicate`, `slices()`, `signature.py:1291`).
+
+That is what the masks' first move to a value ran into, and what keeps
+`_register_bounds` from seeing a load's constraint: the bound comes from
+`operand_values` over the chosen signature's operand, and there is no slot to
+name it by. So the operands come into the IR, once, after `isa_specialize` has
+chosen the signatures:
+
+- **`hw_operands` on every operation**, not only `lsc_transformation`: a
+  signature operand name per index slot;
+- **a binding pass** after `isa_specialize` that, for each operation's chosen
+  signature, pairs the register operands it already carries and appends the
+  ones it doesn't - a new `lsc_reg_index` with the operand's `rgt` and a name no
+  memory component has (`mask(m)`, `slice(C,0)`: `dtypes.register_types` keys
+  by component and number, so a shared name would take a component's data type);
+- **`reads` for what the instruction reads, `writes` for what it writes, both
+  for a clobbered operand** - `sig.clobber_list` holds operand *names*
+  (`asmgen/asmblocks/avx/opmem/signatures.py:89`, `'amreg'`), and a clobbered
+  register is read and written by the same instruction: in `writes` alone a
+  later reader would be scheduled across it;
+- **a class from the `rgt`**, which `classes.TAGS` answers now (asmgen's
+  `register_type.tag`).
+
+Then liveness, the renamer and the allocation see them as values: a mask's
+range from the set that writes it to its last reader, a slice index's from the
+frame to the loop's end, a clobbered operand's as a read-modify-write. And the
+emitter forms the instruction from the operation alone - `self.reg(idx, rtype)`
+for every operand the signature names, no `properties`, no side table.
+
+Three things that bite:
+
+- **state and the operand are the same fact twice**: a mask is `lsc_state`'s
+  `mask(m)` *and*, after this, a value its readers read. `check_state` prunes
+  `op.sigs` against the state it walks, so the state entry stays until that
+  pruning moves into `isa_specialize`; dropping it first is what lost SME's
+  slice store its form (*"no store of a slice's Y takes a plain address at
+  slice immediate 0"*).
+- **`state_requires` names the mask's value** (`tail(m)`) and the pruning
+  compares strings: whatever writes the value has to write that name, or the
+  form disappears.
+- **the first operation whose mask or slice index enters the allocation
+  changes numbering** - re-record and qemu, not byte-identical.
+
+The order, each its own commit:
+
+| phase | change | kernels |
+|---|---|---|
+| (a) | `hw_operands` on every op and the binding pass; nothing reads the slots yet | same |
+| (b) | the emitter reads them: `_predicate`, `slice_reg`/`slice_imm`, `clobbered_mask`, `self.masks`, `self.tails` | change where numbering does; re-record, qemu |
+| (c) | the mask's state op and `extra_reads_state` go, `_all_true`'s alias with them | same |
+| (d) | `check_state`'s `op.sigs` pruning into `isa_specialize`, then masks can be values anywhere | same |
+
+Phase (a) is what makes the general step 6 tractable: the address registers,
+walkers, counters, masks and index vectors it lists become ordinary values in
+the same pass that binds them, and `_register_bounds`, `slice_frame`'s
+hardcoded `[12, 13, 14, 15]` and `_required_priorities` all read the problem's
+constraints instead of deriving them per site.
+
+## What the loops over slices work around
+
+Where the emitter's remaining allocation duties still show, and what removes
+each:
+
+| workaround | where | papers over | goes with |
+|---|---|---|---|
+| `w12-w15` as an `allowed` bound, the frame's registers taken before the columns' | `slice_frame`, `slice_frames` (`specializers/addresses.py:565`) | placement *order*: the index must have its four registers before a column takes them | (a), step 6 |
+| `release_aregs`, `release_pointers`, `room`, `peak_registers`, `bounded` | `emitters/signature.py` | pressure guessed per section | step 4 |
+| `moved_in_ir` (`"slice_moves"`, `"slice_registers"`, `"slice_walks"` in `op.info`) | `signature.py:448` | one loop emitted by two code paths | (b), step 3's sections |
+| `properties["slice_reg"]` / `["slice_imm"]` written by the emitter | `signature.py:571,637` | the emitter's bookkeeping stored in the IR | (a), (b) |
+| `--loop-gregs` ("at least 2: a counter and a slice index") | `flow/stages/emit.py:41` | a hand-counted frame budget | step 4's `demand` |
+| slice immediates in four bits, `immediates_take`, `MERGED_IMMEDIATE` | `irmod/lsc/unroll.py`, `addresses.py` | encoding limits read before `isa_specialize` trims the signatures | (a): read after binding |
+| the mask as state plus `self.tails` | `irmod/lsc/tailmask.py`, `signature.py` | registers with no name of their own | (b), (c) |
+
 ## Steps
 
 1. **One allocator in the emitter** - done (0327).
