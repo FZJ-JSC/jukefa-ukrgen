@@ -11,7 +11,8 @@ from asmgen.asmblocks.op import register_type as rgt
 #: a register type's tracker tag
 #: a value's register type -> its file's tag (asmgen's): a mask's own, where
 #: an `lsc_set` writes one - RVV's vectors hold it, AVX2's a vector register
-TAGS = {rgt.VEC: "vreg", rgt.FP: "freg", rgt.TILE: "treg", rgt.MASK: "mreg"}
+TAGS = {rgt.VEC: "vreg", rgt.FP: "freg", rgt.TILE: "treg", rgt.MASK: "mreg",
+        rgt.GP: "greg"}
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,10 @@ def register_class_of(key: tuple, groups: dict, dts: dict, bounds: dict,
         dt = dts.get((comp, number))
         return register_class(tile_tag(dt) if tile_tag is not None and dt is not None else tag)
     if rgt.VEC != rtype:
-        return register_class(tag)
+        # an address register the signatures limit (SME's slice index: w12-w15),
+        # or one they don't
+        allowed = bounds.get(key)
+        return register_class(tag, allowed=tuple(allowed) if allowed is not None else None)
     group = groups.get(comp)
     parts = group[2] if group is not None and len(group) > 2 else None
     if parts is not None:

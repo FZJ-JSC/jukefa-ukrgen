@@ -5,6 +5,10 @@ The analysis pass's register classes against what the emitter allocates
 
 import unittest
 
+from asmgen.asmblocks.op import register_type as rgt
+
+from ukrgen.models.lsc import classes
+
 import ukrgen.emitters.allocation as A
 from ukrgen.models.lsc.classes import register_class_of
 
@@ -62,6 +66,19 @@ class test_register_classes(unittest.TestCase):
             with self.subTest(config=path):
                 self.check(path, "gemm", "FP64", family=family, sizes=sizes)
 
+    def test_an_address_register_is_a_file_too(self):
+        # SME's slice index lives in w12-w15: a general register whose class
+        # says so, the allocation's to place within
+        key = ("C", 0, rgt.GP)
+        klass = classes.register_class_of(key, {}, {}, {key: [12, 13, 14, 15]})
+        self.assertIsNotNone(klass)
+        self.assertEqual("greg", klass.tag)
+        self.assertEqual((12, 13, 14, 15), klass.allowed)
+        # one no signature limits: any general register
+        unlimited = classes.register_class_of(key, {}, {}, {})
+        self.assertEqual("greg", unlimited.tag)
+        self.assertIsNone(unlimited.allowed)
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -96,6 +113,19 @@ class test_units(unittest.TestCase):
         self.assertTrue(compatible(v, f, self.rt))
         self.assertFalse(compatible(v, g, self.rt))
         self.assertFalse(fits(register_class("vreg", allowed=(1, 2)), 3, self.rt))
+
+    def test_an_address_register_is_a_file_too(self):
+        # SME's slice index lives in w12-w15: a general register whose class
+        # says so, the allocation's to place within
+        key = ("C", 0, rgt.GP)
+        klass = classes.register_class_of(key, {}, {}, {key: [12, 13, 14, 15]})
+        self.assertIsNotNone(klass)
+        self.assertEqual("greg", klass.tag)
+        self.assertEqual((12, 13, 14, 15), klass.allowed)
+        # one no signature limits: any general register
+        unlimited = classes.register_class_of(key, {}, {}, {})
+        self.assertEqual("greg", unlimited.tag)
+        self.assertIsNone(unlimited.allowed)
 
 
 if __name__ == "__main__":
