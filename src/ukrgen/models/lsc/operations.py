@@ -10,6 +10,7 @@ from typing import Callable
 from enum import Enum,auto
 from ...components.tile import tile,scalar_tile
 from ...components.operation import dimension_type
+from asmgen.registers import asm_data_type as adt
 
 from .index import lsc_reg_index 
 from .reg import lsc_reg_type
@@ -361,13 +362,39 @@ class lsc_set_payload:
 
 
 @dataclass(frozen=True)
-class set_mask(lsc_set_payload):
+class set_mask_alltrue(lsc_set_payload):
     """
-    A mask: the ISA's set form fills it
-    :param alltrue: every lane set - a masked access needs no compare, an
-                    operation's clobbered mask does
+    The governing predicate full vectors run under: every lane set, once per
+    program (an ISA without predicate registers has none: its masked forms
+    name no register)
     """
-    alltrue : bool = True
+
+
+@dataclass(frozen=True)
+class set_mask_tail(lsc_set_payload):
+    """
+    A loop's last accesses' mask: the elements it has left, a mask register
+    where the ISA cannot run at a shorter vector length (SVE, SME) - RVV sets
+    its vector length instead, and needs no mask
+    :param count: the count's name, the parameter holding the elements left
+    :param dt: the element type the mask is built for (its lanes)
+    """
+    count : str
+    dt : adt
+
+
+@dataclass(frozen=True)
+class set_mask_avl(lsc_set_payload):
+    """
+    A mask standing in for a vector length: the ISA has no state to run
+    vectors shorter than the hardware's (SVE), so the lanes past the count
+    are masked out - set once, read by every access of the region, unlike a
+    tail's mask whose count is what a loop has left
+    :param count: the count's name, the parameter holding the elements to run
+    :param dt: the element type the mask is built for
+    """
+    count : str
+    dt : adt
 
 
 @dataclass(frozen=True)

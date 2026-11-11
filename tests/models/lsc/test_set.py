@@ -10,7 +10,8 @@ from asmgen.asmblocks.op import register_type as rgt
 from ukrgen.models.lsc import allocation
 from ukrgen.models.lsc.addressing import offset_db, offpoly
 from ukrgen.models.lsc.ir import ir_block, ir_program
-from ukrgen.models.lsc.operations import lsc_set, set_index, set_mask
+from ukrgen.models.lsc.operations import (lsc_set, set_index, set_mask_alltrue,
+                                           set_mask_tail)
 from ukrgen.models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
@@ -31,7 +32,7 @@ class test_set(unittest.TestCase):
     def test_a_mask_is_a_value(self):
         # a set's mask: a value of the mask file, live where it is set - what
         # the renamer and the allocation see, the payload being the emitter's
-        program = program_with(lsc_set("mask", 0, rgt.MASK, set_mask()))
+        program = program_with(lsc_set("mask", 0, rgt.MASK, set_mask_alltrue()))
         resources = allocation.resources(pools={"mreg": 1})
         problem = allocation.analyse(program, resources)
         key = ("mask", 0, rgt.MASK)
@@ -44,13 +45,22 @@ class test_set(unittest.TestCase):
         self.assertEqual(1, problem.pressure("mreg"))
 
     def test_the_allocation_places_a_mask(self):
-        program = program_with(lsc_set("mask", 0, rgt.MASK, set_mask()))
+        program = program_with(lsc_set("mask", 0, rgt.MASK, set_mask_alltrue()))
         resources = allocation.resources(pools={"mreg": 1})
         problem = allocation.analyse(program, resources)
         result = allocation.allocate(problem, resources)
         self.assertEqual(("mreg", 0), result.number(("mask", 0, rgt.MASK)))
         self.assertEqual([], result.unfitted)
         self.assertEqual([], allocation.validate(problem, result, resources))
+
+    def test_a_tail_mask_carries_its_count(self):
+        # the count it masks to is a parameter's, and the element type its lanes'
+        from asmgen.registers import asm_data_type as adt
+        payload = set_mask_tail("tail(m)", adt.FP64)
+        op = lsc_set("mask(m)", 0, rgt.MASK, payload)
+        self.assertEqual("tail(m)", payload.count)
+        self.assertEqual(adt.FP64, payload.dt)
+        self.assertEqual("mask(m)0 <- set(set_mask_tail)", str(op))
 
     def test_an_index_vector_carries_its_stride(self):
         # the emitter reads the stride off the payload: a constant here, a
@@ -66,7 +76,7 @@ class test_set(unittest.TestCase):
     def test_the_writes_are_names_the_ops_can_read(self):
         # the value flows from the set to its readers by name and type: an
         # operation reading it keeps it live
-        program = program_with(lsc_set("mask", 0, rgt.MASK, set_mask()))
+        program = program_with(lsc_set("mask", 0, rgt.MASK, set_mask_alltrue()))
         body = program.blocks[0].sections["body"]
         self.assertEqual([0], body[0].writes)
         self.assertEqual([], body[0].reads)
