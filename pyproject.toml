@@ -20,7 +20,7 @@ dependencies = [
     "mako",
     "GitPython",
     "PyYAML",
-    "jukefa-asmgen>=0.6.0"
+    "jukefa-asmgen>=0.6.3"
 ]
 
 [dependency-groups]
@@ -30,6 +30,9 @@ test = [
   "pytest-xdist"
 ]
 
+[project.urls]
+Homepage = "https://github.com/FZJ-JSC/jukefa-ukrgen"
+Issues = "https://github.com/FZJ-JSC/jukefa-ukrgen/issues"
 
 
 [project.scripts]
@@ -43,3 +46,6 @@ packages = [
 
 [tool.hatch.build.targets.wheel.shared-data]
 "ukrconfig" = "share/ukrgen/ukrconfig"
+
+[tool.uv.sources]
+jukefa-asmgen = { path = "../asmgen", editable = true }
