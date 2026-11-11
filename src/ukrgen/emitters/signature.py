@@ -37,6 +37,7 @@ from ..specializers.addresses import address_speller
 from ..models.lsc.operations import (lsc_state, 
     lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop, lsc_permute,
     lsc_value_op)
+from ..models.lsc.classes import TAGS
 from ..models.lsc.index import lsc_reg_index
 
 from .allocation import register_allocator
@@ -344,8 +345,7 @@ class signature_emitter:
                     f"microtile fit")
         return self._slices(op)
 
-    #: a value's register type, the tracker's tag for it
-    TAGS = {rgt.VEC: "vreg", rgt.FP: "freg", rgt.TILE: "treg"}
+
 
     def room(self, tag: str) -> int:
         """
@@ -366,7 +366,7 @@ class signature_emitter:
         untouched
         """
         pool = self.rt.pool(tag)
-        mine = lambda k: self.TAGS.get(k[2]) in pool
+        mine = lambda k: TAGS.get(k[2]) in pool
         held = {k for k in self.phys if mine(k)}
         after = self.after if self.after is not None else held
         writes = {k for o in ops for k in self.reads_writes(o)[1]}

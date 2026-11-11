@@ -15,7 +15,7 @@ from asmgen.asmblocks.op import register_type as rgt
 from ...models.lsc import liveness
 from ...models.lsc import classes
 from ...models.lsc.rename import bounded, rename_straight, rename_temporaries
-from ...schedulers.list_scheduler import list_scheduler, register_budget, _key, TAGS
+from ...schedulers.list_scheduler import list_scheduler, register_budget, _key
 
 SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
 
@@ -58,7 +58,7 @@ def _across(order: list, pos: int, live_out: set, groups) -> dict:
     """
     counts = {}
     for k in liveness.across(order, pos, live_out, _scheduler_key(groups)):
-        tag = TAGS.get(k[-1])
+        tag = classes.TAGS.get(k[-1])
         if tag is not None:
             counts[tag] = counts.get(tag, 0) + 1
     return counts
