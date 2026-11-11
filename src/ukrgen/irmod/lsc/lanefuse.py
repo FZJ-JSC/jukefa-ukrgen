@@ -9,10 +9,11 @@ from asmgen.registers import adt_size
 
 from ...models.load_store_operations import lsc_load, ldst_modifier
 from ...models.lsc.index import lsc_reg_index
-from ...lsc_model.addressing import sym
+from ...lsc_model.addressing import offpoly
 from ...support.data_move import dm_step, orig_ref, filter_by_step_requirements
 from ...support.sig_group import group_sigs
 from .base import lsc_irmod, irmod_placement, blocks_and_sections
+from ...offset_polynomial import offset_polynomial as offpoly
 
 
 class lanefuse(lsc_irmod):
@@ -56,7 +57,7 @@ class lanefuse(lsc_irmod):
         db, strides = program.offsets, program.strides.get(comp, {})
         base = db.elements_offset(first.offset, strides)
         return all(op.indices[0].indices == first.indices[0].indices
-                   and db.elements_offset(op.offset, strides) - base == sym.const(lane)
+                   and db.elements_offset(op.offset, strides) - base == offpoly.const(lane)
                    for lane, op in lanes.items())
 
     def fuse(self, program, ops: list) -> tuple[list, int]:

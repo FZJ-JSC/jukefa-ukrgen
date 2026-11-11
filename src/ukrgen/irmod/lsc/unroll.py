@@ -14,9 +14,10 @@ from .vectorize import repeats
 from .base import blocks_and_sections
 from ...models.load_store_operations import lsc_loop, loop_walk, lsc_load, lsc_store
 from ...models.lsc.index import lsc_reg_index
-from ...lsc_model.addressing import sym
+from ...lsc_model.addressing import offpoly
 from asmgen.asmblocks.op import register_type as rgt
 from ...support.domains import operand_values
+from ...offset_polynomial import offset_polynomial as offpoly
 
 
 
@@ -193,7 +194,7 @@ def expand_copies(program, loop):
                 if w not in moved:
                     old = loop.walks[w]
                     anchor = _clone(old.anchor)
-                    anchor.offset = program.offsets.shifted(old.anchor.offset, index, sym.const(u))
+                    anchor.offset = program.offsets.shifted(old.anchor.offset, index, offpoly.const(u))
                     moved[w] = len(walks)
                     walks.append(loop_walk(anchor=anchor, step=old.step))
                 n.add_property("walk", moved[w])

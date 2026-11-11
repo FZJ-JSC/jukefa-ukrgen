@@ -7,17 +7,18 @@ import copy
 
 from asmgen.asmblocks.op import register_type as rgt, opmem_modifier as memmod
 
-from ...lsc_model.addressing import sym
+from ...lsc_model.addressing import offpoly
 from ...models.load_store_operations import lsc_store, lsc_addr_compute
 from .base import lsc_irmod, irmod_param, irmod_placement, blocks_and_sections
 from .widen import struct_sigs
+from ...offset_polynomial import offset_polynomial as offpoly
 
 
 def _constant(delta) -> int | None:
     """an address delta's value, where it's a constant number of elements"""
     if isinstance(delta, int):
         return delta
-    if isinstance(delta, sym):
+    if isinstance(delta, offpoly):
         if not delta.terms:
             return 0
         if 1 == len(delta.terms) and () == delta.terms[0][0]:
@@ -58,11 +59,11 @@ def _rows_apart(first, record, rows: int, vector_index: str | None) -> bool:
     if first is None or record is None or first.component != record.component:
         return False
     a, b = dict(first.elements), dict(record.elements)
-    differing = [k for k in set(a) | set(b) if a.get(k, sym()) != b.get(k, sym())]
+    differing = [k for k in set(a) | set(b) if a.get(k, offpoly()) != b.get(k, offpoly())]
     if 1 != len(differing) or vector_index == differing[0]:
         return False
     k = differing[0]
-    start, at = _constant(a.get(k, sym())), _constant(b.get(k, sym()))
+    start, at = _constant(a.get(k, offpoly())), _constant(b.get(k, offpoly()))
     return start is not None and at is not None and rows == at - start
 
 

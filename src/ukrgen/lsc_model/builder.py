@@ -32,7 +32,7 @@ from ..support.data_move import (
 )
 from ..support.dm_solver import repeat_fits, resolved_operation_chain
 from ..support.sig_group import group_sigs, sig_group
-from .addressing import sym, offset_db, layout_strides, addr_pattern
+from .addressing import offpoly, offset_db, layout_strides, addr_pattern
 from ..components.tile import scalar_tile
 from ..models.load_store_operations import (
     lsc_loop,
@@ -40,6 +40,7 @@ from ..models.load_store_operations import (
     lsc_operation, lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, ldst_modifier)
 from ..models.lsc.index import lsc_reg_index
 from .ir import vreg, addr_ref, ir_block, ir_case, ir_program
+from ..offset_polynomial import offset_polynomial as offpoly
 
 
 
@@ -143,7 +144,7 @@ class program_builder:
         self.components = {c.name for c in self.comp.get_components()}
 
         self.db = offset_db()
-        self.extents: dict[str, sym] = {}
+        self.extents: dict[str, offpoly] = {}
         part_dims = ctx.part_dims or [ctx.dims] * len(ctx.to_parts)
         split = ctx.split_index
         for n, (pid, (_, stos)) in enumerate(zip(ids, self.parts)):
@@ -153,7 +154,7 @@ class program_builder:
                     if idx in seen:
                         continue
                     seen.add(idx)
-                    here = sym.extent(ext) * part_dims[pid][idx]
+                    here = offpoly.extent(ext) * part_dims[pid][idx]
                     if 0 == n:
                         self.extents[idx] = here
                     elif idx == split:
@@ -497,7 +498,7 @@ class program_builder:
             shape = ("1v", "1v")
         return tuple(sorted(self.elements(tiling, comp, coord).items())) + ((_SHAPE, shape),)
 
-    def elements(self, tiling, comp: str, coord: tuple) -> dict[str, sym]:
+    def elements(self, tiling, comp: str, coord: tuple) -> dict[str, offpoly]:
         """
         Element offsets of a component tile: its register coordinate times the
         register tile's extent along each index
@@ -511,8 +512,8 @@ class program_builder:
         # an STO looping over a tile's slices covers the tile along the index
         # they iterate: its coordinates step by the tile there
         loop = tiling.slice_loop
-        step = lambda pos, idx: sym.extent(tiling.extents[idx]) if loop is not None \
-            and idx == loop[0] else sym.extent(dims[pos])
+        step = lambda pos, idx: offpoly.extent(tiling.extents[idx]) if loop is not None \
+            and idx == loop[0] else offpoly.extent(dims[pos])
         out = {idx: step(pos, idx) * c for (pos, idx), c in zip(live, coord)}
         # a part of a split microtile starts along the split index where the
         # one before ends
@@ -545,7 +546,7 @@ class program_builder:
         return self._phase_counts[comp]
 
     def address(self, sto: str, comp: str, direction: str, coord: tuple,
-                elements: dict[str, sym]) -> addr_ref:
+                elements: dict[str, offpoly]) -> addr_ref:
         """
         Register an access and pick its address register. The pick depends
         only on the tile's rank and the access's phase, so it is the same in
@@ -634,7 +635,7 @@ class program_builder:
                 elements = self.elements(tiling, comp, coord)
                 if lane is not None:
                     vidx = self.vector_index(tiling, comp)
-                    elements[vidx] = elements.get(vidx, sym()) + lane
+                    elements[vidx] = elements.get(vidx, offpoly()) + lane
                 if step.op in ("load", "store"):
                     data = self.ref_reg(step.dest, step.dest_rtype, reg) if "load" == step.op \
                         else self.ref_reg(step.src[0], step.src_rtypes[0], reg)
@@ -840,13 +841,13 @@ class program_builder:
         lanes = self.gen.simd_size // adt_size(dt)
         elements = self.elements(tiling, comp, coord)
         strides = self.strides.get(memory, {})
-        along = next((i for i in elements if dict(strides.get(i, sym()).terms) == {(): 1}), None)
+        along = next((i for i in elements if dict(strides.get(i, offpoly()).terms) == {(): 1}), None)
         if along is None:
             raise model_error(f"{tag}: {memory} has no contiguous index to group its elements along")
         at = dict(elements[along].terms).get((), 0)
         position = at % lanes
         start = dict(elements)
-        start[along] = elements[along] + sym.const(-position)
+        start[along] = elements[along] + offpoly.const(-position)
         key = (memory, tuple(sorted((i, str(e)) for i, e in start.items())))
         load, move = steps[0], steps[1]
         if self.lane_groups.get(memory) != key:
@@ -913,7 +914,7 @@ class program_builder:
             if "lane" == path[-1][0]:
                 position = sum(i * level[2] for i, level in zip(idxs, path))
                 elements = self.elements(tiling, comp, coord)
-                elements[vidx] = elements.get(vidx, sym()) + position
+                elements[vidx] = elements.get(vidx, offpoly()) + position
                 addr = self.address(sto, memory, direction, coord, elements)
                 if "load" == step.op:
                     data, cls = self.ref_reg(step.dest, step.dest_rtype, reg), lsc_load
@@ -1191,7 +1192,7 @@ class program_builder:
                 memory = b.indices[0].component
                 b.add_property("walk", len(walks))
                 walks.append(loop_walk(anchor=_clone(b),
-                                       step=self.strides.get(memory, {}).get(index, sym.const(0))))
+                                       step=self.strides.get(memory, {}).get(index, offpoly.const(0))))
         one = dimp(dt=dimt.fixed, size=1)
         element = tile(one, one)
         vector = tile(dimp(dt=dimt.vla, size=1), one)
@@ -1273,7 +1274,7 @@ class program_builder:
         # The size given for the loop index (--k for gemm) counts operations
         # along it per iteration: the unroll. An iteration covers that many
         # times one operation's extent along the loop index.
-        extent = sym.extent(self.stos[block.stos[0]].extents[k])
+        extent = offpoly.extent(self.stos[block.stos[0]].extents[k])
         iteration = extent * self.ctx.dims[k]
         out = ir_block(name="+".join(block.stos), loop_index=k, step=iteration,
                        unroll=self.ctx.dims[k])
@@ -1386,7 +1387,7 @@ class program_builder:
         # What is shorter than one operation needs the subtail: another
         # implementation covering one element along the loop index. Without
         # one, the loop count must be a multiple of an operation's extent.
-        if extent != sym.const(1):
+        if extent != offpoly.const(1):
             if all(sto in self.subtails for sto in block.stos):
                 self.forget(streamed)
                 items = self.emit_section([
@@ -1394,12 +1395,12 @@ class program_builder:
                      self.subtail_impls.get(sto, None) and self.subtail_impls[sto].impl)
                     for sto in block.stos])
                 out.subtail = _flatten(items)
-                out.subtail_step = sym.const(1)
+                out.subtail_step = offpoly.const(1)
             else:
                 out.requires_multiple = extent
         return out
 
-    def shifted(self, op: lsc_operation, index: str, amount: sym) -> lsc_operation:
+    def shifted(self, op: lsc_operation, index: str, amount: offpoly) -> lsc_operation:
         """
         The same operation one loop iteration later: a copy, with a load or
         store's address moved along the loop index

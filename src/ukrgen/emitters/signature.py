@@ -30,7 +30,7 @@ from asmgen.asmblocks.op.opset import opset_modifier
 from asmgen.registers import adt_size
 
 from ..lsc_model.state import merge_switches
-from ..lsc_model.addressing import sym
+from ..lsc_model.addressing import offpoly
 from ..lsc_model.ir import ir_program, ir_block, BASE_REGISTER, is_start_block
 
 from ..specializers.addresses import address_speller
@@ -49,6 +49,7 @@ SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
 
 from .emitted import _labels, emitted_block, emitted_program  # noqa: F401 (their home now)
 from .offsets import offset_planner  # noqa: F401
+from ..offset_polynomial import offset_polynomial as offpoly
 
 
 class signature_emitter:
@@ -296,7 +297,7 @@ class signature_emitter:
 
     # --- addresses ---------------------------------------------------------
 
-    def bytes_of(self, component: str, elements: sym) -> sym:
+    def bytes_of(self, component: str, elements: offpoly) -> offpoly:
         return elements * adt_size(self.ctx.component_dts[component])
 
     def stride_reg(self, *args, **kwargs):
@@ -487,11 +488,11 @@ class signature_emitter:
             out = []
             if pointers:
                 for (key, name), ptr in pointer_regs.items():
-                    step = sym._make({f: c * slices for f, c in dict(plan[key]["step"].terms).items()})
+                    step = offpoly._make({f: c * slices for f, c in dict(plan[key]["step"].terms).items()})
                     out += self.add_bytes(ptr, self.bytes_of(key[0], step), key[0])
                 return out
             for key, p in (plan or {}).items():
-                move = sym._make({f: c * slices for f, c in dict(p["step"].terms).items()}) - end[key]
+                move = offpoly._make({f: c * slices for f, c in dict(p["step"].terms).items()}) - end[key]
                 if dict(move.terms):
                     out += self.add_bytes(self.aregs[key], self.bytes_of(key[0], move), key[0])
             return out
@@ -503,7 +504,7 @@ class signature_emitter:
             # where the loop leaves them - a vector length of steps on; the
             # specializer's address computations after it step them back home
             for key, p in (plan or {}).items():
-                self.positions[key] = p["home"] + sym._make(
+                self.positions[key] = p["home"] + offpoly._make(
                     {tuple(sorted(("VL",) + f)): c for f, c in dict(p["step"].terms).items()})
             return []
         walkers, deltas, steps, shared = [], [], {}, {}
@@ -1174,7 +1175,7 @@ class signature_emitter:
             else:
                 lines = self.move_step(step, self.aregs[src_key], dest)
             advance = (op.properties or {}).get("advance")
-            self.positions[dest_key] = self.positions[src_key] + op.delta - (advance or sym.const(0))
+            self.positions[dest_key] = self.positions[src_key] + op.delta - (advance or offpoly.const(0))
             return lines
         amount = self.bytes_of(comp, op.delta)
         k = self.vector_multiple(amount, comp)
@@ -1202,7 +1203,7 @@ class signature_emitter:
         # a loop's advance moves to the next iteration: offsets are measured
         # within one, so that part isn't a move of the register
         advance = (op.properties or {}).get("advance")
-        self.positions[dest_key] = self.positions[src_key] + op.delta - (advance or sym.const(0))
+        self.positions[dest_key] = self.positions[src_key] + op.delta - (advance or offpoly.const(0))
         return lines
 
     def members(self, op, data, sig) -> list:
@@ -2111,7 +2112,7 @@ class signature_emitter:
             name = f"base({comp})"
             if name in self.params and (comp, BASE_REGISTER) not in self.aregs:
                 self.aregs[(comp, BASE_REGISTER)] = self.params[name]
-                self.positions[(comp, BASE_REGISTER)] = sym.const(0)
+                self.positions[(comp, BASE_REGISTER)] = offpoly.const(0)
         return []
 
     def release_aregs(self, keys):

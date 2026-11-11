@@ -23,12 +23,13 @@ from asmgen.registers import adt_size, asm_data_type as adt
 
 from ..components.tile import scalar_tile
 from ..emitters import asmops
-from ..lsc_model.addressing import sym
+from ..lsc_model.addressing import offpoly
 from ..lsc_model.ir import ir_program
 from ..models.lsc.index import lsc_reg_index
 from ..models.lsc.reg import lsc_reg_type
 from ..models.load_store_operations import lsc_addr_compute, lsc_loop
 from .signature import specialization_error
+from ..offset_polynomial import offset_polynomial as offpoly
 
 #: address moves spelled as steps before emitting - the kernels byte for byte
 #: the same either way; off for comparing
@@ -78,7 +79,7 @@ class address_speller:
     def esize(self, comp: str) -> int:
         return adt_size(self.ctx.component_dts[comp])
 
-    def bytes_of(self, comp: str, elements: sym) -> sym:
+    def bytes_of(self, comp: str, elements: offpoly) -> offpoly:
         return elements * self.esize(comp)
 
     def shifted_available(self, op: str, shift: int) -> bool:
@@ -93,7 +94,7 @@ class address_speller:
                 operand_modifiers={"bdreg": {opd_mod.ISHIFT}}, bdreg_shift=shift) is not None
         return self._shifted[(op, shift)]
 
-    def vector_multiple(self, amount: sym, comp: str) -> int | None:
+    def vector_multiple(self, amount: offpoly, comp: str) -> int | None:
         """
         k where an amount of bytes is k whole vector lengths (k > 0) and the
         ISA keeps the vector length in a register; else None
@@ -134,7 +135,7 @@ class address_speller:
             return [("mul", value, op, abs(n), tuple(out))]
         return out
 
-    def move_steps(self, amount: sym, comp: str, split: bool = False) -> list[tuple]:
+    def move_steps(self, amount: offpoly, comp: str, split: bool = False) -> list[tuple]:
         """
         The steps moving an address register by a number of bytes: constants
         as an immediate; whole vectors with incb/decb where the ISA counts them
@@ -173,7 +174,7 @@ class address_speller:
             steps += self.scaled_steps(value, n, split)
         return steps
 
-    def offset_cost(self, amount: sym, comp: str) -> int:
+    def offset_cost(self, amount: offpoly, comp: str) -> int:
         """
         The instructions moving an address by amount takes spelled out: an
         immediate's add, a vector length's one, a stride's per set bit (where
@@ -234,29 +235,29 @@ class address_speller:
         ranked = sorted(found.items(), key=lambda kv: -kv[1][0] * (kv[1][1] - 1))
         return {key: (amount, uses * (cost - 1)) for key, (uses, cost, amount) in ranked[:budget]}
 
-    def step_delta(self, step: tuple, comp: str) -> sym:
+    def step_delta(self, step: tuple, comp: str) -> offpoly:
         """
         A step's move in the component's elements: a move's steps add up to it
         """
         kind = step[0]
         if "copy" == kind:
-            return sym.const(0)
+            return offpoly.const(0)
         if "imm" == kind:
-            return sym.const(step[1] // self.esize(comp))
+            return offpoly.const(step[1] // self.esize(comp))
         if "vectors" == kind:
-            return sym._make({("VL",): step[1]})
+            return offpoly._make({("VL",): step[1]})
         if "from_vectors" == kind:
-            return sym._make({("VL",): step[2]})
+            return offpoly._make({("VL",): step[2]})
         if "from_stride" == kind:
-            return sym._make({(step[1],): 1})
+            return offpoly._make({(step[1],): 1})
         if "offset" == kind:
             return self.elements_of(step[1], step[2])
         if "from" == kind:
             return self.step_delta(step[1], comp)
         if "from_imm" == kind:
-            return sym.const(step[1] // self.esize(comp))
+            return offpoly.const(step[1] // self.esize(comp))
         if kind in ("scratch_set", "scratch_mul"):
-            return sym.const(0)
+            return offpoly.const(0)
         if "scratch_add" == kind:
             return self.step_delta(("mul", step[3], step[2], step[4], ()), comp)
         value, sign = step[1], -1 if "sub" == step[2] else 1
@@ -271,14 +272,14 @@ class address_speller:
             factors = ("VL",)
             if "vl_multiple" == value[0]:
                 times *= value[2]
-        return sym._make({factors: sign * times})
+        return offpoly._make({factors: sign * times})
 
-    def elements_of(self, comp: str, amount: sym) -> sym:
+    def elements_of(self, comp: str, amount: offpoly) -> offpoly:
         """
         A polynomial in bytes back in the component's elements
         """
         esize = self.esize(comp)
-        return sym._make({f: c // esize for f, c in amount.terms})
+        return offpoly._make({f: c // esize for f, c in amount.terms})
 
     def spelled(self, op: lsc_addr_compute) -> list:
         """
@@ -324,7 +325,7 @@ class address_speller:
             if advance is not None and len(steps) - 1 == n:
                 o.properties["advance"] = advance
             out.append(o)
-        total = sym.const(0)
+        total = offpoly.const(0)
         for o in out:
             total = total + o.delta
         if dict(total.terms) != dict(op.delta.terms):
@@ -426,10 +427,10 @@ class address_speller:
             if advance is not None and len(steps) - 1 == n:
                 o.properties["advance"] = advance
             out.append(o)
-        before = sym.const(0)
+        before = offpoly.const(0)
         for o in ops:
             before = before + o.delta
-        after = sym.const(0)
+        after = offpoly.const(0)
         for o in out:
             after = after + o.delta
         if dict(before.terms) != dict(after.terms):

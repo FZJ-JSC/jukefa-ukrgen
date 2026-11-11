@@ -11,9 +11,10 @@ from asmgen.registers import adt_size
 from ...models.load_store_operations import (
     lsc_load, lsc_store, lsc_addr_compute, ldst_modifier)
 from ...models.lsc.reg import lsc_reg_type
-from ...lsc_model.addressing import sym
+from ...lsc_model.addressing import offpoly
 from ...specializers.signature import _sigs, _masked, _accepts
 from .base import lsc_irmod, irmod_placement, irmod_param, blocks_and_sections
+from ...offset_polynomial import offset_polynomial as offpoly
 
 
 class ldinc(lsc_irmod):
@@ -115,7 +116,7 @@ class ldinc(lsc_irmod):
         writes the register too, so the scheduler keeps the register's other
         accesses in order around it
         """
-        op.increment = increment if isinstance(increment, sym) else sym.const(increment)
+        op.increment = increment if isinstance(increment, offpoly) else offpoly.const(increment)
         op.mods.add(ldst_modifier.postinc)
         if 0 not in op.writes:
             op.writes = sorted(op.writes + [0])

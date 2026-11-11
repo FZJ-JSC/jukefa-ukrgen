@@ -16,84 +16,13 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 from ..components.tile import dimension_properties as dimp, dimension_type as dimt
-
-
-@dataclass(frozen=True)
-class sym:
-    """
-    A polynomial over named factors: VL (vector length in elements of the
-    component's type) and run-time strides. 2*VL + 3*stride(C,n) is
-    {("VL",): 2, ("stride(C,n)",): 3}.
-    """
-    terms : tuple[tuple[tuple[str, ...], int], ...] = ()
-
-    @staticmethod
-    def of(value) -> sym:
-        return value if isinstance(value, sym) else sym.const(value)
-
-    @staticmethod
-    def _make(d: dict) -> sym:
-        return sym(tuple(sorted((k, v) for k, v in d.items() if v)))
-
-    @staticmethod
-    def const(n: int) -> sym:
-        return sym._make({(): n})
-
-    @staticmethod
-    def factor(name: str, n: int = 1) -> sym:
-        return sym._make({(name,): n})
-
-    @staticmethod
-    def extent(d: dimp) -> sym:
-        """
-        Elements a dimension spans: size vector lengths, or size elements
-        """
-        return sym.factor("VL", d.size) if dimt.vla == d.dt else sym.const(d.size)
-
-    def __add__(self, other) -> sym:
-        d = dict(self.terms)
-        for k, v in sym.of(other).terms:
-            d[k] = d.get(k, 0) + v
-        return sym._make(d)
-
-    __radd__ = __add__
-
-    def __neg__(self) -> sym:
-        return sym._make({k: -v for k, v in self.terms})
-
-    def __sub__(self, other) -> sym:
-        return self + (-sym.of(other))
-
-    def __mul__(self, other) -> sym:
-        d: dict = {}
-        for k1, v1 in self.terms:
-            for k2, v2 in sym.of(other).terms:
-                k = tuple(sorted(k1 + k2))
-                d[k] = d.get(k, 0) + v1 * v2
-        return sym._make(d)
-
-    __rmul__ = __mul__
-
-    def is_zero(self) -> bool:
-        return not self.terms
-
-    def __str__(self) -> str:
-        if not self.terms:
-            return "0"
-        parts = []
-        # the constant last: 2*VL + 3
-        for factors, coeff in sorted(self.terms, key=lambda t: (not t[0], t[0])):
-            if not factors:
-                parts.append(str(coeff))
-            else:
-                parts.append("*".join(([str(coeff)] if 1 != coeff else []) + list(factors)))
-        return " + ".join(parts).replace("+ -", "- ")
+from ..offset_polynomial import offset_polynomial as offpoly
 
 
 def layout_strides(component: str,
                    kinds: dict[str, str],
                    packing: list[str],
-                   extents: dict[str, sym]) -> dict[str, sym]:
+                   extents: dict[str, offpoly]) -> dict[str, offpoly]:
     """
     Stride of each index of a memory component, in elements
 
@@ -105,14 +34,14 @@ def layout_strides(component: str,
     :return: index -> stride. Contiguous is 1, packed the product of the
              extents inside it, strided a run-time factor stride(component,index)
     """
-    strides: dict[str, sym] = {}
-    inner = sym.const(1)
+    strides: dict[str, offpoly] = {}
+    inner = offpoly.const(1)
     for idx in packing:
         strides[idx] = inner
         inner = inner * extents[idx]
     for idx, kind in kinds.items():
         if "s" == kind:
-            strides[idx] = sym.factor(f"stride({component},{idx})")
+            strides[idx] = offpoly.factor(f"stride({component},{idx})")
     return strides
 
 
@@ -122,10 +51,10 @@ class offset_record:
     Where an access goes: element offsets along the component's indices
     """
     component : str
-    elements : tuple[tuple[str, sym], ...]
+    elements : tuple[tuple[str, offpoly], ...]
 
-    def along(self, index: str) -> sym:
-        return dict(self.elements).get(index, sym())
+    def along(self, index: str) -> offpoly:
+        return dict(self.elements).get(index, offpoly())
 
     def __str__(self):
         inner = ",".join(f"{i}:{e}" for i, e in self.elements)
@@ -142,10 +71,10 @@ class offset_db:
         self.records : list[offset_record] = []
         self.ids : dict[offset_record, int] = {}
 
-    def add(self, component: str, elements: dict[str, sym]) -> int:
+    def add(self, component: str, elements: dict[str, offpoly]) -> int:
         rec = offset_record(component=component,
-                            elements=tuple(sorted((i, sym.of(e)) for i, e in elements.items()
-                                                  if not sym.of(e).is_zero())))
+                            elements=tuple(sorted((i, offpoly.of(e)) for i, e in elements.items()
+                                                  if not offpoly.of(e).is_zero())))
         if rec not in self.ids:
             self.ids[rec] = len(self.records)
             self.records.append(rec)
@@ -154,21 +83,21 @@ class offset_db:
     def __getitem__(self, oid: int) -> offset_record:
         return self.records[oid]
 
-    def shifted(self, oid: int, index: str, amount: sym) -> int:
+    def shifted(self, oid: int, index: str, amount: offpoly) -> int:
         """
         The same offset moved along one index - the same access one loop
         iteration later
         """
         rec = self.records[oid]
         elements = dict(rec.elements)
-        elements[index] = elements.get(index, sym()) + amount
+        elements[index] = elements.get(index, offpoly()) + amount
         return self.add(rec.component, elements)
 
-    def elements_offset(self, oid: int, strides: dict[str, sym]) -> sym:
+    def elements_offset(self, oid: int, strides: dict[str, offpoly]) -> offpoly:
         """
         Offset in elements from the component's base, given its strides
         """
-        total = sym()
+        total = offpoly()
         for idx, e in self.records[oid].elements:
             total = total + e * strides[idx]
         return total

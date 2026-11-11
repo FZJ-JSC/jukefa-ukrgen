@@ -6,11 +6,12 @@ from __future__ import annotations
 from asmgen.asmblocks.op import register_type as rgt
 from asmgen.asmblocks.op.opset import opset_modifier
 
-from ...lsc_model.addressing import sym
+from ...lsc_model.addressing import offpoly
 from ...models.load_store_operations import lsc_load, lsc_state, lsc_store
 from ...specializers.signature import _sigs
 from .base import lsc_irmod, irmod_param, irmod_placement, blocks_and_sections
 from .slices import slice_loop, tiles_of
+from ...offset_polynomial import offset_polynomial as offpoly
 
 
 def _masked(gen, op) -> list:
@@ -38,7 +39,7 @@ def _vectors(offset) -> int | None:
     lengths where they're symbolic (SVE, RVV: k*VL), elements where the
     length is a number (AVX-512's 0, 8, 16); None where it's neither
     """
-    terms = dict(offset.terms) if isinstance(offset, sym) else {}
+    terms = dict(offset.terms) if isinstance(offset, offpoly) else {}
     if not terms:
         return 0
     if set(terms) <= {("VL",)}:

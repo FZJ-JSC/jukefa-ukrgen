@@ -27,7 +27,8 @@ from ...flow.stages.loops import loop_stage
 from ...flow.stages.scheduling import schedule_stage
 from ...emitters.signature import AUTO_OFFSET_REGISTERS
 from ...flow.stages.emit import emit_stage
-from ...lsc_model.addressing import sym
+from ...lsc_model.addressing import offpoly
+from ...offset_polynomial import offset_polynomial as offpoly
 
 #: the flow as the command line runs it
 PIPELINE = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage,
@@ -569,18 +570,18 @@ class kernel:
     unroll: int | None = None
 
 
-def part_extent(ctx, part: int, idx: str) -> sym:
+def part_extent(ctx, part: int, idx: str) -> offpoly:
     """
     A part's extent along an index: its register tile's extent times its count
     """
     dims = (ctx.part_dims or [ctx.dims] * len(ctx.stos))[part]
     for tiling in ctx.stos[part].values():
         if idx in tiling.extents:
-            return sym.extent(tiling.extents[idx]) * dims[idx]
+            return offpoly.extent(tiling.extents[idx]) * dims[idx]
     raise KeyError(idx)
 
 
-def extent_of(ctx, idx: str) -> sym:
+def extent_of(ctx, idx: str) -> offpoly:
     """
     The microtile's extent along an index - as the model computes it: along a
     split index the parts' extents summed

@@ -6,7 +6,7 @@
 
 from dataclasses import dataclass
 import string
-from typing import TYPE_CHECKING, Callable
+from typing import Callable
 from enum import Enum,auto
 from ..components.tile import tile,scalar_tile
 from ..components.operation import dimension_type
@@ -14,9 +14,7 @@ from ..components.operation import dimension_type
 from .lsc.offset import lsc_offset
 from .lsc.index import lsc_reg_index 
 from .lsc.reg import lsc_reg_type
-
-if TYPE_CHECKING:      # the type only: sym lives above the model, in the IR's own module
-    from ..lsc_model.addressing import sym
+from ..offset_polynomial import offset_polynomial as offpoly
 
 
 # TODO: fractional offsets
@@ -376,7 +374,7 @@ class lsc_value_op(lsc_operation):
     the unroll, nothing for a loop stepping one element), a value's copy
     ("copy"). The setup in the IR (docs/ADDRESSING_PLAN.md: setup in the IR),
     the emitter allocating and spelling it. (lsc_add_val_off's successor: an
-    lsc_offset added to a value, unused since offsets moved to sym)
+    lsc_offset added to a value, unused since offsets moved to offpoly)
     """
     def __init__(self, kind: str, writes: list[str], reads: list[str], **params):
         names = list(reads) + list(writes)
@@ -421,11 +419,11 @@ class set_index(lsc_set_payload):
                       vector's the index is of
     :param stride: the stride along that index, as the IR holds it
                    (`ir_program.strides`): a constant, a run-time stride
-                   register, or an expression of them - `sym`, whose sums
+                   register, or an expression of them - `offpoly`, whose sums
                    unequal VLA rows and columns will need
     """
     component : str
-    stride : "sym"
+    stride : offpoly
 
 
 class lsc_set(lsc_operation):

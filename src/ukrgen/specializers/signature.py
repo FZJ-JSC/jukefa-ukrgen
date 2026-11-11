@@ -36,7 +36,7 @@ from asmgen.asmblocks.op import (
 from asmgen.registers import reg_tracker, adt_size
 from asmgen.asmblocks.op.constraint import ConstraintDoesNotApplyError
 
-from ..lsc_model.addressing import sym
+from ..lsc_model.addressing import offpoly
 from ..lsc_model.ir import ir_program, ir_block, BASE_REGISTER, START_BLOCK
 from ..components.tile import scalar_tile
 from ..models.load_store_operations import (
@@ -44,6 +44,7 @@ from ..models.load_store_operations import (
     lsc_value_op)
 from ..models.lsc.index import lsc_reg_index
 from ..models.lsc.reg import lsc_reg_type
+from ..offset_polynomial import offset_polynomial as offpoly
 
 
 class specialization_error(Exception):
@@ -158,7 +159,7 @@ def slice_placements(order: list, plan: dict, walk_of: dict) -> tuple[dict, dict
              it or None, vector lengths an immediate or None); end plan key ->
              its register's offset from home after the order
     """
-    current = {key: sym.const(0) for key in plan}
+    current = {key: offpoly.const(0) for key in plan}
     placed = {}
     for b in order:
         w = b.properties.get("walk", 0)
@@ -173,7 +174,7 @@ def slice_placements(order: list, plan: dict, walk_of: dict) -> tuple[dict, dict
             # the register moved by the rest alone (another column), the vector
             # lengths an immediate
             others = {f: c for f, c in rest.items() if ("VL",) != f}
-            move = sym._make(others) if others else None
+            move = offpoly._make(others) if others else None
             if move is not None:
                 current[key] = current[key] + move
             placed[id(b)] = (key, move, vectors)
@@ -230,7 +231,7 @@ def slice_columns(op, plan: dict, loop_gregs) -> tuple:
             folds = vectors and all(any(_vl_form(sig) and _accepts(sig, "voffset", vectors)
                                         for sig in _sigs(b.sigs))
                                     for b in accesses.get(w, []))
-            column = sym._make({f: c for f, c in dict(offset.terms).items()
+            column = offpoly._make({f: c for f, c in dict(offset.terms).items()
                                 if not (folds and ("VL",) == f)})
             column_of[w] = (key, str(column), dict(offset.terms).get(("VL",)) if folds else None)
             columns.setdefault((key, str(column)), (key, column))
@@ -333,7 +334,7 @@ class signature_specializer:
         a stride pointer: along the loop's own index (k:s), or where the
         component has none (--COMP-stride-pointers 0)
         """
-        target = self.positions[(comp, reg)] + sym._make(strided)
+        target = self.positions[(comp, reg)] + offpoly._make(strided)
         def strides_away(r):
             # a stride, or a vector length of one (a strided access's next
             # vector: VL*stride(C,m), the vl_stride setup value) - an add each
@@ -351,7 +352,7 @@ class signature_specializer:
             # (source first, then the register set: dest = src + delta)
             inserted.append(lsc_addr_compute(comp, source, reg, move, tile))
             walked = self.walked_by
-            walked[(comp, reg)] = walked.get((comp, reg), sym.const(0)) + \
+            walked[(comp, reg)] = walked.get((comp, reg), offpoly.const(0)) + \
                 (target - self.positions[(comp, reg)])
             self.walked_by = walked
             self.positions[(comp, reg)] = target
@@ -483,7 +484,7 @@ class signature_specializer:
         self.loop_index = None
         self.ctx = ctx
         self.program = program
-        self.positions: dict[tuple[str, int], sym] = {
+        self.positions: dict[tuple[str, int], offpoly] = {
             (comp, reg): program.offsets.elements_offset(oid, program.strides.get(comp, {}))
             for (comp, reg), oid in program.addr_setup.items()}
         self.next_reg: dict[str, int] = {}
@@ -529,7 +530,7 @@ class signature_specializer:
         # component contiguous along it (packm's trans X - n:c, m:s) keeps its
         # stride pointers - independent chains, not one serial walk
         along = f"stride({comp},{self.loop_index})" if self.loop_index is not None else None
-        walking = along is not None and any(f and along == f[0] for f, _ in strides.get(self.loop_index, sym.const(0)).terms) \
+        walking = along is not None and any(f and along == f[0] for f, _ in strides.get(self.loop_index, offpoly.const(0)).terms) \
             and strided and all(single(f) for f in strided) and "lane" not in op.properties
         if walking:
             self.walk_to(comp, reg, strided, inserted, scalar_tile)
@@ -571,7 +572,7 @@ class signature_specializer:
                 if not (vl_times_stride or (1 == len(factors) and factors[0].startswith("stride("))) \
                         or count < 0:
                     raise specialization_error(
-                        f"{op.rsln} access to {db[op.offset]} is {sym._make(rel)} elements from "
+                        f"{op.rsln} access to {db[op.offset]} is {offpoly._make(rel)} elements from "
                         f"its address register, which is not specialized yet")
             # lane by lane along a stride: the lane's own stride walks one
             # pointer per base and stride, stepping by the stride and
@@ -651,13 +652,13 @@ class signature_specializer:
                 if key not in self.pointer_regs:
                     self.pointer_regs[key] = self.new_reg(comp)
                 ptr = self.pointer_regs[key]
-                target = self.positions[(comp, reg)] + sym._make(strided)
+                target = self.positions[(comp, reg)] + offpoly._make(strided)
                 if key in self.pointers:
                     move = target - self.positions[(comp, ptr)]
                     if dict(move.terms):
                         inserted.append(lsc_addr_compute(comp, ptr, ptr, move, scalar_tile))
                 else:
-                    inserted.append(lsc_addr_compute(comp, reg, ptr, sym._make(strided), scalar_tile))
+                    inserted.append(lsc_addr_compute(comp, reg, ptr, offpoly._make(strided), scalar_tile))
                     self.pointers.add(key)
                 self.positions[(comp, ptr)] = target
             else:
@@ -665,7 +666,7 @@ class signature_specializer:
                     self.pointer_regs[key] = self.new_reg(comp)
                 ptr = self.pointer_regs[key] if strided else reg
             if strided and key not in self.pointers:
-                delta = sym._make(strided)
+                delta = offpoly._make(strided)
                 inserted.append(lsc_addr_compute(comp, reg, ptr, delta, scalar_tile))
                 self.positions[(comp, ptr)] = self.positions[(comp, reg)] + delta
                 self.pointers.add(key)
@@ -681,11 +682,11 @@ class signature_specializer:
                 # moved since (a walking pointer's next row)
                 if state is None or state[0] != ptr or lane_count < state[1] \
                         or state[2] != self.positions[(comp, ptr)]:
-                    step = sym.factor(lane_factor, lane_count)
+                    step = offpoly.factor(lane_factor, lane_count)
                     inserted.append(lsc_addr_compute(comp, ptr, walker, step, scalar_tile))
                     self.positions[(comp, walker)] = self.positions[(comp, ptr)] + step
                 elif lane_count > state[1]:
-                    step = sym.factor(lane_factor, lane_count - state[1])
+                    step = offpoly.factor(lane_factor, lane_count - state[1])
                     inserted.append(lsc_addr_compute(comp, walker, walker, step, scalar_tile))
                     self.positions[(comp, walker)] = self.positions[(comp, walker)] + step
                 self.walking[wkey] = (ptr, lane_count, self.positions[(comp, ptr)])
@@ -711,7 +712,7 @@ class signature_specializer:
             if comp not in self.scratch:
                 self.scratch[comp] = self.new_reg(comp)
             scratch = self.scratch[comp]
-            target = self.positions[(comp, reg)] + sym.const(const) + sym.factor("VL", vl)
+            target = self.positions[(comp, reg)] + offpoly.const(const) + offpoly.factor("VL", vl)
             vl_taken = lambda n: any(_vl_form(s) and _accepts(s, "voffset", n) for s in usable)
             # the scratch where this section placed it: what is left, if a
             # signature takes it - vector lengths, or a constant
@@ -726,7 +727,7 @@ class signature_specializer:
                     return inserted + [op]
             # placed at the constant only where a signature takes the vector
             # lengths: the next vectors past it need nothing more
-            delta = sym.const(const) if vl_taken(vl) else sym.const(const) + sym.factor("VL", vl)
+            delta = offpoly.const(const) if vl_taken(vl) else offpoly.const(const) + offpoly.factor("VL", vl)
             here = self.positions[(comp, reg)] + delta
             if (comp, scratch) in self.placed and \
                     not [f for f in dict((here - self.positions[(comp, scratch)]).terms) if f and ("VL",) != f]:
@@ -755,10 +756,10 @@ class signature_specializer:
             # the access's own register walks to it: later accesses resolved
             # from there (offsets until the limit, then a bump, as v1 did); the
             # section moves it back at its end
-            inserted.append(lsc_addr_compute(comp, reg, reg, sym.const(const), scalar_tile))
-            self.positions[(comp, reg)] = self.positions[(comp, reg)] + sym.const(const)
+            inserted.append(lsc_addr_compute(comp, reg, reg, offpoly.const(const), scalar_tile))
+            self.positions[(comp, reg)] = self.positions[(comp, reg)] + offpoly.const(const)
             walked = self.walked_by
-            walked[(comp, reg)] = walked.get((comp, reg), sym.const(0)) + sym.const(const)
+            walked[(comp, reg)] = walked.get((comp, reg), offpoly.const(0)) + offpoly.const(const)
             self.walked_by = walked
             immediate = 0
         op.indices[0] = lsc_reg_index(comp, [reg])
@@ -771,11 +772,11 @@ class signature_specializer:
             # right after its first (ldinc: ldr q0, [x0], #jump) - the rows
             # between by negative immediates, the last at the register, the
             # next column's walk from there (the remainder an offset)
-            step = lsc_addr_compute(comp, reg, reg, sym.const(jump), scalar_tile)
+            step = lsc_addr_compute(comp, reg, reg, offpoly.const(jump), scalar_tile)
             step.properties = {"jump": True}
-            self.positions[(comp, reg)] = self.positions[(comp, reg)] + sym.const(jump)
+            self.positions[(comp, reg)] = self.positions[(comp, reg)] + offpoly.const(jump)
             walked = self.walked_by
-            walked[(comp, reg)] = walked.get((comp, reg), sym.const(0)) + sym.const(jump)
+            walked[(comp, reg)] = walked.get((comp, reg), offpoly.const(0)) + offpoly.const(jump)
             self.walked_by = walked
             return inserted + [op, step]
         return inserted + [op]
@@ -834,13 +835,13 @@ class signature_specializer:
                 # end - a loop's next iteration, its tail, start where it did
                 # (a streamed tile's: ZA's kappa 1 loads X's rows into tiles)
                 walked = self.walked_by
-                walked[(comp, reg)] = walked.get((comp, reg), sym.const(0)) + to_home
+                walked[(comp, reg)] = walked.get((comp, reg), offpoly.const(0)) + to_home
                 self.walked_by = walked
             # every slice walked - a vector length of steps on - then its walk
             # stepped back: home
-            walk = sym._make({tuple(sorted(("VL",) + f)): c for f, c in dict(p["step"].terms).items()})
+            walk = offpoly._make({tuple(sorted(("VL",) + f)): c for f, c in dict(p["step"].terms).items()})
             if dict(walk.terms):
-                back.append(lsc_addr_compute(comp, reg, reg, sym.const(0) - walk, scalar_tile))
+                back.append(lsc_addr_compute(comp, reg, reg, offpoly.const(0) - walk, scalar_tile))
             self.positions[(comp, reg)] = p["home"]
         op.walk_plan = plan
         # its access columns planned here - a register of the loop's own for
@@ -905,7 +906,7 @@ class signature_specializer:
             if w["start"] in stepped:
                 continue
             stepped.add(w["start"])
-            step = sym._make({f: c * scale for f, c in dict(op.walks[i].step.terms).items()})
+            step = offpoly._make({f: c * scale for f, c in dict(op.walks[i].step.terms).items()})
             if any(dict(step.terms).values()):
                 reg = walkers[w["start"]]
                 out.append(lsc_addr_compute(w["comp"], reg, reg, step, scalar_tile))
@@ -941,7 +942,7 @@ class signature_specializer:
                     b.add_property("voffset", vectors)
             out.append(b)
         for (comp, reg), p in plan.items():
-            step = sym._make({f: c * op.subtiling.unroll for f, c in dict(p["step"].terms).items()})
+            step = offpoly._make({f: c * op.subtiling.unroll for f, c in dict(p["step"].terms).items()})
             if not any(dict(step.terms).values()):
                 continue
             moved = [reg] + [r for (key, _), r in columns.items() if key == (comp, reg)]
@@ -974,7 +975,7 @@ class signature_specializer:
         for (comp, reg), p in plan.items():
             # an iteration takes unroll slices: the step on by them all, less
             # where the last access left the register
-            step = sym._make({f: c * op.subtiling.unroll for f, c in dict(p["step"].terms).items()})
+            step = offpoly._make({f: c * op.subtiling.unroll for f, c in dict(p["step"].terms).items()})
             net = step - end[(comp, reg)]
             if any(dict(net.terms).values()):
                 out.append(lsc_addr_compute(comp, reg, reg, net, scalar_tile))
@@ -1061,7 +1062,7 @@ class signature_specializer:
         delta = elements - self.positions[(comp, reg)]
         if loop.subtiling.order < 0:
             terms = dict(loop.walks[0].step.terms)
-            delta = delta + sym._make({tuple(sorted(("VL",) + f)): c for f, c in terms.items()}) \
+            delta = delta + offpoly._make({tuple(sorted(("VL",) + f)): c for f, c in terms.items()}) \
                 - loop.walks[0].step
         return lsc_addr_compute(comp, reg, WALKER, delta, scalar_tile)
 
@@ -1161,7 +1162,7 @@ class signature_specializer:
                     advances.pop(key, None)
             for key in list(walked) + [k for k in advances if k not in walked]:
                 comp, reg = key
-                moved = walked.get(key, sym.const(0))
+                moved = walked.get(key, offpoly.const(0))
                 step = advances.get(key)
                 # strides walked (k:s - a gemmsup's A, B): one move, the advance
                 # less the walk - two would each add the stride's register as
@@ -1177,7 +1178,7 @@ class signature_specializer:
                     self.positions[key] = self.positions[key] - moved
                     continue
                 if any(dict(moved.terms).values()):
-                    ops.append(lsc_addr_compute(comp, reg, reg, sym.const(0) - moved, scalar_tile))
+                    ops.append(lsc_addr_compute(comp, reg, reg, offpoly.const(0) - moved, scalar_tile))
                 if step is not None and any(dict(step.terms).values()):
                     op = lsc_addr_compute(comp, reg, reg, step, scalar_tile)
                     op.properties = dict(op.properties or {}, advance=step)
@@ -1196,7 +1197,7 @@ class signature_specializer:
                 # blocks after) left where it is: its registers dead
                 for (comp, reg), delta in rebased.items():
                     if after is None or comp in after:
-                        ops.append(lsc_addr_compute(comp, reg, reg, sym.const(0) - delta, scalar_tile))
+                        ops.append(lsc_addr_compute(comp, reg, reg, offpoly.const(0) - delta, scalar_tile))
                     self.positions[(comp, reg)] = self.positions[(comp, reg)] - delta
             setattr(block, section, ops)
             # stride pointers are computed per section, in the same registers;

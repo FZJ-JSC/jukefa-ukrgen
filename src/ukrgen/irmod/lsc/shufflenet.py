@@ -10,12 +10,13 @@ from asmgen.asmblocks.op import register_type as rgt, opmem_modifier as memmod
 from asmgen.asmblocks.op.opmove import opmove_modifier as mvmod
 from asmgen.registers import adt_size
 
-from ...lsc_model.addressing import sym
+from ...lsc_model.addressing import offpoly
 from ...models.load_store_operations import lsc_permute, lsc_store
 from ...models.lsc.index import lsc_reg_index
 from ...support.transpose import transpose_network
 from .base import lsc_irmod, irmod_placement, blocks_and_sections
 from .structfuse import runs, _record
+from ...offset_polynomial import offset_polynomial as offpoly
 
 
 def plain_store_sigs(gen, dt) -> list:
@@ -109,7 +110,7 @@ class shufflenet(lsc_irmod):
                         st = copy.deepcopy(rows[0])
                         st.indices = [st.indices[0], ref(regs[net.columns[c]])]
                         elements = dict(base)
-                        elements[vector_index] = sym.of(elements.get(vector_index, sym())) + sym.const(c)
+                        elements[vector_index] = offpoly.of(elements.get(vector_index, offpoly())) + offpoly.const(c)
                         st.offset = program.offsets.add(comp, elements)
                         st.properties.pop("stride_index", None)
                         st.rsln = "shufflenet"

@@ -3,9 +3,10 @@ addrmerge: an address register's moves with nothing between using it, one
 """
 from __future__ import annotations
 
-from ...lsc_model.addressing import sym
+from ...lsc_model.addressing import offpoly
 from ...models.load_store_operations import lsc_addr_compute, lsc_loop
 from .base import lsc_irmod, irmod_placement, blocks_and_sections
+from ...offset_polynomial import offset_polynomial as offpoly
 
 
 def _key(idx) -> tuple:
@@ -17,8 +18,8 @@ def _in_place(op) -> bool:
     return isinstance(op, lsc_addr_compute) and _key(op.indices[0]) == _key(op.indices[1])
 
 
-def _sym(delta) -> sym:
-    return sym.const(delta) if isinstance(delta, int) else delta
+def _sym(delta) -> offpoly:
+    return offpoly.const(delta) if isinstance(delta, int) else delta
 
 
 def _constant(delta) -> bool:

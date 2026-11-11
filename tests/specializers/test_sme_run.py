@@ -12,6 +12,7 @@ import unittest
 
 import tests.specializers.test_signature as t
 from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage
+from ukrgen.offset_polynomial import offset_polynomial as offpoly
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PARAMS = {"sme-F64F64": "on", "mm-tileop": ["fopa(A.VEC:direct, B.VEC:direct, C.TILE){i=m, j=n, k*=1}"],
@@ -525,7 +526,7 @@ class test_slice_pointers(unittest.TestCase):
                  for op in (getattr(b, section) or [])
                  if isinstance(op, lsc_loop) and op.info.get("slice_moves")]
         self.assertTrue(loops, "no loop over slices with its moves in the IR")
-        from ukrgen.lsc_model.addressing import sym
+        from ukrgen.lsc_model.addressing import offpoly
         for loop in loops:
             with self.subTest(loop=render_loop(loop, program.offsets)[0]):
                 moves = [b for b in loop.block if isinstance(b, lsc_addr_compute)]
@@ -537,9 +538,9 @@ class test_slice_pointers(unittest.TestCase):
                 # an iteration nets its step on, whatever way the accesses
                 # moved the register between them
                 for key, p in (loop.walk_plan or {}).items():
-                    step = sym._make({f: c * loop.subtiling.unroll
+                    step = offpoly._make({f: c * loop.subtiling.unroll
                                       for f, c in dict(p["step"].terms).items()})
-                    total = sym.const(0)
+                    total = offpoly.const(0)
                     for b in moves:
                         if (b.indices[0].component, b.indices[0].indices[0]) == key:
                             total = total + b.delta

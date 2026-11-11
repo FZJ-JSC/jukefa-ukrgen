@@ -8,9 +8,10 @@ import unittest
 from asmgen.asmblocks.op import register_type as rgt
 
 from ukrgen.lsc_model import allocation
-from ukrgen.lsc_model.addressing import offset_db, sym
+from ukrgen.lsc_model.addressing import offset_db, offpoly
 from ukrgen.lsc_model.ir import ir_block, ir_program
 from ukrgen.models.load_store_operations import lsc_set, set_index, set_mask
+from ukrgen.offset_polynomial import offset_polynomial as offpoly
 
 
 def program_with(*ops) -> ir_program:
@@ -54,12 +55,12 @@ class test_set(unittest.TestCase):
     def test_an_index_vector_carries_its_stride(self):
         # the emitter reads the stride off the payload: a constant here, a
         # run-time stride register or an expression of them in a real kernel
-        stride = sym.factor("stride(A,k)", 2) + sym.const(8)   # a sum, unequal rows
+        stride = offpoly.factor("stride(A,k)", 2) + offpoly.const(8)   # a sum, unequal rows
         payload = set_index("index(A)", stride)
         op = lsc_set("index(A)", 0, rgt.VEC, payload)
         self.assertEqual("index(A)", payload.component)
         self.assertEqual(stride, payload.stride)
-        self.assertEqual(sym.const(8), payload.stride - sym.factor("stride(A,k)", 2))
+        self.assertEqual(offpoly.const(8), payload.stride - offpoly.factor("stride(A,k)", 2))
         self.assertEqual("index(A)0 <- set(set_index)", str(op))
 
     def test_the_writes_are_names_the_ops_can_read(self):

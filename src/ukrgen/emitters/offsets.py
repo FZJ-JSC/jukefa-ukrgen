@@ -12,10 +12,11 @@ from . import asmops
 from asmgen.asmblocks.op.opset import opset_modifier
 from asmgen.registers import adt_size
 
-from ..lsc_model.addressing import sym
+from ..lsc_model.addressing import offpoly
 
 
 from ..specializers.signature import specialization_error
+from ..offset_polynomial import offset_polynomial as offpoly
 
 
 class offset_planner:
@@ -159,7 +160,7 @@ class offset_planner:
             return [asmops.arith(self.e.gen, op, dst=areg, reg1=areg, reg2=source)]
         return [asmops.shifted(self.e.gen, op, dst=areg, reg1=areg, reg2=source, shift=bit)]
 
-    def add_bytes(self, areg, amount: sym, comp: str) -> list[str]:
+    def add_bytes(self, areg, amount: offpoly, comp: str) -> list[str]:
         """
         Move an address register on by a number of bytes: its steps
         (move_steps), each emitted (emit_step)
@@ -187,7 +188,7 @@ class offset_planner:
             self.e.strides_in[key] = reg
         return self.e.strides_in[key]
 
-    def offset_value(self, amount: sym, comp: str):
+    def offset_value(self, amount: offpoly, comp: str):
         """
         A register holding an offset polynomial in bytes - constants and
         strides: a strided walk's row change, rs - (n - R) cs - computed once
@@ -230,7 +231,7 @@ class offset_planner:
             # of their own (vl_bytes, vl_multiple, vl_stride), incb on SVE
             others = {f: c for f, c in amount.terms if f and not (1 == len(f) and f[0].startswith("stride("))}
             if others:
-                sink += self.add_bytes(reg, sym._make(others), comp)
+                sink += self.add_bytes(reg, offpoly._make(others), comp)
             if seed is not None and const:
                 sink.append(asmops.add_imm(self.e.gen, reg=reg, imm=const))
         return self.e.strides_in[key]

@@ -14,7 +14,8 @@ from dataclasses import dataclass, field
 
 from asmgen.asmblocks.op import register_type as rgt
 
-from .addressing import offset_db, sym
+from .addressing import offset_db, offpoly
+from ..offset_polynomial import offset_polynomial as offpoly
 
 
 @dataclass(frozen=True)
@@ -179,11 +180,11 @@ class ir_block:
     """
     name : str
     loop_index : str | None = None
-    step : sym = field(default_factory=lambda: sym.const(1))
+    step : offpoly = field(default_factory=lambda: offpoly.const(1))
     unroll : int = 1
-    tail_step : sym | None = None
-    subtail_step : sym | None = None
-    requires_multiple : sym | None = None
+    tail_step : offpoly | None = None
+    subtail_step : offpoly | None = None
+    requires_multiple : offpoly | None = None
     advance : dict[str, int] = field(default_factory=dict)
     #: its components' address registers advanced in the IR (not the emitter's)
     advance_in_ir : bool = False
@@ -310,7 +311,7 @@ class ir_program:
     """
     blocks : list[ir_block]
     offsets : offset_db
-    strides : dict[str, dict[str, sym]]
+    strides : dict[str, dict[str, offpoly]]
     addr_setup : dict[tuple[str, int], int]
     registers : dict[str, tuple[rgt, int]]
     cases : list[ir_case] = field(default_factory=list)

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from ...support.dm_solver import resolved_operation_chain
 from ...components.tile import tile, dimension_properties as dimp, dimension_type as dimt
-from ...lsc_model.addressing import sym
+from ...lsc_model.addressing import offpoly
 from ...components.operation import operation
 from ...generators.tiling import generate_tiling, generators
 from ...support.tiles import lane_factors, index_extents, kernel_groups, operand_tiles, lane_axes, register_tiles, ONE
@@ -17,6 +17,7 @@ from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
 from .ukr.ukr import sto_kind, block_description
+from ...offset_polynomial import offset_polynomial as offpoly
 
 
 VLA_ONE = dimp(dt=dimt.vla, size=1)
@@ -305,14 +306,14 @@ class sto_stage(stage):
         # where each part starts along the split index, in elements: a sum of
         # constants and vector lengths (2v rows of outer products, then 2 of
         # fmas)
-        offset = sym.const(0)
+        offset = offpoly.const(0)
         for p, (tilings, dims) in enumerate(zip(parts, part_dims)):
             for t in tilings.values():
                 t.part_offset = {split: offset}
             here = cover(tilings, dims, split)
             if here is None:
                 raise stage_error(f"part {p + 1} computes nothing along {split}")
-            offset = offset + sym.extent(here)
+            offset = offset + offpoly.extent(here)
         indices = sorted({i for tilings in parts for t in tilings.values() for i in t.extents})
         for idx in indices:
             if idx == split:

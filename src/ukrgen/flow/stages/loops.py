@@ -5,6 +5,7 @@ The loops stage: the loops of the specialized IR made
 from ..ukr_context import ukr_context
 from .stage import stage, stage_error
 from ...specializers.signature import specialization_error
+from ...offset_polynomial import offset_polynomial as offpoly
 
 
 #: the walking pointer's address register: no component's own
@@ -56,7 +57,7 @@ def copies(loop, program=None) -> None:
     # address step of the IR, so an access's element is the steps before it
     # whatever the order the scheduler gives the rest
     from ...models.load_store_operations import lsc_addr_compute, lsc_reg_index, scalar_tile
-    from ...lsc_model.addressing import sym
+    from ...lsc_model.addressing import offpoly
     comp = loop.walks[0].anchor.indices[0].component
 
     index = loop.info.get("index")
@@ -68,10 +69,10 @@ def copies(loop, program=None) -> None:
         if program is not None and index is not None:
             # its element's offset - the anchor's, e on along the loop's index
             # (from the last back: VL - 1 - e) - where the walker's steps put it
-            amount = sym._make({("VL",): 1, (): -1 - e}) if backwards else sym.const(e)
+            amount = offpoly._make({("VL",): 1, (): -1 - e}) if backwards else offpoly.const(e)
             new.offset = program.offsets.shifted(access.offset, index, amount)
         # the walk's step - back, for a fill from the last element (SVE's insr)
-        step = loop.walks[0].step if loop.subtiling.order >= 0 else sym.const(0) - loop.walks[0].step
+        step = loop.walks[0].step if loop.subtiling.order >= 0 else offpoly.const(0) - loop.walks[0].step
         bump = lsc_addr_compute(comp, WALKER, WALKER, step, scalar_tile)
         bump.properties["copy"] = e
         bump.properties["role"] = "bump"
