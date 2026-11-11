@@ -9,11 +9,9 @@ import unittest
 from ukrgen.models.load_store_operations import (
         lsc_load,
         lsc_store,
-        lsc_addr_add,
         lsc_transformation
         )
 from ukrgen.models.lsc.reg import lsc_reg_type as lrt, lsc_reg_index as lri
-from ukrgen.models.lsc.offset import lsc_offset as lo
 from ukrgen.schedulers.dependency import dependency_type as dept
 from ukrgen.schedulers.distance import distance_specification as dspec
 
@@ -47,20 +45,6 @@ class test_distance_specification(unittest.TestCase):
         self.assertIsNone(ds.tr1_name)
         self.assertIsNone(ds.tr2_name)
         self.assertEqual(ds.distance, 5)
-
-    def test_from_string_war_addr_ld_add_3(self):
-        dsstr = "war:address::ld:aadd:3"
-
-        ds = dspec.from_string(specstr=dsstr)
-
-        self.assertEqual(ds.dep_type, dept.WAR)
-        self.assertEqual(ds.reg_type,lrt.address)
-        self.assertIsNone(ds.asm_reg_tag)
-        self.assertEqual(ds.op1_type, lsc_load)
-        self.assertEqual(ds.op2_type, lsc_addr_add)
-        self.assertIsNone(ds.tr1_name)
-        self.assertIsNone(ds.tr2_name)
-        self.assertEqual(ds.distance, 3)
 
     def test_from_string_treg_8(self):
         dsstr = "::treg:::8"
@@ -152,7 +136,6 @@ class test_distance_specification(unittest.TestCase):
 
 
         mkr = lambda c,i : lri(c, indices=[i])
-        zo = lo.zero_offset()
 
         
         ds = dspec.from_string(specstr=dsstr)
@@ -160,8 +143,6 @@ class test_distance_specification(unittest.TestCase):
         op1 = lsc_store("C",
                         res_idx=0,
                         addr_idx=0,
-                        off=zo,
-                        stride=None,
                         t=vtile,
                         mods={})
 
@@ -182,7 +163,6 @@ class test_distance_specification(unittest.TestCase):
 
 
         mkr = lambda c,i : lri(c, indices=[i])
-        zo = lo.zero_offset()
 
         
         ds = dspec.from_string(specstr=dsstr)
@@ -197,8 +177,6 @@ class test_distance_specification(unittest.TestCase):
         op2 = lsc_load("C",
                        res_idx=0,
                        addr_idx=0,
-                       off=zo,
-                       stride=None,
                        t=vtile,
                        mods={})
 
@@ -212,7 +190,6 @@ class test_distance_specification(unittest.TestCase):
 
 
         mkr = lambda c,i : lri(c, indices=[i])
-        zo = lo.zero_offset()
 
         
         ds = dspec.from_string(specstr=dsstr)
@@ -227,8 +204,6 @@ class test_distance_specification(unittest.TestCase):
         op2 = lsc_load("C",
                        res_idx=0,
                        addr_idx=0,
-                       off=zo,
-                       stride=None,
                        t=stile,
                        mods={})
 
@@ -237,42 +212,11 @@ class test_distance_specification(unittest.TestCase):
 
         self.assertEqual(distance, 0)
 
-    def test_war_ld_addr_3_ld_add(self):
-        dsstr = "war:address::ld::3"
-
-
-        mkr = lambda c,i : lri(c, indices=[i])
-        zo = lo.zero_offset()
-
-        
-        ds = dspec.from_string(specstr=dsstr)
-
-        op1 = lsc_load("C",
-                       res_idx=0,
-                       addr_idx=0,
-                       off=zo,
-                       stride=None,
-                       t=vtile,
-                       mods={})
-        op2 = lsc_addr_add(component="C",
-                           addr_idx=0,
-                           off=lo(sxv_strides={},
-                                  reg_strides=[],
-                                  vlen_strides=[],
-                                  immoff=4), t=vtile)
-
-
-        distance = ds.apply(op1=op1, op2=op2)
-
-        self.assertEqual(distance, 3)
-
-
     def test_all_3_indep(self):
         dsstr = ":::::3"
 
 
         mkr = lambda c,i : lri(c, indices=[i])
-        zo = lo.zero_offset()
 
         
         ds = dspec.from_string(specstr=dsstr)
@@ -301,7 +245,6 @@ class test_distance_specification(unittest.TestCase):
 
 
         mkr = lambda c,i : lri(c, indices=[i])
-        zo = lo.zero_offset()
 
         
         ds = dspec.from_string(specstr=dsstr)

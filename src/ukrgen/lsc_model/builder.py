@@ -646,7 +646,7 @@ class program_builder:
                     if "bc_load" == tag:
                         mods.add(ldst_modifier.bcast1)
                     cls = lsc_load if "load" == step.op else lsc_store
-                    op = cls(memory, data.index, addr.reg, None, None,
+                    op = cls(memory, data.index, addr.reg,
                              self.reg_tile(tiling, data), mods,
                              data=_index(data, lane), rsln=tag, step=step, sigs=sigs,
                              offset=addr.offset, rtypes=[None, data.rtype])
@@ -747,7 +747,7 @@ class program_builder:
             data, cls = self.ref_reg(step.dest, step.dest_rtype, reg), lsc_load
         else:
             data, cls = self.ref_reg(step.src[0], step.src_rtypes[0], reg), lsc_store
-        access = lambda: cls(memory, data.index, addr.reg, None, None,
+        access = lambda: cls(memory, data.index, addr.reg,
                              self.reg_tile(tiling, data), set(), data=_index(data), rsln=tag,
                              step=step, sigs=sigs, offset=addr.offset, rtypes=[None, data.rtype])
         # the tile's access stands for the loop until the loop stage makes it
@@ -771,7 +771,7 @@ class program_builder:
         vector = self.ref_reg(fill.step.dest, fill.step.dest_rtype, reg)
         load_sigs = load.sg or self.step_sigs(load.step, dt)
         fill_sigs = fill.sg or self.step_sigs(fill.step, dt)
-        block = [lsc_load(memory, scalar.index, addr.reg, None, None,
+        block = [lsc_load(memory, scalar.index, addr.reg, 
                           self.reg_tile(tiling, scalar), set(), data=_index(scalar), rsln=tag,
                           step=load.step, sigs=load_sigs, offset=addr.offset,
                           rtypes=[None, scalar.rtype]),
@@ -781,7 +781,7 @@ class program_builder:
                           rtypes=[scalar.rtype, vector.rtype])]
         up = any((operand_values(s, n).single() or 0) > 0 for s in _flat_sigs(fill_sigs)
                  for n in s.operands if n.endswith("_irot"))
-        anchor = lsc_load(memory, vector.index, addr.reg, None, None,
+        anchor = lsc_load(memory, vector.index, addr.reg, 
                           self.reg_tile(tiling, vector), set(), data=_index(vector), rsln=tag,
                           step=load.step, sigs=load_sigs, offset=addr.offset,
                           rtypes=[None, vector.rtype])
@@ -818,12 +818,12 @@ class program_builder:
                          sigs=shift_sigs, rtypes=[vector.rtype, vector.rtype])
         shift.add_property("irot", -1)
         block = [first,
-                 lsc_store(memory, scalar.index, addr.reg, None, None,
+                 lsc_store(memory, scalar.index, addr.reg, 
                            self.reg_tile(tiling, scalar), set(), data=_index(scalar), rsln=tag,
                            step=store.step, sigs=store_sigs, offset=addr.offset,
                            rtypes=[None, scalar.rtype]),
                  shift]
-        anchor = lsc_store(memory, vector.index, addr.reg, None, None,
+        anchor = lsc_store(memory, vector.index, addr.reg, 
                            self.reg_tile(tiling, vector), set(), data=_index(vector), rsln=tag,
                            step=store.step, sigs=store_sigs, offset=addr.offset,
                            rtypes=[None, vector.rtype])
@@ -853,7 +853,7 @@ class program_builder:
         if self.lane_groups.get(memory) != key:
             data = self.ref_reg(load.step.dest, load.step.dest_rtype, reg)
             addr = self.address(sto, memory, direction, coord, start)
-            ops.append(lsc_load(memory, data.index, addr.reg, None, None,
+            ops.append(lsc_load(memory, data.index, addr.reg, 
                                 self.reg_tile(tiling, data), set(), data=_index(data), rsln=tag,
                                 step=load.step, sigs=load.sg or
                                 self.step_sigs(load.step, dt),
@@ -920,7 +920,7 @@ class program_builder:
                     data, cls = self.ref_reg(step.dest, step.dest_rtype, reg), lsc_load
                 else:
                     data, cls = self.ref_reg(step.src[0], step.src_rtypes[0], reg), lsc_store
-                op = cls(memory, data.index, addr.reg, None, None, self.reg_tile(tiling, data),
+                op = cls(memory, data.index, addr.reg, self.reg_tile(tiling, data),
                          {ldst_modifier.lane}, data=_index(data, idxs[-1]), rsln=tag, step=step,
                          sigs=sigs, offset=addr.offset, rtypes=[None, data.rtype])
                 op.add_property("lane", idxs[-1])

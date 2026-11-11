@@ -11,7 +11,6 @@ from enum import Enum,auto
 from ..components.tile import tile,scalar_tile
 from ..components.operation import dimension_type
 
-from .lsc.offset import lsc_offset
 from .lsc.index import lsc_reg_index 
 from .lsc.reg import lsc_reg_type
 from ..offset_polynomial import offset_polynomial as offpoly
@@ -143,16 +142,14 @@ class lsc_load(lsc_operation):
     Built by the LSC model, a load or store also carries where its
     instruction comes from - the data movement resolution it is a step of,
     that step and the signatures that can execute it - and its address as a
-    record in the model's offset database (off and stride stay unset). The
-    register it moves may belong to another owner than the address: the
+    record in the model's offset database (`offset`, an id of the program's).
+    The register it moves may belong to another owner than the address: the
     scratch register a broadcast is loaded into first.
     """
     def __init__(self,
                  component : str,
                  res_idx : int,
                  addr_idx : int,
-                 off : lsc_offset,
-                 stride : lsc_offset,
                  t : tile,
                  mods : set[ldst_modifier],
                  *,
@@ -167,8 +164,6 @@ class lsc_load(lsc_operation):
         self.sigs = sigs
         self.offset = offset
         self.rtypes = rtypes
-        self.off = off
-        self.stride = stride
         self.mods = mods
 
         tiles = [scalar_tile, t]
@@ -201,7 +196,7 @@ class lsc_load(lsc_operation):
         return self.tiles[1]
 
     def __str__(self):
-        offsetstr = f" + {self.off}"
+        offsetstr = "" if self.offset is None else f" + offset {self.offset}"
         resstr = f"RES:{self.res_idx}"
         opstr = "LOAD"
         if ldst_modifier.bcast1 in self.mods:
@@ -209,7 +204,8 @@ class lsc_load(lsc_operation):
         if ldst_modifier.lane in self.mods:
             resstr += f"[lane:{self.properties['lane']}]"
         if ldst_modifier.postinc in self.mods:
-            offsetstr = f"; ADDR:{self.addr_idx} <- ADDR:{self.addr_idx} + {self.off}"
+            offsetstr = (f"; ADDR:{self.addr_idx} <- ADDR:{self.addr_idx} + offset "
+                         f"{self.offset}")
         return f"{resstr} <- {opstr} ADDR:{self.addr_idx}{offsetstr}"
 
 class lsc_store(lsc_operation):
@@ -219,16 +215,14 @@ class lsc_store(lsc_operation):
     Built by the LSC model, a load or store also carries where its
     instruction comes from - the data movement resolution it is a step of,
     that step and the signatures that can execute it - and its address as a
-    record in the model's offset database (off and stride stay unset). The
-    register it moves may belong to another owner than the address: the
+    record in the model's offset database (`offset`, an id of the program's).
+    The register it moves may belong to another owner than the address: the
     scratch register a broadcast is loaded into first.
     """
     def __init__(self,
                  component : str,
                  res_idx : int,
                  addr_idx : int,
-                 off : lsc_offset,
-                 stride : lsc_offset,
                  t : tile,
                  mods : set[ldst_modifier],
                  *,
@@ -243,8 +237,6 @@ class lsc_store(lsc_operation):
         self.sigs = sigs
         self.offset = offset
         self.rtypes = rtypes
-        self.off = off
-        self.stride = stride
         self.mods = mods
 
         tiles = [scalar_tile, t]
@@ -276,14 +268,15 @@ class lsc_store(lsc_operation):
         return self.tiles[1]
 
     def __str__(self):
-        offsetstr = f" + {self.off}"
+        offsetstr = "" if self.offset is None else f" + offset {self.offset}"
         poststr = ""
         resstr = f"RES:{self.res_idx}"
         if ldst_modifier.lane in self.mods:
             resstr += f"[lane:{self.properties['lane']}]"
         if ldst_modifier.postinc in self.mods:
             offsetstr = ""
-            poststr = f"; ADDR:{self.addr_idx} <- ADDR:{self.addr_idx} + {self.off}"
+            poststr = (f"; ADDR:{self.addr_idx} <- ADDR:{self.addr_idx} + offset "
+                       f"{self.offset}")
         return f"ADDR:{self.addr_idx}{offsetstr} <- STORE {resstr}{poststr}"
 
 class lsc_zero(lsc_operation):
@@ -312,39 +305,6 @@ class lsc_zero(lsc_operation):
 
     def __str__(self):
         return f"RES:{self.res_idx} <- 0"
-
-class lsc_addr_add(lsc_operation):
-    def __init__(self, component : str, addr_idx : int, off : lsc_offset, t : tile):
-        if not isinstance(off, lsc_offset):
-            raise ValueError(f"offset {off} is not an lsc_offset")
-        self.off = off
-
-        # t is used for calculating address, isn't the tile the address resides in
-        tiles = [scalar_tile, t]
-        indices = [lsc_reg_index(component, [addr_idx])]
-        # read addr
-        reads = [0]
-        # write addr
-        writes = [0]
-        
-        reg_types = [lsc_reg_type.address]
-
-
-        super().__init__(tiles=tiles, indices=indices,
-                         reads=reads, writes=writes,
-                         reg_types=reg_types)
-
-    @property
-    def addr_idx(self):
-        return self.indices[0]
-
-    @property
-    def t(self):
-        return self.tiles[1]
-
-    def __str__(self):
-        ar_str = f"ADDR:{self.addr_idx}"
-        return f"{ar_str} <- {ar_str} + {self.off}"
 
 class lsc_addr_compute(lsc_operation):
     """

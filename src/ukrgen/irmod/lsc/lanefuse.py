@@ -81,7 +81,7 @@ class lanefuse(lsc_irmod):
                     first = ops[run[0]]
                     at = min(run.values())
                     replace[at] = lsc_load(
-                        comp, key[1], first.indices[0].indices[0], None, None,
+                        comp, key[1], first.indices[0].indices[0],
                         first.tiles[1], set(), data=lsc_reg_index(key[0], [key[1]]),
                         rsln=first.rsln, step=step, sigs=sigs, offset=first.offset,
                         rtypes=first.rtypes)
