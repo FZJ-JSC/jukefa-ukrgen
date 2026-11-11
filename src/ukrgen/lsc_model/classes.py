@@ -9,7 +9,9 @@ from dataclasses import dataclass
 from asmgen.asmblocks.op import register_type as rgt
 
 #: a register type's tracker tag
-TAGS = {rgt.VEC: "vreg", rgt.FP: "freg", rgt.TILE: "treg"}
+#: a value's register type -> its file's tag (asmgen's): a mask's own, where
+#: an `lsc_set` writes one - RVV's vectors hold it, AVX2's a vector register
+TAGS = {rgt.VEC: "vreg", rgt.FP: "freg", rgt.TILE: "treg", rgt.MASK: "mreg"}
 
 
 @dataclass(frozen=True)

@@ -12,8 +12,9 @@ from ..models.load_store_operations import lsc_load, lsc_loop, lsc_move
 from ..support.data_move import dm_step
 
 SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
-#: the register types holding data: what renaming and allocation move
-DATA = (rgt.VEC, rgt.FP, rgt.TILE)
+#: the register types holding values: what renaming and allocation move - a
+#: set's mask, the machinery's registers in the IR, among them
+DATA = (rgt.VEC, rgt.FP, rgt.TILE, rgt.MASK)
 
 
 def data_key(op, p):

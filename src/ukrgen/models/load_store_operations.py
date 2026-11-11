@@ -6,7 +6,7 @@
 
 from dataclasses import dataclass
 import string
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 from enum import Enum,auto
 from ..components.tile import tile,scalar_tile
 from ..components.operation import dimension_type
@@ -14,6 +14,9 @@ from ..components.operation import dimension_type
 from .lsc.offset import lsc_offset
 from .lsc.index import lsc_reg_index 
 from .lsc.reg import lsc_reg_type
+
+if TYPE_CHECKING:      # the type only: sym lives above the model, in the IR's own module
+    from ..lsc_model.addressing import sym
 
 
 # TODO: fractional offsets
@@ -29,7 +32,7 @@ class lsc_operation:
     sigs = None                 # the signatures a load, store or move may take
     increment = None            # an address register's advance after the access
     mods : tuple = ()           # a load's, store's or transformation's modifiers
-    rtypes = None               # its operands' register types
+    rtypes : list | None = None  # its operands' register types
     walk_plan = None            # how a loop walks its components
 
     def __init__(self,
@@ -388,6 +391,73 @@ class lsc_value_op(lsc_operation):
 
     def __str__(self):
         return f"{', '.join(self.write_names)} <- {self.kind}({', '.join(self.read_names)})"
+
+
+@dataclass(frozen=True)
+class lsc_set_payload:
+    """
+    What a set's register is for: the emitter's to read - it picks the
+    instruction form - the renamer's and the allocation's to ignore, they see
+    the operation's write, the value's name and its register type
+    """
+
+
+@dataclass(frozen=True)
+class set_mask(lsc_set_payload):
+    """
+    A mask: the ISA's set form fills it
+    :param alltrue: every lane set - a masked access needs no compare, an
+                    operation's clobbered mask does
+    """
+    alltrue : bool = True
+
+
+@dataclass(frozen=True)
+class set_index(lsc_set_payload):
+    """
+    A gather's or scatter's index vector: 0, 1, 2... elements along its index,
+    its stride the one the access walks with
+    :param component: the component whose index it is - the access's own, the
+                      vector's the index is of
+    :param stride: the stride along that index, as the IR holds it
+                   (`ir_program.strides`): a constant, a run-time stride
+                   register, or an expression of them - `sym`, whose sums
+                   unequal VLA rows and columns will need
+    """
+    component : str
+    stride : "sym"
+
+
+class lsc_set(lsc_operation):
+    """
+    A register set before the operations that read it: a mask, an index
+    vector, a frame - the machinery's registers as values, so that liveness,
+    renaming and the allocation see them where they were the emitter's own
+    bookkeeping, and the value flows from here to every operation that reads
+    it
+    :param component: what the register holds, as the model names it - a
+                      "mask", an "index(A)": no memory component's name, whose
+                      data type the value would take for its own
+    :param number: the value's number under that component
+    :param rtype: its hardware register type (asmgen's `register_type`): a
+                  mask's MASK, a constant mask in a vector register's VEC
+    :param payload: what is set (`lsc_set_payload`), the emitter's to read
+    """
+    def __init__(self, component : str, number : int, rtype,
+                 payload : lsc_set_payload):
+        if not isinstance(payload, lsc_set_payload):
+            raise ValueError(f"payload {payload} is not an lsc_set_payload")
+        self.payload = payload
+        super().__init__(tiles=[scalar_tile],
+                         indices=[lsc_reg_index(component, [number])],
+                         reads=[], writes=[0],
+                         reg_types=[lsc_reg_type.data])
+        #: what the register is - a mask, an index vector - its type the one
+        #: the emitter's set form needs
+        self.rtypes = [rtype]
+
+    def __str__(self) -> str:
+        return f"{self.indices[0]} <- set({type(self.payload).__name__})"
 
 
 class lsc_debugmsg(lsc_operation):
