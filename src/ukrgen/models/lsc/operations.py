@@ -31,6 +31,10 @@ class lsc_operation:
     increment = None            # an address register's advance after the access
     mods : tuple = ()           # a load's, store's or transformation's modifiers
     rtypes : list | None = None  # its operands' register types
+    #: the signature operand each index slot stands for (a transformation's from
+    #: the builder, a bound operand's appended by `bind_operands`); None where a
+    #: slot's name isn't recorded
+    hw_operands : list | None = None
     walk_plan = None            # how a loop walks its components
 
     def __init__(self,

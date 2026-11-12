@@ -10,6 +10,9 @@ IR modifications on LSC IR programs, one per module:
                             run-time count, tail(<index>)        before specialization
     addrmerge               an address register's moves with
                             nothing between using it, one         after specialization
+    bind_operands           the registers a signature names - a mask,
+                            a clobbered operand - as slots of the
+                            operation                             after specialization
     ldinc                   address computations fused into
                             post-increment accesses               after specialization
     combine_load_transform  notes for an AVX modification: memory operands
@@ -20,6 +23,7 @@ from .base import lsc_irmod, irmod_param, irmod_placement
 from .lanefuse import lanefuse
 from .ldinc import ldinc
 from .addrmerge import addrmerge
+from .bind import bind_operands
 from .widen import widen
 from .structfuse import structfuse
 from .shufflenet import shufflenet
@@ -33,7 +37,9 @@ from .cluster import cluster
 
 IRMODS : list[type[lsc_irmod]] = [widen, structfuse, shufflenet, copyprop_tiles, copyprop, tailmask, vectorize_loops, fuse_slices, forward_slices, hoist_slices,
                                   unroll_loops, expand_slice_copies, hoist, cluster, lanefuse, addrmerge,
-                                  ldinc]
+                                  ldinc,
+                                  # last: the signatures it reads are final
+                                  bind_operands]
 
 
 def irmods_at(placement: irmod_placement) -> list[type[lsc_irmod]]:

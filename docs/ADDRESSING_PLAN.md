@@ -129,7 +129,11 @@ in the IR, in order.
    byte the same: its access columns (0296: which columns, vector lengths as
    immediates, a pointer each within `--loop-gregs`), its walkers for run-time
    counts (0303), its placements (0306: each access's move and immediate, an
-   iteration's step on). The rest - register sets rotated across copies,
+   iteration's step on). The registers a signature names that the model didn't
+   make - a mask, a slice's index, a clobbered operand - come into the IR as
+   slots of the operation (`bind_operands`, after specialization) so that
+   liveness, the renamer and the allocation see them: docs/REGISTER_ALLOCATION.md,
+   *the signatures' operands in the IR*. The rest - register sets rotated across copies,
    temporaries freed after their last read, preloading - goes with the loop
    itself into the IR. `lsc_loop` was an actual loop - its block an IR
    block, loops among its operations - and narrowed into a virtual

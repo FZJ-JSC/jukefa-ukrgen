@@ -222,12 +222,24 @@ The order, each its own commit:
 
 | phase | change | kernels |
 |---|---|---|
-| (a) | `hw_operands` on every op and the binding pass; nothing reads the slots yet | same |
-| (b) | the emitter reads them: `_predicate`, `slice_reg`/`slice_imm`, `clobbered_mask`, `self.masks`, `self.tails` | change where numbering does; re-record, qemu |
+| (a) | `hw_operands` on every op and the binding pass; the slots exist, the accesses' masks first | same |
+| (b) | the emitter reads them: `_predicate`, `slice_reg`/`slice_imm`, `clobbered_mask`, `self.masks`, `self.tails`; the slots become reads, transformations' included | change where numbering does; re-record, qemu |
 | (c) | the mask's state op and `extra_reads_state` go, `_all_true`'s alias with them | same |
 | (d) | `check_state`'s `op.sigs` pruning into `isa_specialize`, then masks can be values anywhere | same |
 
-Phase (a) is what makes the general step 6 tractable: the address registers,
+Phase (a) is done as far as the accesses go: `bind_operands`
+(`irmod/lsc/bind.py`, a required post-specialize pass) gives a masked load,
+store or move a slot for its mask - `rtypes` the operand's, `hw_operands` the
+operand's name (`amreg`), the value named `mask(<index>)` where the operation
+carries its tail's index and `mask` otherwise - and `sig.clobber_list` is
+looked at for the write, though nothing is written yet. Two things it leaves to
+phase (b): the slot is **not** a read, because a read changes what the passes
+after it emit; and a **transformation** is not bound, because its
+`hw_operands` are the builder's own and the emitter zips them whole into its
+operand slots - appending one there asked `reg()` for a mask before the
+emitter could take one ("MASK registers are not specialized yet").
+
+Phase (b) is what makes the general step 6 tractable: the address registers,
 walkers, counters, masks and index vectors it lists become ordinary values in
 the same pass that binds them, and `_register_bounds`, `slice_frame`'s
 hardcoded `[12, 13, 14, 15]` and `_required_priorities` all read the problem's
