@@ -24,6 +24,7 @@ from asmgen.registers import adt_size, asm_data_type as adt
 from ..components.tile import scalar_tile
 from ..emitters import asmops
 from ..models.lsc import decisions
+from ..models.lsc.decision import decision
 from ..models.lsc.addressing import offpoly
 from ..models.lsc.ir import ir_program
 from ..models.lsc.index import lsc_reg_index
@@ -300,20 +301,20 @@ class address_speller:
         esize = self.esize(comp)
         return offpoly._make({f: c // esize for f, c in amount.terms})
 
-    def decision(self, key: tuple) -> str:
+    def decision(self, key: tuple) -> decision:
         """
         The decision an offset's register is, by the offset's polynomial and
         component
         :param key: (the polynomial's text, the component)
-        :return: the name the operations of that path carry
+        :return: the branch its operations carry
         """
-        return f"offset:{key[0]}@{key[1]}"
+        return decision("offset", key)
 
     def both(self, op: lsc_addr_compute) -> list:
         """
         A move spelled both ways where it has two: without the offset's
-        register first, tagged with the decision's absence (`:plain`), with it
-        second and tagged with the decision - exactly one of the two names is
+        register first, tagged with the decision's alternative, with it second
+        and tagged with the decision - exactly one of the two branches is
         taken, so exactly one of the pair survives `decide`
         :param op: the address move
         :return: its operations, both paths'
@@ -323,12 +324,12 @@ class address_speller:
         plain = self.spelled(op, planned=False)
         if key not in self.planned:
             return plain
-        name = self.decision(key)
+        branch = self.decision(key)
         for o in plain:
-            o.decision = f"{name}:plain"
+            o.decision = branch.alternative
         registered = self.spelled(op, planned=True)
         for o in registered:
-            o.decision = name
+            o.decision = branch
         return plain + registered
 
     def spelled(self, op: lsc_addr_compute, planned: bool | None = None) -> list:
@@ -527,8 +528,7 @@ class address_speller:
         """
         candidates = self.ranked(program)
         self.planned = set(candidates)
-        ranks = {key: n for n, key in enumerate(candidates)}
-        program.offset_candidates = {self.decision(key): (ranks[key], key) for key in candidates}
+        program.offset_candidates = {self.decision(key): n for n, key in enumerate(candidates)}
         def rewrite(ops):
             out = []
             for op in ops:

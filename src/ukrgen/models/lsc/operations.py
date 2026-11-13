@@ -12,6 +12,7 @@ from ...components.tile import tile,scalar_tile
 from ...components.operation import dimension_type
 from asmgen.registers import asm_data_type as adt
 
+from .decision import decision
 from .index import lsc_reg_index 
 from .reg import lsc_reg_type
 from .offset_polynomial import offset_polynomial as offpoly
@@ -38,11 +39,11 @@ class lsc_operation:
     #: the index slot a bound mask sits in (`bind_operands`), None where the
     #: operation's signatures name none
     mask_slot : int | None = None
-    #: the decision the operation's presence depends on - an offset register it
-    #: would need, a tail set by the vector length, a loop's columns: None means
-    #: unconditional, emitted always (most operations); `decisions.decide`
-    #: keeps it only where the allocator took the decision
-    decision : str | None = None
+    #: the branch of a question the operation's presence depends on - an offset
+    #: register it would need, a tail set by the vector length, a loop's
+    #: columns: None means unconditional, emitted always (most operations);
+    #: `decisions.decide` keeps it only where the allocator took that branch
+    decision : "decision | None" = None
     walk_plan = None            # how a loop walks its components
 
     def __init__(self,

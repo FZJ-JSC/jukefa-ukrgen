@@ -2,15 +2,17 @@
 The decisions the allocator makes: the operations generated for every path,
 the one it took kept (docs/REGISTER_ALLOCATION.md: decisions)
 
-An operation's `decision` names what its presence depends on - an offset
-register it would need, a tail set by the vector length, a loop's columns. The
-specializer generates both branches and tags the one that costs a register; the
-allocation, which knows the machine, takes or leaves each; `decide` then drops
-what was left, so that codegen sees one path and no pass after this re-chooses.
-It runs before the values the steps add are set up, so a path taken away leaves
-none behind.
+An operation's `decision` is one branch of one question - an offset register it
+would need, a tail set by the vector length, a loop's columns. The specializer
+generates every branch and tags them; the allocation, which knows the machine,
+takes one; `decide` then drops what was left, so that codegen sees one path and
+no pass after this re-chooses. It runs before the values the steps add are set
+up, so a path taken away leaves none behind.
 """
 
+from collections.abc import Iterable
+
+from .decision import decision as branch
 from .ir import SECTIONS, ir_block, ir_program
 from .operations import lsc_loop, lsc_operation
 
@@ -50,16 +52,34 @@ def sections(program : ir_program) -> list[list[lsc_operation]]:
     return out
 
 
-def decide(program : ir_program, taken : set[str] | frozenset[str]) -> int:
+def questions(program : ir_program) -> set[tuple]:
     """
-    Keep the operations whose decision was taken, and the ones without a
-    decision; drop the rest and the values nothing reads afterwards. The
-    offsets' decisions become the plan the emitter reserves registers by
-    :param program: the IR, its operations possibly generated for every path
-    :param taken: the decisions the allocator took
+    The questions a program's operations ask, with or without an answer
+    :param program: the IR
+    :return: (family, subject) of each, the candidates' too
+    """
+    asked = {d.question() for d in (program.offset_candidates or {})}
+    for run in sections(program):
+        for op in run:
+            if op.decision is not None:
+                asked.add(op.decision.question())
+    return asked
+
+
+def decide(program : ir_program, taken : Iterable[branch]) -> int:
+    """
+    Keep the operations whose branch was taken, and the ones without a
+    decision; drop the rest. The offsets' decisions become the plan the
+    emitter reserves registers by
+    :param program: the IR, its operations generated for every branch
+    :param taken: the branches the allocator took - one of each question
     :return: how many operations were dropped
     """
     kept = frozenset(taken)
+    said = {d.question() for d in kept}
+    unanswered = sorted(q for q in questions(program) if q not in said)
+    if unanswered:
+        raise ValueError(f"questions with no branch taken: {unanswered}")
     program.decisions = kept
     dropped = 0
     for run in sections(program):
@@ -74,17 +94,16 @@ def decide(program : ir_program, taken : set[str] | frozenset[str]) -> int:
     return dropped
 
 
-def plan(program : ir_program, taken : set[str] | frozenset[str]) -> dict:
+def plan(program : ir_program, taken : Iterable[branch]) -> dict:
     """
     The offsets' plan the emitter reserves registers by: the candidates whose
-    decision was taken, their rank from the ranking
+    branch was taken, their rank from the ranking
     :param program: the IR, its candidates (the speller's) as it left them
-    :param taken: the decisions taken
+    :param taken: the branches taken
     :return: (the polynomial's text, component) -> rank
     """
     kept = frozenset(taken)
-    return {key: rank for name, (rank, key) in (program.offset_candidates or {}).items()
-            if name in kept}
+    return {d.subject: rank for d, rank in (program.offset_candidates or {}).items() if d in kept}
 
 
 def loops(program : ir_program) -> list[lsc_loop]:
@@ -108,7 +127,7 @@ def loops(program : ir_program) -> list[lsc_loop]:
     return out
 
 
-def pruned(ops : list[lsc_operation], taken : frozenset[str]) -> tuple[list[lsc_operation], int]:
+def pruned(ops : list[lsc_operation], taken : frozenset) -> tuple[list[lsc_operation], int]:
     """
     A run of operations with the untaken decisions dropped
     :param ops: the operations

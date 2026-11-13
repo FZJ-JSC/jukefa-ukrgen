@@ -14,7 +14,8 @@ from dataclasses import dataclass, field
 
 from asmgen.asmblocks.op import register_type as rgt
 
-from .addressing import offset_db, offpoly
+from .addressing import offset_db
+from .decision import decision
 from .offset_polynomial import offset_polynomial as offpoly
 
 
@@ -347,9 +348,9 @@ class ir_program:
     #: others dropped by `decisions.decide`
     decisions : frozenset = frozenset()
     #: the offsets that could take a register, the speller's candidates - the
-    #: decision's name -> (rank, (the polynomial's text, component)); the one
-    #: taken becomes this program's `offset_plan`
-    offset_candidates : dict[str, tuple] = field(default_factory=dict)
+    #: decision that takes it -> its rank (best first); the ones taken become
+    #: this program's `offset_plan`
+    offset_candidates : dict = field(default_factory=dict)
 
     def render(self) -> str:
         db = self.offsets

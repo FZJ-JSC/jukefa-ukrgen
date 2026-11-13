@@ -426,19 +426,17 @@ def _demand(ops : list, live_out : set[register_key], where : str, resources_ : 
 GREG_KINDS = (lsc_reg_type.address, lsc_reg_type.offset, lsc_reg_type.value)
 
 
-def offsets(program : ir_program) -> set[str]:
+def offsets(program : ir_program) -> set:
     """
     Which of an offset's two spellings is taken: the candidates' registers by
     rank, as many as the program's budget allows (`--max-offset-registers`),
-    and the plain spelling of every other candidate and of every offset that
-    is not one
+    and the plain spelling of every candidate the budget does not reach
     :param program: the IR, its candidates as the speller left them
-    :return: the decisions taken, one name of each candidate's pair
+    :return: the branches taken, one of each candidate's two
     """
-    ranked = sorted(program.offset_candidates.items(), key=lambda entry: entry[1][0])
+    ranked = sorted(program.offset_candidates.items(), key=lambda entry: entry[1])
     budget = max(0, program.offset_registers or 0)
-    taken = {name for name, _ in ranked[:budget]}
-    return taken | {f"{name}:plain" for name, _ in ranked[budget:]}
+    return {d for d, _ in ranked[:budget]} | {d.alternative for d, _ in ranked[budget:]}
 
 
 def greg_key(op, p) -> tuple | None:
