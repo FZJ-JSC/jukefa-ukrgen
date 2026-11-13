@@ -16,7 +16,7 @@ Four places decide registers, and they have to agree:
   frees it: `straight()` at a block's start (what no later block reads) and
   after a value's last use; a loop block's sections never (the model's rings);
   an element loop's body by `straight()`'s rule with liveness across its back
-  edge (0325); `slices()` by its own register sets and `dead_after`. Index
+  edge (0325); `slices()` by its own register sets. Index
   vectors (`index_vector`) and helpers' scratch registers take registers from
   the same tracker.
 - **The address registers** (the general file): the model numbers a component's
@@ -28,6 +28,11 @@ Four places decide registers, and they have to agree:
   a block's at its end (`release_aregs`). No liveness and no MRU: a column's
   register is the allocation order's accident, and holding one to a block's
   end cost three packm kernels their build.
+
+A fifth decides *and feeds back*: the emit stage's fewest general registers
+left free (`min_free_gregs`), which the flow's driver re-runs the whole flow
+with, `max-offset-registers auto`'s budget - the second specialisation that
+the decisions below replace.
 
 Every disagreement so far came from two of these: the gathers' index vectors
 the scheduler didn't count (0292), a slice loop's body budgeted 28 vector
@@ -97,7 +102,7 @@ dependencies by the names.
 | model: `fit_registers`, rings, the preload shift's occupancy bounds | an input's registers, a tile's ring slot | the fixed allocation stays the user's; the slots the renamer's, the bounds the analysis' |
 | scheduler: `_register_state`, `_across`, `live_out` | values live while it reorders | gone: the renaming bounds the pressure |
 | emitter: `straight()`'s releases, 0325's loop bodies, `peak_registers` | when a physical register is free; a loop body's peak | gone: the allocation pass |
-| `slices()`: local values, `dead_after`, register sets; `expand_copies`' local values | a slice loop's temporaries | gone: flexible values renamed |
+| `slices()`: local values, register sets; `expand_copies`' local values | a slice loop's temporaries | gone: flexible values renamed |
 | emitter: `aregs` taking a general register when first named, `release_aregs` per block, `release_pointers`, the columns' release after a loop, `index_vector`'s reservation | which general register a pointer, a column, a walker, an index vector has, and when it is free | the analysis pass' live ranges, the allocation pass' choice |
 | `copyprop`'s events | whether a copy's source survives its uses | the analysis pass' |
 
@@ -107,11 +112,11 @@ to break.
 
 ## One allocator, two passes: where it lives
 
-`lsc_model/allocation.py`, one class over the IR - `allocation` - the stage's
+`models/lsc/allocation.py`, one class over the IR - `allocation` - the stage's
 only driver. Two methods, no state carried between them but the problem it
 returns:
 
-`analyse(program) -> allocation_problem` - every virtual register (a data
+`analyse(program, resources) -> allocation_problem` - every virtual register (a data
 value, an address register, a value in a general register), with:
 
 - its **file and class**: the tracker's tag, its units (a group's ways, a
@@ -137,7 +142,7 @@ value, an address register, a value in a general register), with:
 - **demand**: per section the values live at once and the names a file needs,
   and per program the demands that don't fit, with where.
 
-`allocate(problem) -> bindings` - static, in one order: the fixed ones first,
+`allocate(problem, resources) -> bindings` - static, in one order: the fixed ones first,
 then the most constrained (short bounds, ties, groups, slice indices), then the
 rest by least recent use over the file's registers left, the low ones kept for
 the scheduler to load ahead; a group's registers consecutive and aligned; the
@@ -147,7 +152,7 @@ The emitter then looks every number up: `reg()`, `aregs`, and forms the
 instruction from the operation's own component and register type. Which means
 these go, all of them the analysis' now: `take`'s lazy allocation,
 `free`/`release_aregs`/`release_pointers`/the columns' release/`straight()`'s
-per-block releases/`dead_after`, `reserve`/`unreserve`/`bind` (an anonymous
+per-block releases, the releases after a last use, `reserve`/`unreserve`/`bind` (an anonymous
 register is an anonymous live range, a slice loop's set a set of ranges the
 allocation keeps together), `peak_registers`/`bounded`/`room` (the problem's
 demand), `_register_bounds` (the problem's constraints), and the tracker's
@@ -222,7 +227,7 @@ The order, each its own commit:
 
 | phase | change | kernels |
 |---|---|---|
-| (a) | `hw_operands` on every op and the binding pass; the slots exist, the accesses' masks first | same |
+| (a) | `hw_operands` on every op and the binding pass; the slots exist, the accesses' masks first - **done** | same |
 | (c) | **for masks, this comes before (b):** the mask's value gets a set of its own - `lsc_set(set_mask_tail)` / `set_mask_alltrue` in the entry, its register numbered before the accesses are specialised | same, if the register is the one `tail_mask` took |
 | (b) | the emitter reads them: `_predicate`, `slice_reg`/`slice_imm`, `clobbered_mask`, `self.masks`, `self.tails`; the slots become reads, transformations' included | change where numbering does; re-record, qemu |
 | (d) | `check_state`'s `op.sigs` pruning into `isa_specialize`, then masks can be values anywhere | same |
@@ -241,19 +246,83 @@ first), or a vector register where masks are vectors.
 mask from the slot at emission time - `_predicate` through
 `self.reg(op.indices[op.mask_slot], rtype)` with the tail's set registering the
 register it makes - breaks the **slice store**: *"no store of a slice's Y takes
-a plain address at slice immediate 0"*. The speller runs again at emission for
-an access whose form did not fit, and it matches the operation against its
-candidate signatures; the extra mask slot is something it doesn't know to
-ignore. So the value has to exist *before* the access is specialised: an
-`lsc_set` in the IR, its register numbered by the allocation - phase (c) first
-for masks, then (b) may read it. Nothing in this is about the mask's register
-being wrong: the lowest-free `mreg` and the vector-register case both behaved.
+a plain address at slice immediate 0"*. The cause is not the mask: it is the
+**second flow run**. Emission measures the fewest general registers left free
+(`min_free_gregs`, `signature.py:280`), and `families.py:54-61` re-runs the
+whole flow with `max-offset-registers auto` set from it; registering the mask
+value moved that measurement by one, the re-run's offset budget dropped, and
+`isa_specialize` chose other forms for the store. Two different machines, two
+different answers - and nothing about masks was wrong.
 
-Phase (b) is what makes the general step 6 tractable: the address registers,
-walkers, counters, masks and index vectors it lists become ordinary values in
-the same pass that binds them, and `_register_bounds`, `slice_frame`'s
-hardcoded `[12, 13, 14, 15]` and `_required_priorities` all read the problem's
-constraints instead of deriving them per site.
+Once the decisions below are in, phases (c) and (b) are small: one path is
+left when the allocator has decided, so the speller never meets a variant it
+cannot use, and the emitter reads a slot whose register exists.
+
+## Decisions: every path generated, one chosen once
+
+The register budgets are in the wrong places, and the retries paper over it.
+There are three notions of "budget" today:
+
+| budget | where | counts | uses `--max-*regs` |
+|---|---|---|---|
+| the **pool** | the tracker's `max_regs` per file | registers, aliases, reserved ones | no |
+| a **section's names** | the scheduler's `register_budget.registers[tag]`, `bounded`, `rename_temporaries(limit)` - `limit = budget.registers["vreg"] - len(held)` | names a section may hold, reuse plus new | no: the scheduler counts its own |
+| the **cap** | the emitter's `_register_caps` | registers a file may not hand out | it is the cap, applied after everything is decided |
+
+The renamer's and the scheduler's budget is a *renaming policy* - how many names
+a section may hold - and it stays theirs. The pool, the cap and the fewest-free
+measurement are hardware facts, and all three belong to the allocator.
+
+`max-offset-registers auto` is the worst of them because it is not a
+measurement but an **input**: emit, measure `min_free_gregs`, re-run the flow
+with `auto_offset_budget = spare`, specialise again. It is why (b) looked
+broken. It goes, and with it the second run. What replaces it is a decision the
+allocator makes once:
+
+```python
+#: the decision an operation's presence depends on: None - unconditional, the
+#: instruction is emitted always (most operations); else a name `decide`
+#: resolves (`offset:ga`, `tail:m:mask`, `loop:mm:columns`, `cap:vreg`)
+decision : str | None = None
+```
+
+- **Generation**: the specializer stops choosing. Where it picks one branch
+  today, it emits **both**, the register-needing one tagged:
+  `lsc_addr_compute(..., decision="offset:ga")` beside the untagged
+  immediate-form access, `lsc_store(..., decision="tail:m:mask")` beside the
+  vector-length form. Most operations carry no tag and are never pruned.
+- **Deciding**: one pass, `decide(program, taken)`, drops what the allocator
+  did not take and leaves the rest; the program records `decisions`. After it,
+  codegen sees exactly one path - the speller has nothing left to re-fit, the
+  emitter nothing to retry.
+- **Who decides**: `allocate`. A decision is "is there a register for this?", so
+  the same two passes answer it: the analysis counts what the tagged branch
+  costs (the general registers of `greg_key`/`greg_peak`, per section), the
+  allocation tries the decisions in priority order and returns `taken` beside
+  the bindings.
+
+What one tag replaces, all of which grew their own control flow:
+
+| today | becomes |
+|---|---|
+| `max-offset-registers auto` and the flow's second run | `decision="offset:<comp>"`, the allocator's |
+| `--loop-gregs`' hand-counted frame ("at least 2: a counter and a slice index") | `decision="loop:<name>:columns"` |
+| `program.tail_vl` (the tail set by the vector length) against the mask route | `decision="tail:<index>:mask"` |
+| `--max-{g,f,v}regs` reserving a file's tail in the emitter | a pool cap: `pools[tag] = min(pools[tag], cap)` in `resources` |
+
+The cost: the IR doubles at the decision points between specialisation and the
+allocation - few places (offsets per component, tails per index, one column
+decision per loop), and pruning happens as early as the decisions are known,
+inside the allocation stage.
+
+The order:
+
+| step | change | kernels |
+|---|---|---|
+| dt-1 | `op.decision`, `decide(program, taken)`, `program.decisions`; unit test with hand-built ops | same |
+| dt-2 | the offset path emits both branches tagged; `decide` forced by a parameter first - **forcing the branch the emitter used to choose must reproduce the kernels byte for byte** | same, and that is the test |
+| dt-3 | `allocate` returns `taken`; the flow's second run, `min_free_gregs`, `emit_program_measured`'s measurement and `auto_offset_budget` go | change where the budget differs; recorded + qemu |
+| dt-4 | `loop_gregs`, `tail_vl` and the `max-*regs` caps become decisions and a pool cap | change; recorded + qemu |
 
 ## What the loops over slices work around
 
@@ -266,7 +335,7 @@ each:
 | `release_aregs`, `release_pointers`, `room`, `peak_registers`, `bounded` | `emitters/signature.py` | pressure guessed per section | step 4 |
 | `moved_in_ir` (`"slice_moves"`, `"slice_registers"`, `"slice_walks"` in `op.info`) | `signature.py:448` | one loop emitted by two code paths | (b), step 3's sections |
 | `properties["slice_reg"]` / `["slice_imm"]` written by the emitter | `signature.py:571,637` | the emitter's bookkeeping stored in the IR | (a), (b) |
-| `--loop-gregs` ("at least 2: a counter and a slice index") | `flow/stages/emit.py:41` | a hand-counted frame budget | step 4's `demand` |
+| `--loop-gregs` ("at least 2: a counter and a slice index") | `flow/stages/emit.py:41` | a hand-counted frame budget | dt-4's decision, its `demand` |
 | slice immediates in four bits, `immediates_take`, `MERGED_IMMEDIATE` | `irmod/lsc/unroll.py`, `addresses.py` | encoding limits read before `isa_specialize` trims the signatures | (a): read after binding |
 | the mask as state plus `self.tails` | `irmod/lsc/tailmask.py`, `signature.py` | registers with no name of their own | (b), (c) |
 
@@ -277,12 +346,17 @@ each:
    partial writes: lanes, slices), classes and constraints from the
    signatures, fixed versus flexible - one function; the checks above
    answered by it, the kernels byte for byte the same. Done: one liveness
-   (`lsc_model/liveness.py`: the emitter's, the scheduler's, `copyprop`'s,
+   (`models/lsc/liveness.py`: the emitter's, the scheduler's, `copyprop`'s,
    `slices()`' and `expand_copies`' local temporaries - 0333, 0334); a
    value's register class, its units and fit by the tracker's knowledge
-   (`lsc_model/classes.py`, asmgen's tile types and `storage` - 0336, 0338,
+   (`models/lsc/classes.py`, asmgen's tile types and `storage` - 0336, 0338,
    0341); a renamed value's data type its own (`owner`, `value()` - 0335).
-   Open: a vector's bounds still the emitter's (`_register_bounds`).
+   Open: a vector's bounds still the emitter's (`_register_bounds`); the
+   general registers have their vocabulary (`greg_key`, `greg_peak`: the
+   address, offset and value kinds), and their peak names live - which is not
+   the emitter's fewest-free, which is a placement's number, not a liveness'
+   (one kernel in twenty-one agreed; the measurement's conclusion is the
+   decisions above).
 3. **The renamer** after `cluster`: flexible values onto dead registers or
    new ones within their budgets; the scheduler's register model gone.
    Kernels change: instruction counts, runs. Done: a loop body's
@@ -327,6 +401,70 @@ each:
    release go: it looks the number up and forms the instruction from the
    operation's component. Then spilling.
 
-Each step's check: the golden kernels, every shipped configuration's sizes
-(tools/allcfg.py), the qemu-run tests; from step 3 on, instruction counts and
-runs where kernels change.
+7. **The signatures' operands in the IR** - `hw_operands` on every operation,
+   `bind_operands` after specialization binding the accesses' masks, the
+   `mask_slot` an operation remembers, `take`'s mask file (the lowest free
+   `mreg`, or a vector register) - done, inert; the phases (c), (b), (d) above
+   finish it. The mask payloads (`set_mask_alltrue`, `set_mask_tail`,
+   `set_mask_avl`) and `lsc_set` are in, waiting for their first writer.
+8. **Where the LSC pieces live** - `models/lsc/` holds the IR, its passes, the
+   allocator and the operations; `offset_polynomial` (the offset/stride
+   polynomial, imported as `offpoly`) and `operations` beside them; the
+   register tags come from asmgen's `register_type.tag` and the tile counts
+   from the tracker's `max_regs`, so `max_tregs` is no longer asked for. Not a
+   step of the plan, the ground it stands on: done.
+
+Each step's check: the golden kernels, the SME and SMESVE configurations
+(`tools/sme_sweep.py`: 257 kernels, per-family instruction counts), the
+qemu-run tests; from step 3 on, instruction counts and runs where kernels
+change.
+
+## Where the work stands
+
+The state this was written at, so that a fresh reading of the code can check it
+rather than trust it:
+
+- **Done and in**: the analysis and the allocation over the data registers
+  (`analyse`, `allocate`, `validate`, fixed rings, the tracker's files and
+  storage, `resources.reserved` for the mask file); `lsc_set` and its three
+  mask payloads; `bind_operands` and the bound mask slot; the register tags
+  from asmgen; the tile counts from the tracker; the consolidation into
+  `models/lsc/`; `offset_polynomial`; the general registers' vocabulary
+  (`greg_key`, `greg_peak`). Kernels: 21 goldens `same`, the suite green, the
+  SME sweep at 257 kernels / 107,109 instructions.
+- **Inert, waiting**: `mask_slot` and `take`'s mask file (nothing reads a
+  bound slot yet); `greg_key`/`greg_peak` (nothing allocates from them);
+  `set_mask_alltrue`/`set_mask_avl` (nothing writes them); `resources.bounds`
+  (filled by the emitter, not by the analysis).
+
+The queue, in the order the work above argues for:
+
+1. **dt-1, dt-2** - `op.decision` and `decide`, then the offset path generating
+   both branches with the forced-branch test proving the kernels reproduce.
+2. **dt-3** - the allocator returns `taken`; the flow's second run,
+   `min_free_gregs` and `auto_offset_budget` go.
+3. **dt-4** - `loop_gregs`, `tail_vl` and the `max-*regs` caps become decisions
+   and a pool cap.
+4. **(c) then (b)** for masks: the mask's `lsc_set` with a register numbered
+   before specialization, then `_predicate` reading the slot and the slots
+   becoming reads; `self.masks`, `_all_true`'s alias and the mask's state op
+   go with them.
+5. **(d)** - `check_state`'s `op.sigs` pruning into `isa_specialize`.
+6. **Step 6** - address registers, walkers, counters, offset registers and
+   index vectors through the same two passes, with `_register_bounds`,
+   `slice_frame`'s hardcoded `[12, 13, 14, 15]` and `_required_priorities`
+   replaced by the problem's constraints; then the slice loop's control flow
+   into sections, which is what the preload needs.
+7. **Spilling** - last, as the plan has it.
+
+The disciplines that made the kernels trustworthy through all of the above,
+and that every step above still owes:
+
+- the golden kernels must be `same` unless the step intends otherwise, and when
+  they are not: qemu decides (SME at SVL 256 and 512, RISC-V at VLEN 128, 256
+  and 1024), then re-record, then the instruction counts;
+- `tools/sme_sweep.py` after every change - 257 kernels, 107,109 instructions
+  at the state above;
+- an attempt that does not converge is reverted and *the reason written down*
+  (see the (b) note above and `docs/ADDRESSING_PLAN.md`'s *the sections,
+  tried*): the failures have been the most valuable output of this work.
