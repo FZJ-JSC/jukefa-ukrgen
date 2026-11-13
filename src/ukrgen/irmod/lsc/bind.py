@@ -16,6 +16,7 @@ from asmgen.asmblocks.op import operand_role as orl
 
 from ...models.lsc.index import lsc_reg_index
 from ...specializers.signature import _sigs
+from ...models.lsc.allocator_decisions import sections
 from ...models.lsc.operations import lsc_load, lsc_move, lsc_store, lsc_transformation
 from .base import lsc_irmod, irmod_placement, blocks_and_sections
 
@@ -115,11 +116,13 @@ class bind_operands(lsc_irmod):
         :return: how many operations were bound
         """
         bound = 0
-        for block, section in blocks_and_sections(program):
-            for op in getattr(block, section) or []:
+        # every run of operations, a loop's among them: a loop over slices
+        # holds the accesses that carry a tail's mask
+        for run in sections(program):
+            for op in run:
                 if isinstance(op, (lsc_load, lsc_store, lsc_move)):
-                    # the slot is not a read: an operation's reads drive the
-                    # form its signature must take, and the mask is bound by
-                    # the state the tail sets (docs/REGISTER_ALLOCATION.md)
-                    bound += 1 if bind_mask(op) else 0
+                    # a masked access reads the mask the tail's set wrote -
+                    # the slot the emitter resolves at emission
+                    # (docs/REGISTER_ALLOCATION.md: the masks, (b))
+                    bound += 1 if bind_mask(op, live=True) else 0
         return bound

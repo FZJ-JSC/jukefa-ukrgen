@@ -7,7 +7,8 @@ from asmgen.asmblocks.op import register_type as rgt
 from asmgen.asmblocks.op.opset import opset_modifier
 
 from ...models.lsc.addressing import offpoly
-from ...models.lsc.operations import lsc_load, lsc_state, lsc_store
+from ...models.lsc.operations import (lsc_load, lsc_set, lsc_state, lsc_store,
+                                       set_mask_tail)
 from ...specializers.signature import _sigs
 from .base import lsc_irmod, irmod_param, irmod_placement, blocks_and_sections
 from .slices import slice_loop, tiles_of
@@ -208,11 +209,17 @@ class tailmask(lsc_irmod):
             comp = next((c for c, i in program.vector_indices.items() if i == index),
                         next(iter(program.vector_indices)))     # a tile's rows: its component's
             sets.append(lsc_state({f"mask({index})": f"tail({index})"}, self.ctx.component_dts[comp]))
+            # the same mask as a value: its register numbered here, before the
+            # accesses are specialised, and read by their slots
+            # (docs/REGISTER_ALLOCATION.md: the masks, (c))
+            sets.append(lsc_set(f"mask({index})", 0, rgt.MASK,
+                                set_mask_tail(f"tail({index})", self.ctx.component_dts[comp])))
         program.entry = list(program.entry) + sets
         if masked:
             for block, section in blocks_and_sections(program):
                 for op in getattr(block, section) or []:
                     index = op.properties.get("tail")
-                    if index in masked:
-                        op.extra_reads_state.add(f"mask({index})")
+                    # no state read: the binding pass gives each of these a
+                    # slot for the mask's value, and that is the read the
+                    # schedulers order by (docs/REGISTER_ALLOCATION.md: (b))
         return marked

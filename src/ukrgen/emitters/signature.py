@@ -34,9 +34,9 @@ from ..models.lsc.addressing import offpoly
 from ..models.lsc.ir import ir_program, ir_block, BASE_REGISTER, is_start_block
 
 from ..specializers.addresses import address_speller
-from ..models.lsc.operations import (lsc_state, 
+from ..models.lsc.operations import (lsc_state,
     lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop, lsc_permute,
-    lsc_value_op)
+    lsc_value_op, lsc_set, set_mask_tail)
 from ..models.lsc.classes import TAGS
 from ..models.lsc.index import lsc_reg_index
 
@@ -116,6 +116,7 @@ class signature_emitter:
         #: the last vectors' masks and, for the vl route, the full vector
         #: length's registers (tailmask): set up by the setup
         self.tails: dict = {}
+        self.tail_regs: dict = {}
         self.tail_vl: dict = {}
         self.recipes: list[tuple[str, tuple, bool]] = []
         self.regions_started = False
@@ -785,6 +786,7 @@ class signature_emitter:
         form = next(iter(self.gen.set.forms(modifiers={opset_modifier.MASKAVL}, dts={"dreg": dt})), None)
         if form is not None and rgt.VEC == form.operands["dreg"].rtype:
             self.alloc.reserve("vreg", 0)
+            tag, number = "vreg", 0
             mreg = self.gen.vreg(0)
         else:
             # the lowest free mask register: a mask governs accesses, and a
@@ -793,6 +795,7 @@ class signature_emitter:
             used = self.rt.get_used_regs("mreg")
             number = next(i for i in range(self.gen.max_mregs()) if i not in used)
             self.rt.reserve_specific_reg("mreg", number)
+            tag = "mreg"
             mreg = self.gen.mreg(number)
         call = dict(dreg=mreg, dt=dt, modifiers={opset_modifier.MASKAVL}, avlreg=self.params[count])
         taken = self.scratch(form, call) if form is not None else []
@@ -804,7 +807,31 @@ class signature_emitter:
         text = self.gen.set(**call)
         self.unscratch(taken)
         self.tails[index] = mreg
+        self.tail_regs[index] = (tag, number)
         return [l.strip() for l in text.splitlines() if l.strip()]
+
+    def set_op(self, op) -> list[str]:
+        """
+        An lsc_set emitted: its payload says what the register is set to, the
+        instruction form chosen by the ISA's signature for it - the value's
+        register recorded under its name, so that the operations reading it
+        find it (docs/REGISTER_ALLOCATION.md: the masks as values)
+        :param op: the operation, its payload one of `lsc_set_payload`
+        :return: the instructions, in order
+        """
+        payload = op.payload
+        if isinstance(payload, set_mask_tail):
+            index = payload.count[5:-1] if payload.count.startswith("tail(") else None
+            lines = self.tail_mask(index, payload.count, payload.dt) if index is not None \
+                else self.tail_mask("", payload.count, payload.dt)
+            mreg = self.tails.get(index) if index is not None else None
+            if mreg is not None:
+                # the value's name, as the accesses' slots spell it - held for
+                # the kernel, as its register is reserved for it (not a value
+                # the live ranges free)
+                self.masks[op.indices[0].value()] = mreg
+            return lines
+        raise specialization_error(f"{op}: the emitter has no form for {type(payload).__name__}")
 
     def state(self, op) -> list[str]:
         """
@@ -814,6 +841,8 @@ class signature_emitter:
         writing its avl operand's (RVV's vsetvli zero, avl)
         """
         from asmgen.asmblocks.op.opset import opset_modifier as setmod
+        if isinstance(op, lsc_set):
+            return self.set_op(op)
         # the engine's switches (SME's smstart, smstop): the form writing them
         engine = next((f for f in self.gen.set.forms()
                        if setmod.ENGINE in f.modifiers and f.state_writes == op.values), None)
@@ -826,7 +855,9 @@ class signature_emitter:
         lines = []
         for name, value in op.values.items():
             if name.startswith("mask(") and name.endswith(")"):
-                lines += self.tail_mask(name[5:-1], value, op.dt)
+                # the mask is a value of its own now (its lsc_set emits it);
+                # what stays here is the state the accesses' signatures are
+                # pruned by, until that pruning moves (dt-4's (d))
                 continue
             if "vtype" == name:
                 # the element type and grouping, the vector length kept (RVV's
@@ -978,10 +1009,19 @@ class signature_emitter:
         masks = [n for n, o in sig.operands.items() if orl.MASK == o.orole]
         tail = op.properties.get("tail") if op is not None else None
         if tail is not None and tail not in self.tail_vl:
-            if not masks or tail not in self.tails:
+            # a last vector only under its mask: the value the tail's set
+            # wrote
+            slot = op.mask_slot if op is not None else None
+            if not masks:
                 return False                # a last vector only under its mask
+            key = (f"mask({tail})", 0) if slot is None else op.indices[slot].value()
+            # an ISA whose mask is not an operand but its signature's
+            # convention (RVV's v0.t) names the value by the tail's index
+            reg = self.masks.get(key)
+            if reg is None:
+                return False
             for name in masks:
-                kwargs[name] = self.tails[tail]
+                kwargs[name] = reg
             return True
         if not masks:
             return True

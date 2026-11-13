@@ -8,7 +8,7 @@ import unittest
 from ukrgen.components.tile import vla_vector_tile as vtile
 from ukrgen.models.lsc import allocation
 from ukrgen.models.lsc.decision import decision
-from ukrgen.models.lsc.decisions import decide, plan
+from ukrgen.models.lsc.allocator_decisions import decide, plan
 from ukrgen.models.lsc.addressing import offset_db
 from ukrgen.models.lsc.ir import ir_block, ir_program
 from ukrgen.models.lsc.offset_polynomial import offset_polynomial as offpoly

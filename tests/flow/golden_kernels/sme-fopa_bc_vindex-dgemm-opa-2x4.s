@@ -850,11 +850,11 @@ mova z13.d,p0/m,za4v.d[w12,1]
 fmul z24.d,z24.d,z0.d
 mova z14.d,p0/m,za5v.d[w12,1]
 mova z3.d,p0/m,za7v.d[w12,1]
-fmla z4.d,p0/m,z26.d,z1.d
-fmul z25.d,z25.d,z0.d
 mova z15.d,p0/m,za6v.d[w12,1]
-fmul z2.d,z2.d,z0.d
+fmla z4.d,p0/m,z26.d,z1.d
 fmla z5.d,p0/m,z27.d,z1.d
+fmul z25.d,z25.d,z0.d
+fmul z2.d,z2.d,z0.d
 fmla z6.d,p0/m,z28.d,z1.d
 fmla z7.d,p0/m,z29.d,z1.d
 fmla z16.d,p0/m,z30.d,z1.d

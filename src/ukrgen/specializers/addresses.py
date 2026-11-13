@@ -23,7 +23,7 @@ from asmgen.registers import adt_size, asm_data_type as adt
 
 from ..components.tile import scalar_tile
 from ..emitters import asmops
-from ..models.lsc import decisions
+from ..models.lsc import allocator_decisions
 from ..models.lsc.decision import decision
 from ..models.lsc.addressing import offpoly
 from ..models.lsc.ir import ir_program

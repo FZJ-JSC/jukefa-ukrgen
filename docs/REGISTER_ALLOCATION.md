@@ -228,8 +228,8 @@ The order, each its own commit:
 | phase | change | kernels |
 |---|---|---|
 | (a) | `hw_operands` on every op and the binding pass; the slots exist, the accesses' masks first - **done** | same |
-| (c) | **for masks, this comes before (b):** the mask's value gets a set of its own - `lsc_set(set_mask_tail)` / `set_mask_alltrue` in the entry, its register numbered before the accesses are specialised | same, if the register is the one `tail_mask` took |
-| (b) | the emitter reads them: `_predicate`, `slice_reg`/`slice_imm`, `clobbered_mask`, `self.masks`, `self.tails`; the slots become reads, transformations' included | change where numbering does; re-record, qemu |
+| (c) | **for masks, this comes before (b):** the mask's value gets a set of its own - `lsc_set(set_mask_tail)` / `set_mask_alltrue` in the entry, its register numbered before the accesses are specialised - **done** for the tail's masks | same, the register the one `tail_mask` took |
+| (b) | the emitter reads them: `_predicate` reads the slot, the slots are reads - **done** for the tail's masks (three SME kernels reordered, recorded); `slice_reg`/`slice_imm`, `clobbered_mask` and the transformations' slots remain | change where numbering does; re-record, qemu |
 | (d) | `check_state`'s `op.sigs` pruning into `isa_specialize`, then masks can be values anywhere | same |
 
 Phase (a) is done as far as the accesses go: `bind_operands`
@@ -400,6 +400,36 @@ from a `greg_free` that models what a region holds, which is the general
 registers' half of step 6. Until then the decisions are made in one place and
 the flow still runs twice - the *ordering* the second run was added for is gone,
 which is what dt-2 and this step bought.
+
+### The masks as values: what (c) and (b) cost
+
+The tail's mask is a value now: `tailmask` puts an `lsc_set(set_mask_tail)` in
+the program's entry beside the state it still sets, the emitter's `set_op`
+emits it (the `tail_mask` form it always did, its register the one it reserved),
+and each masked access reads it through the slot `bind_operands` gave it -
+`_predicate` resolves `op.indices[op.mask_slot]`.
+
+Three things the attempt settled:
+
+- **A mask is held, not live.** Its register must not be a value the live
+  ranges free: `free()` gave v0 back the moment the entry ended, and RVV's
+  masked load lost its predicate (`no signature of load takes X[] ...`) while
+  SVE's kept p0 only by luck. It lives in the emitter's held set
+  (`self.masks`), beside the reservation - the same lifetime `tail_mask`
+  always gave it, now named.
+- **Some ISAs' masks are not operands.** RVV's `v0.t` is a signature's
+  convention, so there is no slot to bind and `mask_slot` stays None. Those
+  read the value by the name the set wrote (`mask(<index>)`), which is what
+  lets one `_predicate` serve both.
+- **The read is what changes the schedule.** With the mask read as a value the
+  three SME/SVESVE masked-tail kernels reorder (same instruction multiset,
+  same count - verified line by line) and were re-recorded; the masked-tail
+  and ztail tests, which run under qemu, pass.
+
+Still standing: `check_state` needs the mask *as state* to prune the accesses'
+signatures, so the entry carries both until (d) moves that pruning into
+`isa_specialize`; `program.tail_vl`'s alternative and AVX's clobbered gather
+masks are untouched.
 
 ## What the loops over slices work around
 

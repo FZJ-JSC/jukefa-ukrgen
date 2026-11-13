@@ -5,7 +5,7 @@ IR modifications before and after specialization for the ISA
 import logging
 
 from ...models.lsc import allocation
-from ...models.lsc.decisions import decide
+from ...models.lsc.allocator_decisions import decide
 from ...specializers.addresses import address_speller, value_setup, spells, slice_frames
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context

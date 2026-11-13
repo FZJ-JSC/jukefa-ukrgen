@@ -2989,10 +2989,10 @@ mova z14.s,p0/m,za3h.s[w12,2]
 mova z17.s,p0/m,za1h.s[w12,3]
 mova z18.s,p0/m,za2h.s[w12,3]
 mova z19.s,p0/m,za3h.s[w12,3]
-fmla z20.s,p0/m,z30.s,z5.s
-fmul z29.s,z29.s,z4.s
 mova z15.s,p0/m,za0h.s[w12,3]
+fmla z20.s,p0/m,z30.s,z5.s
 fmla z21.s,p0/m,z31.s,z5.s
+fmul z29.s,z29.s,z4.s
 fmul z6.s,z6.s,z4.s
 fmul z7.s,z7.s,z4.s
 fmul z16.s,z16.s,z4.s
@@ -6543,10 +6543,10 @@ fmul z26.s,z26.s,z2.s
 mova z14.s,p0/m,za0h.s[w12,3]
 mova z6.s,p0/m,za2h.s[w12,3]
 mova z7.s,p0/m,za3h.s[w12,3]
-fmla z16.s,p0/m,z28.s,z3.s
-fmul z27.s,z27.s,z2.s
 mova z15.s,p0/m,za1h.s[w12,3]
+fmla z16.s,p0/m,z28.s,z3.s
 fmla z17.s,p0/m,z29.s,z3.s
+fmul z27.s,z27.s,z2.s
 fmul z4.s,z4.s,z2.s
 fmul z5.s,z5.s,z2.s
 fmla z18.s,p0/m,z30.s,z3.s
