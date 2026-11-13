@@ -593,7 +593,9 @@ change.
 The state this was written at, so that a fresh reading of the code can check it
 rather than trust it:
 
-- **Done and in**: the analysis and the allocation over the data registers
+- **Done and in**: the offsets by index and the frame's name, `new_reg`
+  publishing what it mints (step 6a's cheap half); the analysis and the
+  allocation over the data registers
   (`analyse`, `allocate`, `validate`, fixed rings, the tracker's files and
   storage, `resources.reserved` for the mask file); `lsc_set` and its three
   mask payloads; `bind_operands` and the bound mask slot; the register tags
@@ -623,10 +625,13 @@ The order, approved, each item its own commit:
    becoming reads; `self.masks`, `_all_true`'s alias and the mask's state op go
    with them. Independent of the general registers, and it finishes the work
    the whole line of steps started from.
-3. **Step 6a: name the general registers** - first the cheap half: `new_reg`
-   *publishes* what it creates (a name per component and number, and the region
-   it lives in) so the analysis can see the frame without emission changing;
-   then `aregs` becomes slots. 7 `new_reg` sites, 34 `aregs` uses.
+3. **Step 6a: name the general registers** - the cheap half is **done**: the
+   specializer's offsets are named by index (`Coff0`, the polynomial their
+   payload), a slice loop's frame by its loop's number (`slices(0):count`, not
+   `id(op)`), and `new_reg` publishes what it mints
+   (`program.address_registers`: (component, number) -> a stride pointer, a
+   walking pointer, a walker, a walker's start, a scratch address, a column).
+   What is left: `aregs` becoming slots, 34 uses.
 4. **Step 6b: "held" as a range** - the renamer's notion in the problem, which
    `--loop-gregs` currently hand-counts ("at least 2: a counter and a slice
    index"). Without it the analysis frees a pointer the emitter keeps, and the

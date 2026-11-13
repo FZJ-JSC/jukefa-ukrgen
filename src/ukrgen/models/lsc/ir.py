@@ -354,6 +354,11 @@ class ir_program:
     #: value - a component's `off` values, `Coff[0]`, `Coff[1]`; the polynomial
     #: a value's identity needn't carry, its payload has it
     offset_values : dict[tuple[str, str], int] = field(default_factory=dict)
+    #: the general registers the specializer makes - (component, number) ->
+    #: what it holds: a stride pointer, a walking one, a walker, a walker's
+    #: start, a scratch address, a column. The frame the analysis' general
+    #: registers need to see (docs/REGISTER_ALLOCATION.md, step 6a)
+    address_registers : dict[tuple[str, int], str] = field(default_factory=dict)
     offset_candidates : dict = field(default_factory=dict)
 
     def render(self) -> str:

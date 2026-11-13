@@ -655,7 +655,10 @@ def slice_frames(program) -> int:
             out = []
             for op in ops:
                 if isinstance(op, lsc_loop) and "slices" == op.info.get("kind") and not op.info.get("frame"):
-                    names = [f"slices({id(op)}):count", f"slices({id(op)}):index"]
+                    # the frame's name: its loop's number in the program, not
+                    # the object's address - a name the IR can keep between
+                    # runs (the value's identity, its loop the payload)
+                    names = [f"slices({loops}):count", f"slices({loops}):index"]
                     # before the loop's own setup (its columns' registers): the
                     # frame's registers first, the slice index among those the
                     # slice operands allow (SME's w12-w15) taken before any

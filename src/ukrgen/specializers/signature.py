@@ -498,9 +498,19 @@ class signature_specializer:
         self.walking: dict[tuple, int] = {}
         self.scratch: dict[str, int] = {}
 
-    def new_reg(self, comp: str) -> int:
+    def new_reg(self, comp: str, role: str = "address") -> int:
+        """
+        A general register of a component's, numbered here so that the IR names
+        it before the emitter gives it a machine one, and recorded with what it
+        holds - the frame the analysis has to see
+        :param comp: the component whose address register it is
+        :param role: what it holds - a stride pointer, a walker, a scratch
+                     address, a column, a walker's start
+        :return: its number under that component
+        """
         reg = self.next_reg.get(comp, 0)
         self.next_reg[comp] = reg + 1
+        self.program.address_registers[(comp, reg)] = role
         return reg
 
     def adapt_access(self, op) -> list:
@@ -650,7 +660,7 @@ class signature_specializer:
                 # the base where this section hasn't placed it
                 key = (comp, reg, "walk")
                 if key not in self.pointer_regs:
-                    self.pointer_regs[key] = self.new_reg(comp)
+                    self.pointer_regs[key] = self.new_reg(comp, "walking pointer")
                 ptr = self.pointer_regs[key]
                 target = self.positions[(comp, reg)] + offpoly._make(strided)
                 if key in self.pointers:
@@ -663,7 +673,7 @@ class signature_specializer:
                 self.positions[(comp, ptr)] = target
             else:
                 if strided and key not in self.pointer_regs:
-                    self.pointer_regs[key] = self.new_reg(comp)
+                    self.pointer_regs[key] = self.new_reg(comp, "pointer")
                 ptr = self.pointer_regs[key] if strided else reg
             if strided and key not in self.pointers:
                 delta = offpoly._make(strided)
@@ -675,7 +685,7 @@ class signature_specializer:
             if lane_factor is not None:
                 wkey = (comp, base, lane_factor)
                 if wkey not in self.walk_regs:
-                    self.walk_regs[wkey] = self.new_reg(comp)
+                    self.walk_regs[wkey] = self.new_reg(comp, "walker")
                 walker = self.walk_regs[wkey]
                 state = self.walking.get(wkey)
                 # restarted where its base is another register, or the same one
@@ -710,7 +720,7 @@ class signature_specializer:
                 op.indices[0] = lsc_reg_index(comp, [reg])
                 return inserted + [op]
             if comp not in self.scratch:
-                self.scratch[comp] = self.new_reg(comp)
+                self.scratch[comp] = self.new_reg(comp, "scratch address")
             scratch = self.scratch[comp]
             target = self.positions[(comp, reg)] + offpoly.const(const) + offpoly.factor("VL", vl)
             vl_taken = lambda n: any(_vl_form(s) and _accepts(s, "voffset", n) for s in usable)
@@ -887,7 +897,7 @@ class signature_specializer:
         for w in walks:
             if w["start"] in walkers:
                 continue
-            reg = self.new_reg(w["comp"])
+            reg = self.new_reg(w["comp"], "walker start")
             walkers[w["start"]] = reg
             regs.append((w["comp"], reg))
             delta = w["elements"] - self.positions[(w["comp"], w["reg"])]
@@ -929,7 +939,7 @@ class signature_specializer:
         for (key, name), column in pointers.items():
             if column is None or not any(dict(column.terms).values()):
                 continue                # the home column: the register itself
-            reg = self.new_reg(key[0])
+            reg = self.new_reg(key[0], "column")
             columns[(key, name)] = reg
             setups.append(lsc_addr_compute(key[0], key[1], reg, column, scalar_tile))
         out = []
