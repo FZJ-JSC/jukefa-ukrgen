@@ -6,7 +6,7 @@ The operations generated for every path: the allocation takes a decision, and
 import unittest
 
 from ukrgen.components.tile import vla_vector_tile as vtile
-from ukrgen.models.lsc.decisions import decide
+from ukrgen.models.lsc.decisions import decide, plan
 from ukrgen.models.lsc.addressing import offset_db
 from ukrgen.models.lsc.ir import ir_block, ir_program
 from ukrgen.models.lsc.offset_polynomial import offset_polynomial as offpoly
@@ -47,6 +47,16 @@ class test_decide(unittest.TestCase):
         ir = program(kept, dropped)
         self.assertEqual(1, decide(ir, set()))
         self.assertEqual([kept], ir.blocks[0].sections["body"])
+
+    def test_the_offsets_plan_is_the_decisions_taken(self):
+        # the candidates are the speller's: a name, its rank and its key - the
+        # plan the emitter reserves registers by is the ones taken, in rank
+        ir = program(load("offset:2*cs@C"))
+        ir.offset_candidates = {"offset:2*cs@C": (0, ("2*cs", "C")),
+                                "offset:rs@A": (1, ("rs", "A"))}
+        decide(ir, {"offset:2*cs@C"})
+        self.assertEqual({("2*cs", "C"): 0}, plan(ir, ir.decisions))
+        self.assertEqual({}, plan(ir, set()))
 
     def test_the_program_records_what_was_taken(self):
         ir = program(load("offset:ga"))

@@ -4,6 +4,7 @@ IR modifications before and after specialization for the ISA
 
 import logging
 
+from ...models.lsc.decisions import decide
 from ...specializers.addresses import address_speller, value_setup, spells, slice_frames
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
@@ -156,6 +157,10 @@ class post_specialize_irmod_stage(irmod_stage_base):
                     p.offset_registers = self.context.auto_offset_budget or 0
                 speller = address_speller(self.context)
                 speller.spell(p)
+                # the paths' operations: the one the decisions left kept before
+                # anything looks at their neighbours - steps of one path only
+                # merge (docs/REGISTER_ALLOCATION.md: decisions)
+                decide(p, p.decisions)
                 speller.merge(p)        # adjacent steps where shorter (ADDRESSING_PLAN 3.2)
                 if auto:
                     p.offset_registers = -1

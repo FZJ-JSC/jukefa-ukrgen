@@ -320,9 +320,45 @@ The order:
 | step | change | kernels |
 |---|---|---|
 | dt-1 | `op.decision`, `decide(program, taken)`, `program.decisions`; unit test with hand-built ops | same |
-| dt-2 | the offset path emits both branches tagged; `decide` forced by a parameter first - **forcing the branch the emitter used to choose must reproduce the kernels byte for byte** | same, and that is the test |
+| dt-2 | the offset path emits both branches tagged - **done**, the budget's plan taken until the allocator decides; forcing the branch the emitter used to choose reproduces the kernels byte for byte | same, and that is the test |
 | dt-3 | `allocate` returns `taken`; the flow's second run, `min_free_gregs`, `emit_program_measured`'s measurement and `auto_offset_budget` go | change where the budget differs; recorded + qemu |
 | dt-4 | `loop_gregs`, `tail_vl` and the `max-*regs` caps become decisions and a pool cap | change; recorded + qemu |
+
+### dt-2, as it is: the two spellings of one move
+
+The decision's substance is one function, `address_speller.spelled(op, planned)`
+(`specializers/addresses.py`): a move with the offset's register
+(`("offset", component, amount, fallback)`) or without it. So both paths come
+from the *same operation*, in place, with no copy of the IR:
+
+- `ranked(program)` - every offset that could take a register, best first;
+  `plan(program)` - the best of them the budget reaches (the stopgap: what is
+  taken until the allocator says, dt-3);
+- `both(op)` - the plain spelling first, tagged `offset:<poly>@<comp>:plain`,
+  the registered one second, tagged `offset:<poly>@<comp>`; exactly one of the
+  pair is in `program.decisions`, so exactly one survives;
+- `program.offset_candidates` - the names, their ranks and their keys; the ones
+  taken become `program.offset_plan`, which is what the emitter reserves
+  registers by (`decisions.plan`).
+
+Two ordering facts, both found the hard way:
+
+- **Prune before `merge`.** The two paths' moves are adjacent, so
+  `merge_ops` would merge one path's steps into the other's. Blocking merges
+  *across* decisions instead (`a.decision != b.decision`) is not enough: it
+  also blocks the merges a pruned branch would have allowed, and NEON's lane
+  kernels lost their tail loop to it. `decide` therefore runs between `spell`
+  and `merge` (`flow/stages/irmods.py`).
+- **No dead-value pass is needed**, because pruning comes *before*
+  `value_setup`: a path taken away leaves no setup value behind. A
+  `dead_values` pass over the operations' index slots was tried and is wrong -
+  a value op's inputs are not always slots (a `step`'s values, a loop's frame),
+  and it ate live values (the lane kernels' tail remainder).
+
+The acceptance, both byte-exact: with the plan taken, the 21 golden kernels are
+`same`; with the plain path forced (`plan` returning nothing), the output is
+identical to the tree before the decisions for NEON's lane `vm`, RVV's `vn` and
+SME's `opa` kernels - the branch the emitter had is the branch that comes back.
 
 ## What the loops over slices work around
 
@@ -436,6 +472,9 @@ rather than trust it:
   bound slot yet); `greg_key`/`greg_peak` (nothing allocates from them);
   `set_mask_alltrue`/`set_mask_avl` (nothing writes them); `resources.bounds`
   (filled by the emitter, not by the analysis).
+- **Live, decided by the stopgap**: the offsets' decisions (dt-2) - both paths
+  generated, the budget's plan taken in the speller, `decide` pruning between
+  `spell` and `merge`. dt-3 replaces the stopgap with the allocation's answer.
 
 The queue, in the order the work above argues for:
 

@@ -23,6 +23,7 @@ from asmgen.registers import adt_size, asm_data_type as adt
 
 from ..components.tile import scalar_tile
 from ..emitters import asmops
+from ..models.lsc import decisions
 from ..models.lsc.addressing import offpoly
 from ..models.lsc.ir import ir_program
 from ..models.lsc.index import lsc_reg_index
@@ -199,16 +200,20 @@ class address_speller:
             cost += min(term, 3)
         return cost
 
-    def plan(self, program: ir_program) -> dict:
+    def ranked(self, program: ir_program) -> dict:
         """
-        The offsets that get a register of their own (max-offset-registers):
-        every move of strides and vector lengths taking more than one
-        instruction spelled out, its uses weighted - a loop's body tenfold -
-        times the instructions a register saves; the most first. Stride
-        parameters on the stack too: the emitter computes an offset where its
-        inputs are (after the dispatch's loads)
+        The offsets that could take a register of their own, best first: every
+        move of strides and vector lengths taking more than one instruction
+        spelled out, its uses weighted - a loop's body tenfold - times the
+        instructions a register saves. Stride parameters on the stack too: the
+        emitter computes an offset where its inputs are (after the dispatch's
+        loads)
 
-        :return: (polynomial's text, component) -> (polynomial, rank)
+        Every candidate is generated for both paths; which of them a kernel
+        takes is the allocator's decision (docs/REGISTER_ALLOCATION.md)
+
+        :return: (polynomial's text, component) -> (polynomial, score), the
+            best first
         """
         budget = program.offset_registers or 0
         if budget <= 0:
@@ -233,7 +238,21 @@ class address_speller:
             for section in SECTIONS:
                 visit(getattr(block, section) or [], 10 if "body" == section else 1)
         ranked = sorted(found.items(), key=lambda kv: -kv[1][0] * (kv[1][1] - 1))
-        return {key: (amount, uses * (cost - 1)) for key, (uses, cost, amount) in ranked[:budget]}
+        if budget <= 0:
+            return {}
+        return {key: (amount, uses * (cost - 1)) for key, (uses, cost, amount) in ranked}
+
+    def plan(self, program: ir_program) -> dict:
+        """
+        The offsets that get a register of their own (max-offset-registers):
+        the best of the candidates (ranked) the budget reaches
+
+        :return: (polynomial's text, component) -> (polynomial, rank)
+        """
+        budget = program.offset_registers or 0
+        if budget <= 0:
+            return {}
+        return dict(list(self.ranked(program).items())[:budget])
 
     def step_delta(self, step: tuple, comp: str) -> offpoly:
         """
@@ -281,12 +300,49 @@ class address_speller:
         esize = self.esize(comp)
         return offpoly._make({f: c // esize for f, c in amount.terms})
 
-    def spelled(self, op: lsc_addr_compute) -> list:
+    def decision(self, key: tuple) -> str:
+        """
+        The decision an offset's register is, by the offset's polynomial and
+        component
+        :param key: (the polynomial's text, the component)
+        :return: the name the operations of that path carry
+        """
+        return f"offset:{key[0]}@{key[1]}"
+
+    def both(self, op: lsc_addr_compute) -> list:
+        """
+        A move spelled both ways where it has two: without the offset's
+        register first, tagged with the decision's absence (`:plain`), with it
+        second and tagged with the decision - exactly one of the two names is
+        taken, so exactly one of the pair survives `decide`
+        :param op: the address move
+        :return: its operations, both paths'
+        """
+        comp = op.indices[0].component
+        key = (str(self.bytes_of(comp, op.delta)), comp)
+        plain = self.spelled(op, planned=False)
+        if key not in self.planned:
+            return plain
+        name = self.decision(key)
+        for o in plain:
+            o.decision = f"{name}:plain"
+        registered = self.spelled(op, planned=True)
+        for o in registered:
+            o.decision = name
+        return plain + registered
+
+    def spelled(self, op: lsc_addr_compute, planned: bool | None = None) -> list:
         """
         An address move as its steps: from another register one add where it
         can (k vector lengths, one stride - where an add takes three
         registers), else a copy and the move's steps; a loop's advance on the
         last; a move of nothing as it was
+
+        :param op: the move
+        :param planned: whether the move takes an offset's register - the
+            specializer's plan where not given, the allocator's decision where
+            (docs/REGISTER_ALLOCATION.md: decisions) - so the same move can be
+            spelled both ways from one operation
         """
         comp = op.indices[0].component
         src, dst = op.indices[0].indices[0], op.indices[1].indices[0]
@@ -301,7 +357,8 @@ class address_speller:
         elif src != dst and one is not None and 1 == len(one) and one[0].startswith("stride(") \
                 and terms[one] == adt_size(dt) and self.three_operands:
             whole = [(src, ("from_stride", one[0]))]
-        if (str(amount), comp) in self.planned and not whole:
+        registered = (str(amount), comp) in self.planned if planned is None else planned
+        if registered and not whole:
             # one add of the offset's register, its spelling carried for where
             # the register was given up (the emitter's choice, per region)
             fallback = ((("copy",),) if src != dst else ()) + tuple(self.move_steps(amount, comp))
@@ -352,7 +409,13 @@ class address_speller:
         a run of identical adds into shifted ones, immediates into one,
         cancelling pairs gone, a copy and a step on it into one step from the
         source (three operands)
+
+        A decision's operations and the other path's are never merged: they are
+        two answers to one question, only one of which is emitted
         """
+        def apart(a, b) -> bool:
+            """whether two operations are two paths' - never merged"""
+            return a is not None and b is not None and a.decision != b.decision
         out = []
         i = 0
         while i < len(ops):
@@ -367,6 +430,7 @@ class address_speller:
             if "reg" == st[0] and 0 == st[3] and src == dst:
                 j = i + 1
                 while j < len(ops) and _step(ops[j]) == st and _regs(ops[j]) == (comp, dst, dst) \
+                        and not apart(ops[j], ops[j - 1]) \
                         and "advance" not in (ops[j - 1].properties or {}):
                     j += 1
                 merged = self.merged_run([st] * (j - i)) if j - i > 1 else None
@@ -376,7 +440,8 @@ class address_speller:
                     continue
             nxt = ops[i + 1] if i + 1 < len(ops) else None
             ns = _step(nxt) if nxt is not None else None
-            if ns is not None and "advance" not in (op.properties or {}) and _regs(nxt) == (comp, dst, dst):
+            if ns is not None and not apart(op, nxt) and "advance" not in (op.properties or {}) \
+                    and _regs(nxt) == (comp, dst, dst):
                 # immediates into one; cancelling pairs gone
                 if "imm" == st[0] == ns[0] and src == dst and abs(st[1] + ns[1]) <= MERGED_IMMEDIATE:
                     total = st[1] + ns[1]
@@ -460,9 +525,18 @@ class address_speller:
         loops' blocks, its cases' - the offsets planned first (plan), a move
         one covers one step adding it. Done once: a step isn't spelled again
         """
-        chosen = self.plan(program)
-        self.planned = set(chosen)
-        program.offset_plan = {key: rank for key, (_, rank) in chosen.items()}
+        candidates = self.ranked(program)
+        self.planned = set(candidates)
+        ranks = {key: n for n, key in enumerate(candidates)}
+        program.offset_candidates = {self.decision(key): (ranks[key], key) for key in candidates}
+        # until the allocator takes them (docs/REGISTER_ALLOCATION.md: dt-3),
+        # the budget's plan is what is taken
+        chosen = set(self.plan(program))
+        program.decisions = frozenset(self.decision(key) if key in chosen
+                                      else f"{self.decision(key)}:plain" for key in candidates)
+        # what `place()`'s own passes read of it before `decide` runs (the
+        # setup values' order): the same decisions
+        program.offset_plan = decisions.plan(program, program.decisions)
         def rewrite(ops):
             out = []
             for op in ops:
@@ -470,7 +544,7 @@ class address_speller:
                     op.block = rewrite(list(op.block))
                     op.refresh()
                 elif isinstance(op, lsc_addr_compute) and "step" not in (op.properties or {}):
-                    out += self.spelled(op)
+                    out += self.both(op)
                     continue
                 out.append(op)
             return out

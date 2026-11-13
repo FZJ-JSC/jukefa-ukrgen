@@ -346,6 +346,10 @@ class ir_program:
     #: the decisions the allocator took, the operations generated for the
     #: others dropped by `decisions.decide`
     decisions : frozenset = frozenset()
+    #: the offsets that could take a register, the speller's candidates - the
+    #: decision's name -> (rank, (the polynomial's text, component)); the one
+    #: taken becomes this program's `offset_plan`
+    offset_candidates : dict[str, tuple] = field(default_factory=dict)
 
     def render(self) -> str:
         db = self.offsets
