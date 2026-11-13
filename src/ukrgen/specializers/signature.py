@@ -505,7 +505,7 @@ class signature_specializer:
         holds - the frame the analysis has to see
         :param comp: the component whose address register it is
         :param role: what it holds - a stride pointer, a walker, a scratch
-                     address, a column, a walker's start
+                     address, a column's pointer, a walker's start
         :return: its number under that component
         """
         reg = self.next_reg.get(comp, 0)
@@ -939,7 +939,7 @@ class signature_specializer:
         for (key, name), column in pointers.items():
             if column is None or not any(dict(column.terms).values()):
                 continue                # the home column: the register itself
-            reg = self.new_reg(key[0], "column")
+            reg = self.new_reg(key[0], "column pointer")
             columns[(key, name)] = reg
             setups.append(lsc_addr_compute(key[0], key[1], reg, column, scalar_tile))
         out = []

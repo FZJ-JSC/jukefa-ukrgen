@@ -105,6 +105,7 @@ dependencies by the names.
 | `slices()`: local values, register sets; `expand_copies`' local values | a slice loop's temporaries | gone: flexible values renamed |
 | emitter: `aregs` taking a general register when first named, `release_aregs` per block, `release_pointers`, the columns' release after a loop, `index_vector`'s reservation | which general register a pointer, a column, a walker, an index vector has, and when it is free | the analysis pass' live ranges, the allocation pass' choice |
 | `copyprop`'s events | whether a copy's source survives its uses | the analysis pass' |
+| `reads_writes(loop)` as one operation | what a loop body reads before writing - a self-advancing column is *written*, so it never counts as read in | the analysis' **loop fixpoint**: the body's `live_out = live_in`, iterated, its ranges inside the body |
 
 The 33 of SMESVE's 2x4x4 (0329's fallback) is what this removes: the scheduler
 broke its own budget (a soft one) - after renaming there is no budget for it
@@ -336,8 +337,53 @@ The order:
 | dt-1 | `op.decision`, `decide(program, taken)`, `program.decisions`; unit test with hand-built ops | same |
 | dt-2 | the offset path emits both branches tagged - **done**, the budget's plan taken until the allocator decides; forcing the branch the emitter used to choose reproduces the kernels byte for byte | same, and that is the test |
 | dt-3 | `allocate` returns `taken` - **done**, the offsets' decisions are its (`allocation.offsets`); the budget's *source* still the emitter's measurement, so the second run stays until the general registers are the analysis' (below) | same |
-| dt-4 | `loop_gregs`, `tail_vl` and the `max-*regs` caps become decisions and a pool cap | change; recorded + qemu |
-| dt-5 | the offsets named by index (`Coff0`), the polynomial its payload - done; the set that writes them follows with the plan's move into `allocate` | same |
+| dt-4 | `tail_vl` and the `max-*regs` caps become decisions and a pool cap (`loop_gregs` goes with D', since `addr-pattern`/`max-addr-regs` is the knob) | change; recorded + qemu |
+| dt-5 | the offsets named by index (`Coff0`), the polynomial its payload - done | same |
+| A' | the slice frame's two registers named (`new_reg` roles) instead of reserved by the emitter | same |
+| B0 | the analysis' **loop fixpoint**: a loop body's `live_out = live_in`, its ranges inside the body | same (report only) |
+| B1 | **pins**: a stride pointer, the frame, the slice index declared fixed, not derived | same |
+| A | the `form` family: `imm`/`goffset`/bump variants per access, `decision("form", ...)`, `--<COMP>-addr-forms` forcing | forced-today `same`; forced `goffset` measured |
+| C' | the forms' and offsets' choice into `allocate` (with dt-3's `taken`) | recorded + qemu |
+| D' | slice walks generic: `addr_compute` per access per iteration, `addr-pattern`/`max-addr-regs`; `--loop-gregs` and `--COMP-stride-pointers` go; `_slices` folds into the loop emission | counts + qemu |
+
+### Three kinds of choice, and the forms
+
+Not every decision is the same shape, and only the first is a pruning problem:
+
+| kind | example | mechanism |
+|---|---|---|
+| independent | a tail masked or not; a mask's slot | `decide` prunes, one branch per question |
+| competing for a countable resource | which offsets get a register; which accesses take a `goffset` | an allocation: cost, capacity, order - `ranked` is the greedy heuristic |
+| coupled by liveness | a held pointer, a mask read by the scheduler | take-then-place, checked by `validate` instead of the emitter's `evictable` |
+
+**The forms are the second kind's newest member, and they are where the
+offset planner and the specializer meet.** `adapt_access` runs in the `address`
+stage and knows the forms (immediate, `voffset`, `goffset`, `scaleoffset`,
+`ioffset`, or a bump); `plan`/`ranked` runs two stages later and knows the
+budget - and ranks the *moves `adapt_access` inserted*, so neither can run
+before the other. The resolution is the variants pattern: `adapt_access` emits
+every viable form as a branch (its walk moves inside it), tagged
+`decision("form", (access, variant))`, and one pass takes one.
+
+Measured today (`at_register` = the register form taken, nothing to gain):
+
+| kernel | plain (bumped) | `at_register` | `goffset` | `voffset`/`walk` |
+|---|---|---|---|---|
+| RVV `fma_vf` vm 2x14 | 56 | 658 | - | - |
+| SVE `fma_bc_vindex` vn 4x2 | 54 | 140 | **30** | - |
+| SME `dgemm` opa 2x4 | - | 15 | - | 127 |
+
+So SVE already takes the `goffset` form for 30 accesses and leaves 54 *bumped*
+ones that the family would pick up, and SME's carries the `voffset`/walk pair.
+The choice is per component while nothing decides it automatically:
+`--<COMP>-addr-forms`.
+
+**Units.** A form's offset register is scaled by the instruction (`ld1d`
+`LSL #3`, `ld1w` `LSL #2`), so it holds **elements**; a plain add's shift is the
+add's, and `incb` takes an immediate (`incb #3, MUL VL`), not a register. A term
+read by both a form and a shiftless add may therefore need two registers - one
+in elements, one in bytes - and the payload says which it holds; the decision
+prices the pair.
 
 ### dt-2, as it is: the two spellings of one move
 
@@ -430,6 +476,74 @@ The type in an IR value's key is the *value's*, not the instruction's - RVV's
 the `lsc_set` that writes it, and the register object handed to the instruction
 follows the signature's operand type.
 
+### The general registers, analysed - and what "held" turns out to be
+
+`analyse` runs over two files now: the data registers (`liveness.data_key`) and
+the general ones (`greg_key`: the address, offset and value kinds), each with
+its own live ranges and demands. It is a report, not a gate - nothing allocates
+from it yet and nothing in the flow calls it.
+
+Getting the report honest took three corrections, all in the analysis:
+
+- **a block's successors are its own path's.** The cases are exclusive, so what
+  follows a case block is the rest of *that* case, and only the prefix's
+  successors are every case. Unioning all later blocks (cases included) made
+  one kernel's six slice loops look like sixty live registers at once.
+- **`live_out` is what the later blocks read *before* writing**, not every read
+  they contain (`liveness.read_before_written`). A column a case sets up itself
+  is not live into the prefix.
+- **a loop's body is a fixpoint, and its ranges live inside it** (next section).
+
+| kernel (one program) | emission: in use | analysis, before the fixpoint | values |
+|---|---|---|---|
+| SME `dpackm` `pk` ztrans | 22-28 | 6-9 | 57-87 |
+| SME `spackm` `pk` ztail | 19-21 | 7-8 | 57-85 |
+
+The gap is the loop carry: a column is written once before its loop and then
+*stepped* inside it (`addr_compute r, r` - a read **and** a write), so
+`reads_writes(loop)` reports it as written and the analysis lets it die at the
+step, while the emitter keeps it for the loop.
+
+#### A loop is a fixpoint, not an operation
+
+Analysing a loop as one operation is what loses the carries, so the analysis
+takes its body as a sequence of its own: run the backward pass with
+`live_out = live_in`, repeat until stable (two passes for a sequence), and the
+body's live-in is the loop's. Then:
+
+- first touch **read** → live across the whole loop (a carry: a column, a
+  walker, a slice index, a counter, a stride pointer that is updated as well as
+  read - an update reads);
+- first touch **write** → a loop-local value: alive from that write to its last
+  access *inside* the body, and **dead at both ends of the iteration** - before
+  the write, and again from its last use to the loop's end, so the register is
+  free for the rest of the body and the next iteration's other values;
+- neither → the loop doesn't concern it.
+
+Write-before-read is not hypothetical: the `slice_moves` mode writes each
+iteration's address fresh, and a body's `copy` temporaries are the same shape.
+
+What the fixpoint does **not** cover is a value kept in a register as a
+*decision*: a stride pointer the pattern pins, the frame's counter and index.
+Those are **pins** - declared like the model's data rings (`fixed_register`) -
+not a separate notion of "held". With the fixpoint in, the emitter's
+`release_pointers`/`release_aregs` become reads of the problem, and `evictable`
+(the offset register given up under pressure) is the only cost decision left.
+
+#### Three kinds of register per column, and what the numbers were
+
+| register | what it is | count |
+|---|---|---|
+| slice index (`_rowreg`/`_colreg` operands, SME's w12-w15) | the ZA tile slice `za0v.d[w12, 1]` | one per loop after fusion, ISA-restricted to four |
+| column pointer (`new_reg(comp, "column pointer")`) | a **memory** column's address, stepped per iteration | one per access column, less the home ones |
+| the slice's halves | `st1d {za0v.d[w12, 0]}` / `[w12, 1]` - one ZA slice stored 4 rows at a time | 2 per tile position |
+
+For SME `dgemm opa 2x4` that is 8 tile positions (mr 2 x nr 4) x 2 slice halves =
+**16 columns per case**, of which 15 *pointers* are minted (one home column's
+address is the register the loop already walks); the one-panel case has 8
+columns and 7 pointers. Not 78: that was one-per-case summed over six exclusive
+cases, with pointers counted as columns.
+
 ### The offsets by index, not by their polynomial
 
 An offset's value is called `Coff0`, `Coff1` - its component's `off` and the
@@ -504,7 +618,10 @@ each:
 | `release_aregs`, `release_pointers`, `room`, `peak_registers`, `bounded` | `emitters/signature.py` | pressure guessed per section | step 4 |
 | `moved_in_ir` (`"slice_moves"`, `"slice_registers"`, `"slice_walks"` in `op.info`) | `signature.py:448` | one loop emitted by two code paths | (b), step 3's sections |
 | `properties["slice_reg"]` / `["slice_imm"]` written by the emitter | `signature.py:571,637` | the emitter's bookkeeping stored in the IR | (a), (b) |
-| `--loop-gregs` ("at least 2: a counter and a slice index") | `flow/stages/emit.py:41` | a hand-counted frame budget | dt-4's decision, its `demand` |
+| `--loop-gregs` ("at least 2: a counter and a slice index") | `flow/stages/emit.py:41` | bounds the frame's 2 registers and the extra column pointers, and **nothing else**; all-or-nothing (every column a pointer, or every access re-walked) | `addr-pattern` over `--max-addr-regs` (D'), the frame's 2 as named values (A') |
+| `slice_frame` reserving its own two registers (`reserve_specific_reg` from `allowed`, `self.greg()`) | `emitters/signature.py:389` | the last unnamed mint - the frame is a value in the IR, its registers the emitter's | A': `new_reg` roles |
+| GOFFSET only when the access's *whole* delta is one stride of coefficient 1 | `specializers/signature.py:636` | two `st1d` halves of one ZA slice never qualify, so each gets a column: 16 instead of 8, 15 pointers instead of 7 | A: the `form` variants, the choice priced by the allocator |
+| the columns' plan (`slice_columns`/`slice_registers`/`slice_moves`) | `specializers/signature.py:209,925` | a pointer per access column, or every access re-walked | D': per-access `addr_compute` steps + `addr-pattern` |
 | slice immediates in four bits, `immediates_take`, `MERGED_IMMEDIATE` | `irmod/lsc/unroll.py`, `addresses.py` | encoding limits read before `isa_specialize` trims the signatures | (a): read after binding |
 | the mask as state plus `self.tails` | `irmod/lsc/tailmask.py`, `signature.py` | registers with no name of their own | (b), (c) |
 
@@ -549,8 +666,10 @@ each:
 4. **The allocation pass** replacing the emitter's, for the data registers:
    fixed as given, the most constrained first, least recent use; the emitter
    looks registers up. The address registers' the same pass, step 6.
-5. **The slice index register** per virtual tile operation, merged by fusion
-   on the same value range, allocated within w12-w15.
+5. **The slice index register** per virtual tile operation (the `_rowreg`/
+   `_colreg` operands), merged by fusion on the same value range, allocated
+   within w12-w15 - the one register a slice loop's ZA access cannot do
+   without, and the only one the ISA restricts.
 6. **The address registers, walkers, counters, masks, index vectors, offset
    registers - the same two passes.** The analysis': live ranges over the IR -
    a loop's carried pointers through its back edge, a column from its setup to
@@ -591,60 +710,70 @@ change.
 ## Where the work stands
 
 The state this was written at, so that a fresh reading of the code can check it
-rather than trust it:
+rather than trust it.
 
-- **Done and in**: the offsets by index and the frame's name, `new_reg`
-  publishing what it mints (step 6a's cheap half); the analysis and the
-  allocation over the data registers
-  (`analyse`, `allocate`, `validate`, fixed rings, the tracker's files and
-  storage, `resources.reserved` for the mask file); `lsc_set` and its three
-  mask payloads; `bind_operands` and the bound mask slot; the register tags
-  from asmgen; the tile counts from the tracker; the consolidation into
-  `models/lsc/`; `offset_polynomial`; the general registers' vocabulary
-  (`greg_key`, `greg_peak`); the decisions - the dataclass
-  (`models/lsc/decision.py`), `decide`/`plan` (`models/lsc/decisions.py`), both
-  paths for every offset (`ranked`/`both` in the speller) and the allocation
-  answering them (`allocation.offsets`).
-- **Inert, waiting**: `mask_slot` and `take`'s mask file (nothing reads a bound
-  slot yet); `greg_key`/`greg_peak` (nothing allocates from them);
-  `set_mask_alltrue`/`set_mask_avl` (nothing writes them); `resources.bounds`
-  (filled by the emitter, not by the analysis).
-- **Live, with one number still measured**: the offsets' decisions, against a
-  budget the emitter measures for `max-offset-registers auto` - the flow still
-  runs twice for that number, though no longer to re-specialise forms.
+**Done and in**: the analysis and the allocation over the data registers
+(`analyse`, `allocate`, `validate`, fixed rings, the tracker's files and
+storage, `resources.reserved` for the mask file); `lsc_set` and its mask
+payloads; `bind_operands` and the bound mask slot read by `_predicate`; the
+register tags from asmgen (`register_type.tag`) and the tile counts from the
+tracker; the consolidation into `models/lsc/`; `offset_polynomial`; the general
+registers' vocabulary (`greg_key`); the decisions - the dataclass
+(`models/lsc/decision.py`), `decide`/`plan` (`models/lsc/allocator_decisions.py`),
+both paths for every offset (`ranked`/`both` in the speller), the allocation
+answering them (`allocation.offsets`); the offsets named by index (`Coff0`, the
+polynomial their payload); a slice loop's frame named by its loop's number; and
+`new_reg` publishing what it mints
+(`program.address_registers`: (component, number) -> a stride pointer, a walking
+pointer, a walker, a walker's start, a scratch address, a column pointer).
 
-Gate at that state: 21 golden kernels `same`, the suite 513 passed (1 skipped,
+**Report only, not a gate**: the analysis over the general registers - it runs,
+nothing allocates from it, and nothing in the flow calls it.
+
+**Inert, waiting**: `set_mask_alltrue`/`set_mask_avl` (nothing writes them);
+`resources.bounds` (filled by the emitter, not by the analysis).
+
+**Live, with one number still measured**: the offsets' decisions, against a
+budget the emitter measures for `max-offset-registers auto` - the flow still runs
+twice for that number, though no longer to re-specialise forms.
+
+Gate at that state: 21 golden kernels `same`, the suite 515 passed (1 skipped,
 321 subtests), the SME sweep 257 kernels / 107,109 instructions.
 
 The order, approved, each item its own commit:
 
-1. **The decisions' dataclass** - done. The queue's next items carry names of
-   their own only as `decision(family, subject, branch)`.
-2. **The masks, (c) then (b)** - the mask's `lsc_set` with a register numbered
-   before specialisation, then `_predicate` reading the slot and the slots
-   becoming reads; `self.masks`, `_all_true`'s alias and the mask's state op go
-   with them. Independent of the general registers, and it finishes the work
-   the whole line of steps started from.
-3. **Step 6a: name the general registers** - the cheap half is **done**: the
-   specializer's offsets are named by index (`Coff0`, the polynomial their
-   payload), a slice loop's frame by its loop's number (`slices(0):count`, not
-   `id(op)`), and `new_reg` publishes what it mints
-   (`program.address_registers`: (component, number) -> a stride pointer, a
-   walking pointer, a walker, a walker's start, a scratch address, a column).
-   What is left: `aregs` becoming slots, 34 uses.
-4. **Step 6b: "held" as a range** - the renamer's notion in the problem, which
-   `--loop-gregs` currently hand-counts ("at least 2: a counter and a slice
-   index"). Without it the analysis frees a pointer the emitter keeps, and the
-   frame's number stays wrong.
-5. **The offsets' plan into `allocate`**, then `auto`'s re-run,
-   `min_free_gregs`, `emit_program_measured`'s measurement and
-   `auto_offset_budget` go - A/B against today's six `auto` kernels, re-record
-   and qemu where they move.
-6. **dt-4 last** - `--loop-gregs`, `program.tail_vl` and the `--max-*regs` caps
-   as decisions and a pool cap, on top of a greg model that exists by then
-   (writing them earlier means writing the same policy twice).
-7. **(d)**, the slice loop's control flow into sections, spilling - the tail of
-   the plan, unchanged.
+1. **The decisions' dataclass** - done.
+2. **The masks, (c) then (b)** - done for the tail's masks: the mask is an
+   `lsc_set` value in the entry, each masked access reads it through its slot,
+   `_predicate` resolves it. Left: AVX's clobbered gathers, and `check_state`'s
+   mask-as-state until (d).
+3. **Step 6a: name the general registers** - done except `aregs` becoming
+   slots (34 uses), and **A'**: the slice frame's two registers, which the
+   emitter still reserves itself (`slice_frame`), named as `new_reg` roles.
+4. **B0 - the analysis' loop fixpoint**, and **B1 - pins**. A loop body is a
+   sequence of its own whose `live_out` is its `live_in`, iterated: first touch
+   read is a carry (live across the loop), first touch write is a loop-local
+   value alive from that write to its last access inside the body and dead at
+   both ends of the iteration. Pins (a stride pointer, the frame, the slice
+   index) are declared fixed, like the model's rings. With these two, "held" as
+   a separate notion disappears and the emitter's `release_aregs`,
+   `release_pointers` and the columns' release become reads of the problem.
+5. **A - the `form` family**: `adapt_access` emits every viable form
+   (`imm`/`voffset`/`goffset`/`scaleoffset`) as a tagged branch with its own
+   walk moves, `decision("form", (access, variant))`; a per-component
+   `--<COMP>-addr-forms` forces the choice until the allocator makes it.
+6. **C' - the choice into `allocate`**: `taken` for `offset:*` and `form:*`
+   against `greg_free`; then `auto`'s re-run, `min_free_gregs`,
+   `emit_program_measured`'s measurement and `auto_offset_budget` go. A/B on
+   today's six `auto` kernels, re-record and qemu where they move.
+7. **D' - slice walks generic**: each access's address advanced by an
+   `lsc_addr_compute` step inside the loop, the register chosen by
+   `addr-pattern` over `--max-addr-regs`; `--loop-gregs` and
+   `--COMP-stride-pointers` go with the columns' plan, and the emitter's
+   `_slices` folds into the generic loop emission - "the slices going away",
+   which is what the preload needs next.
+8. **dt-4's remainder** (`tail_vl`, the `--max-*regs` caps as a pool cap),
+   **(d)**, spilling - the tail, unchanged.
 
 The disciplines every one of them owes:
 
@@ -654,6 +783,7 @@ The disciplines every one of them owes:
 - `tools/sme_sweep.py` after every change - 257 kernels, 107,109 instructions
   at the state above;
 - an attempt that does not converge is reverted and *the reason written down*:
-  the (b) attempt's second flow run, dt-2's merge-across-paths, the `dead_values`
-  pass that ate live values. The failures have been the most valuable output of
-  this work.
+  the (b) attempt's second flow run, dt-2's merge-across-paths, the
+  `dead_values` pass that ate live values, the `id(op)` in a frame's name, the
+  key of the wrong shape that freed a mask. The failures have been the most
+  valuable output of this work.

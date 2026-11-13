@@ -37,6 +37,17 @@ def problem_and_resources(pools=None):
 
 class test_analysis(unittest.TestCase):
 
+    def test_the_general_registers_are_analysed(self):
+        # a pointer, a walker, a column, a counter: the second file, by the
+        # register keys the data registers have - (component, number, GP)
+        problem, res, _ = problem_and_resources()
+        gregs = [k for k in problem.values if "greg" == k[2].tag]
+        self.assertTrue(gregs)
+        for key in gregs:
+            self.assertEqual(3, len(key))
+        self.assertGreater(problem.pressure("greg"), 0)
+        self.assertEqual(res.pools["greg"], 32)
+
     def test_values(self):
         problem, _, _ = problem_and_resources()
         self.assertTrue(problem.values)

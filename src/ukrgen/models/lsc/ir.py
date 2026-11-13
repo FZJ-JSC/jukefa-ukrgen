@@ -356,8 +356,10 @@ class ir_program:
     offset_values : dict[tuple[str, str], int] = field(default_factory=dict)
     #: the general registers the specializer makes - (component, number) ->
     #: what it holds: a stride pointer, a walking one, a walker, a walker's
-    #: start, a scratch address, a column. The frame the analysis' general
-    #: registers need to see (docs/REGISTER_ALLOCATION.md, step 6a)
+    #: start, a scratch address, a column's pointer - the last a *memory*
+    #: column's address register, not the slice index (SME's w12-w15). The
+    #: frame the analysis' general registers need to see
+    #: (docs/REGISTER_ALLOCATION.md, step 6a)
     address_registers : dict[tuple[str, int], str] = field(default_factory=dict)
     offset_candidates : dict = field(default_factory=dict)
 

@@ -25,7 +25,7 @@ from asmgen.registers import asm_data_type as adt, reg_tracker
 from . import classes, dtypes, liveness
 from .decision import decision
 from .operations import lsc_loop
-from .ir import ir_program
+from .ir import ir_block, ir_program
 from .reg import lsc_reg_type
 
 #: A virtual register's name: its component, its number within it and the kind
@@ -291,18 +291,21 @@ class allocation_problem:
         return "\n".join(lines)
 
 
-def _liveness(ops : list, live_out : set[register_key]) -> tuple[list, set[register_key]]:
+def _liveness(ops : list, live_out : set[register_key],
+              key_of : Callable = liveness.data_key) -> tuple[list, set[register_key]]:
     """
     Backward liveness over a straight sequence of operations
     :param ops: the operations, in the order they run
     :param live_out: what is live after the last of them
+    :param key_of: how a register is named - the data registers' where not
+                   given
     :return: (what is live before each, what is live before the first - the
              values coming from outside)
     """
     before: list = [frozenset() for _ in ops]
     live = set(live_out)
     for pos in reversed(range(len(ops))):
-        reads, writes = liveness.reads_writes(ops[pos])
+        reads, writes = liveness.reads_writes(ops[pos], key_of)
         before[pos] = frozenset(live | reads)
         live = (live - writes) | reads
     return before, live
@@ -310,8 +313,9 @@ def _liveness(ops : list, live_out : set[register_key]) -> tuple[list, set[regis
 
 def _analyse_sequence(ops : list, live_out : set[register_key], where : str,
                       resources_ : resources, problem : allocation_problem,
-                      section_of : Callable[[int], str] | None = None) -> tuple[set[register_key],
-                                                                                set[register_key]]:
+                      section_of : Callable[[int], str] | None = None,
+                      key_of : Callable = liveness.data_key) -> tuple[set[register_key],
+                                                                   set[register_key]]:
     """
     A sequence of operations' virtual registers, their ranges and their demand
     :param ops: the operations, in the order they run
@@ -322,13 +326,15 @@ def _analyse_sequence(ops : list, live_out : set[register_key], where : str,
     :param problem: the problem the values and demands are added to
     :param section_of: position -> the section's name, where the sequence spans
                        sections (a loop's iteration)
+    :param key_of: how a register is named - a slot's, the data registers' or
+                   the general ones' (`greg_key`)
     :return: (what is live before the sequence, what it reads from outside -
              written before read within it)
     """
-    before, live_in = _liveness(ops, live_out)
+    before, live_in = _liveness(ops, live_out, key_of)
     for pos, op in enumerate(ops):
         section = section_of(pos) if section_of else where
-        reads, writes = liveness.reads_writes(op)
+        reads, writes = liveness.reads_writes(op, key_of)
         keeps = liveness.keeps(op)
         for key in reads | writes:
             carried = key in live_in and pos == 0
@@ -445,11 +451,12 @@ def greg_key(op, p) -> tuple | None:
     The general register an operation's slot names
     :param op: the operation
     :param p: the slot
-    :return: (component, number), None where the slot isn't a general register
+    :return: (component, number, GP), None where the slot isn't a general
+             register - a register key as the data registers' have
     """
     kinds = op.reg_types or []
     if p < len(op.indices) and p < len(kinds) and kinds[p] in GREG_KINDS:
-        return (op.indices[p].component, op.indices[p].indices[0])
+        return (op.indices[p].component, op.indices[p].indices[0], rgt.GP)
     return None
 
 
@@ -487,23 +494,18 @@ def analyse(program : ir_program, resources_ : resources) -> allocation_problem:
              can't make
     """
     problem = allocation_problem()
-    blocks = list(program.blocks) + [b for case in program.cases for b in case.blocks]
-    for pos, block in enumerate(blocks):
-        later = blocks[pos + 1:]
-        live_out = set()
-        for after in later:
-            for section in ("init", "prologue", "body", "epilogue", "tail", "subtail"):
-                for op in getattr(after, section, None) or []:
-                    live_out |= liveness.reads_writes(op)[0]
-        ops, names = [], []
-        for section in ("init", "prologue", "body", "epilogue", "tail", "subtail"):
-            for op in getattr(block, section, None) or []:
-                ops.append(op)
-                names.append(section)
-        if not ops:
-            continue
-        _analyse_sequence(ops, live_out, block.name, resources_, problem,
-                          section_of=lambda pos: names[pos])
+    cases = [list(case.blocks) for case in program.cases]
+    prefix = list(program.blocks)
+    # a program's paths: the prefix, which any of the cases may follow, then
+    # each case's own blocks. What follows a block is what runs after it in
+    # *its* path, not every case's - the cases are exclusive, and unioning
+    # them made a kernel's six slice loops look like thirty live columns
+    for pos, block in enumerate(prefix):
+        _analyse_block(block, prefix[pos + 1:] + [b for case in cases for b in case],
+                       resources_, problem)
+    for case in cases:
+        for pos, block in enumerate(case):
+            _analyse_block(block, case[pos + 1:], resources_, problem)
     # the values whose register isn't the allocation's to choose: a slot of
     # the component's ring - the model says which component holds how many,
     # so slot k is the k-th of them - and a value only one register meets
@@ -537,6 +539,33 @@ def analyse(program : ir_program, resources_ : resources) -> allocation_problem:
                      if entry.fixed.ring is not None else f"register {entry.fixed.slot}")
             problem.deferred.append(deferred(key, "fixed: " + entry.fixed.why, where))
     return problem
+
+
+def _analyse_block(block : ir_block, later : list, resources_ : resources,
+                   problem : allocation_problem) -> None:
+    """
+    A block's values and demands, both files
+    :param block: the block
+    :param later: the blocks that can follow it in its path
+    :param resources_: the machine
+    :param problem: the problem they are added to
+    """
+    ops, names = [], []
+    for section in ("init", "prologue", "body", "epilogue", "tail", "subtail"):
+        for op in getattr(block, section, None) or []:
+            ops.append(op)
+            names.append(section)
+    if not ops:
+        return
+    # the data registers, then the general ones: a pointer, a walker, a
+    # column, a counter, an offset's register - the second file the allocation
+    # has to see (docs/REGISTER_ALLOCATION.md, step 6)
+    for key_of in (liveness.data_key, greg_key):
+        # what the blocks after this one read *before* writing it: a column a
+        # later block sets up itself is not live into this one
+        live_out = liveness.read_before_written(later, key_of)
+        _analyse_sequence(ops, live_out, block.name, resources_, problem,
+                          section_of=lambda pos: names[pos], key_of=key_of)
 
 
 @dataclass
