@@ -411,12 +411,17 @@ and each masked access reads it through the slot `bind_operands` gave it -
 
 Three things the attempt settled:
 
-- **A mask is held, not live.** Its register must not be a value the live
-  ranges free: `free()` gave v0 back the moment the entry ended, and RVV's
-  masked load lost its predicate (`no signature of load takes X[] ...`) while
-  SVE's kept p0 only by luck. It lives in the emitter's held set
-  (`self.masks`), beside the reservation - the same lifetime `tail_mask`
-  always gave it, now named.
+- **The value's key was the wrong shape.** `liveness.data_key` names a value
+  `(component, number, register type)`; `set_op` first booked the mask as
+  `(component, number)`, two parts. Every key comparison then failed - the
+  emitter's sweep released a key no live set could contain - and RVV's masked
+  load lost its predicate (`no signature of load takes X[] at offset 0`) while
+  SVE's kept p0 by luck. Booked the way liveness spells it, the accesses'
+  reads hold it and no held set is needed.
+  The type in the key is the *value's*, not each instruction's: RVV's `v0` is
+  VEC to the signature and a mask to the IR, so `bind_operands` takes a mask's
+  type from the `lsc_set` that writes it (`program.entry`) instead of from the
+  access's operand shape.
 - **Some ISAs' masks are not operands.** RVV's `v0.t` is a signature's
   convention, so there is no slot to bind and `mask_slot` stays None. Those
   read the value by the name the set wrote (`mask(<index>)`), which is what

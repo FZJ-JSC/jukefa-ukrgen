@@ -826,10 +826,12 @@ class signature_emitter:
                 else self.tail_mask("", payload.count, payload.dt)
             mreg = self.tails.get(index) if index is not None else None
             if mreg is not None:
-                # the value's name, as the accesses' slots spell it - held for
-                # the kernel, as its register is reserved for it (not a value
-                # the live ranges free)
-                self.masks[op.indices[0].value()] = mreg
+                # the value's name as the liveness spells it - component,
+                # number and register type (models/lsc/liveness.data_key) -
+                # so that the reads keep it alive and the sweep sees it
+                key = (*op.indices[0].value(), op.rtypes[0])
+                self.phys[key] = mreg
+                self.numbers[key] = self.tail_regs[index]
             return lines
         raise specialization_error(f"{op}: the emitter has no form for {type(payload).__name__}")
 
@@ -1014,10 +1016,15 @@ class signature_emitter:
             slot = op.mask_slot if op is not None else None
             if not masks:
                 return False                # a last vector only under its mask
-            key = (f"mask({tail})", 0) if slot is None else op.indices[slot].value()
             # an ISA whose mask is not an operand but its signature's
             # convention (RVV's v0.t) names the value by the tail's index
-            reg = self.masks.get(key)
+            if slot is None:
+                # not an operand but the signature's convention (RVV's v0.t):
+                # the value the tail's set wrote, by its name and type
+                key = (f"mask({tail})", 0, rgt.MASK)
+            else:
+                key = (*op.indices[slot].value(), op.rtypes[slot])
+            reg = self.phys.get(key)
             if reg is None:
                 return False
             for name in masks:
