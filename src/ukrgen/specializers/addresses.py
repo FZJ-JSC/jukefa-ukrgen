@@ -529,14 +529,6 @@ class address_speller:
         self.planned = set(candidates)
         ranks = {key: n for n, key in enumerate(candidates)}
         program.offset_candidates = {self.decision(key): (ranks[key], key) for key in candidates}
-        # until the allocator takes them (docs/REGISTER_ALLOCATION.md: dt-3),
-        # the budget's plan is what is taken
-        chosen = set(self.plan(program))
-        program.decisions = frozenset(self.decision(key) if key in chosen
-                                      else f"{self.decision(key)}:plain" for key in candidates)
-        # what `place()`'s own passes read of it before `decide` runs (the
-        # setup values' order): the same decisions
-        program.offset_plan = decisions.plan(program, program.decisions)
         def rewrite(ops):
             out = []
             for op in ops:

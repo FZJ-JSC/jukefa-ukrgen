@@ -6,6 +6,7 @@ The operations generated for every path: the allocation takes a decision, and
 import unittest
 
 from ukrgen.components.tile import vla_vector_tile as vtile
+from ukrgen.models.lsc import allocation
 from ukrgen.models.lsc.decisions import decide, plan
 from ukrgen.models.lsc.addressing import offset_db
 from ukrgen.models.lsc.ir import ir_block, ir_program
@@ -82,6 +83,30 @@ class test_decide(unittest.TestCase):
         self.assertEqual(1, decide(ir, set()))
         self.assertEqual([kept], loop.block)
         self.assertLess(len(loop.reads), reads)
+
+
+class test_offsets(unittest.TestCase):
+    """What the allocation takes of the offsets' two spellings"""
+
+    def program(self, budget: int) -> ir_program:
+        ir = program()
+        ir.offset_candidates = {"offset:2*cs@C": (0, ("2*cs", "C")),
+                                "offset:rs@A": (1, ("rs", "A"))}
+        ir.offset_registers = budget
+        return ir
+
+    def test_the_budget_takes_the_best(self):
+        # the rank's first, the rest spelled plain - one name of each pair,
+        # so exactly one of the two survives `decide`
+        self.assertEqual({"offset:2*cs@C", "offset:rs@A:plain"},
+                         allocation.offsets(self.program(1)))
+
+    def test_no_budget_takes_none(self):
+        self.assertEqual({"offset:2*cs@C:plain", "offset:rs@A:plain"},
+                         allocation.offsets(self.program(0)))
+
+    def test_a_budget_past_the_candidates_takes_them_all(self):
+        self.assertEqual({"offset:2*cs@C", "offset:rs@A"}, allocation.offsets(self.program(9)))
 
 
 if __name__ == "__main__":
