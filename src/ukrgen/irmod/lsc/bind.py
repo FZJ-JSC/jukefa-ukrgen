@@ -76,6 +76,7 @@ def bind_mask(op, sigs : list | None = None, live : bool = False) -> bool:
     op.rtypes = list(op.rtypes or []) + [rtype]
     op.reg_types = list(op.reg_types) + [op.reg_types[0]]
     op.hw_operands = list(op.hw_operands or [None] * slot) + [name]
+    op.mask_slot = slot
     if live:
         op.reads = list(op.reads) + [slot]
         if any(name in (sig.clobber_list or []) for sig in sigs):
@@ -117,5 +118,8 @@ class bind_operands(lsc_irmod):
         for block, section in blocks_and_sections(program):
             for op in getattr(block, section) or []:
                 if isinstance(op, (lsc_load, lsc_store, lsc_move)):
+                    # the slot is not a read: an operation's reads drive the
+                    # form its signature must take, and the mask is bound by
+                    # the state the tail sets (docs/REGISTER_ALLOCATION.md)
                     bound += 1 if bind_mask(op) else 0
         return bound

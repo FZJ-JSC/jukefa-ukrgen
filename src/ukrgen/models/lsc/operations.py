@@ -35,6 +35,9 @@ class lsc_operation:
     #: the builder, a bound operand's appended by `bind_operands`); None where a
     #: slot's name isn't recorded
     hw_operands : list | None = None
+    #: the index slot a bound mask sits in (`bind_operands`), None where the
+    #: operation's signatures name none
+    mask_slot : int | None = None
     walk_plan = None            # how a loop walks its components
 
     def __init__(self,

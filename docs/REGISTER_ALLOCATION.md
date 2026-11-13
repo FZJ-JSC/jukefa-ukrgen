@@ -223,21 +223,31 @@ The order, each its own commit:
 | phase | change | kernels |
 |---|---|---|
 | (a) | `hw_operands` on every op and the binding pass; the slots exist, the accesses' masks first | same |
+| (c) | **for masks, this comes before (b):** the mask's value gets a set of its own - `lsc_set(set_mask_tail)` / `set_mask_alltrue` in the entry, its register numbered before the accesses are specialised | same, if the register is the one `tail_mask` took |
 | (b) | the emitter reads them: `_predicate`, `slice_reg`/`slice_imm`, `clobbered_mask`, `self.masks`, `self.tails`; the slots become reads, transformations' included | change where numbering does; re-record, qemu |
-| (c) | the mask's state op and `extra_reads_state` go, `_all_true`'s alias with them | same |
 | (d) | `check_state`'s `op.sigs` pruning into `isa_specialize`, then masks can be values anywhere | same |
 
 Phase (a) is done as far as the accesses go: `bind_operands`
 (`irmod/lsc/bind.py`, a required post-specialize pass) gives a masked load,
 store or move a slot for its mask - `rtypes` the operand's, `hw_operands` the
-operand's name (`amreg`), the value named `mask(<index>)` where the operation
-carries its tail's index and `mask` otherwise - and `sig.clobber_list` is
-looked at for the write, though nothing is written yet. Two things it leaves to
-phase (b): the slot is **not** a read, because a read changes what the passes
-after it emit; and a **transformation** is not bound, because its
-`hw_operands` are the builder's own and the emitter zips them whole into its
-operand slots - appending one there asked `reg()` for a mask before the
-emitter could take one ("MASK registers are not specialized yet").
+operand's name (`amreg`), the operation's `mask_slot` the slot - the value
+named `mask(<index>)` where the operation carries its tail's index and `mask`
+otherwise, and `sig.clobber_list` is looked at for the write. Nothing is read
+or written by the slot yet, and `take` learned the mask file: the lowest free
+`mreg` (a governing predicate is p0-p7 and the tracker hands out the highest
+first), or a vector register where masks are vectors.
+
+**(b) was tried, for the tail's masks, and it cannot come first.** Reading the
+mask from the slot at emission time - `_predicate` through
+`self.reg(op.indices[op.mask_slot], rtype)` with the tail's set registering the
+register it makes - breaks the **slice store**: *"no store of a slice's Y takes
+a plain address at slice immediate 0"*. The speller runs again at emission for
+an access whose form did not fit, and it matches the operation against its
+candidate signatures; the extra mask slot is something it doesn't know to
+ignore. So the value has to exist *before* the access is specialised: an
+`lsc_set` in the IR, its register numbered by the allocation - phase (c) first
+for masks, then (b) may read it. Nothing in this is about the mask's register
+being wrong: the lowest-free `mreg` and the vector-register case both behaved.
 
 Phase (b) is what makes the general step 6 tractable: the address registers,
 walkers, counters, masks and index vectors it lists become ordinary values in

@@ -25,6 +25,7 @@ from asmgen.registers import asm_data_type as adt, reg_tracker
 from . import classes, dtypes, liveness
 from .operations import lsc_loop
 from .ir import ir_program
+from .reg import lsc_reg_type
 
 #: A virtual register's name: its component, its number within it and the kind
 #: of register it is for (a vector, a scalar, a tile, an address). What the
@@ -417,6 +418,48 @@ def _demand(ops : list, live_out : set[register_key], where : str, resources_ : 
     for tag, keys in names.items():
         problem.demands.append(demand(tag, where, live_max.get(tag, 0), len(keys),
                                       resources_.pools.get(tag, 0)))
+
+
+#: the register kinds the emitter keeps in general registers: a pointer, a
+#: walker or a scratch address (address), an offset's register (offset), a
+#: counter or a copy (value)
+GREG_KINDS = (lsc_reg_type.address, lsc_reg_type.offset, lsc_reg_type.value)
+
+
+def greg_key(op, p) -> tuple | None:
+    """
+    The general register an operation's slot names
+    :param op: the operation
+    :param p: the slot
+    :return: (component, number), None where the slot isn't a general register
+    """
+    kinds = op.reg_types or []
+    if p < len(op.indices) and p < len(kinds) and kinds[p] in GREG_KINDS:
+        return (op.indices[p].component, op.indices[p].indices[0])
+    return None
+
+
+def greg_peak(program : ir_program) -> int:
+    """
+    The most general registers an operation names live at once, any place of
+    the program: what `max-offset-registers auto` measures by emitting and what
+    the analysis can say without - the counters, pointers, walkers, scratch
+    addresses, offsets' registers and copies the IR names
+    :param program: the IR
+    :return: the peak, at least 0
+    """
+    peak = 0
+    blocks = list(program.blocks) + [b for case in program.cases for b in case.blocks]
+    for block in blocks:
+        for name in dtypes.SECTIONS:
+            ops = block.sections.get(name) or []
+            live : set = set()
+            for op in reversed(ops):
+                reads, writes = liveness.reads_writes(op, key=greg_key)
+                live |= {k for k in reads | writes if k is not None}
+                peak = max(peak, len(live))
+                live -= {k for k in writes if k is not None}
+    return peak
 
 
 def analyse(program : ir_program, resources_ : resources) -> allocation_problem:

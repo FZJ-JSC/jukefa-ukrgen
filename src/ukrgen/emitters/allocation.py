@@ -133,6 +133,21 @@ class register_allocator:
                         f"keeps tiles out of use, or a smaller microtile needs fewer")
                 number = e.rt.reserve_any_reg(tag)
                 e.phys[key] = e.gen.treg(number, dt)
+            elif rgt.MASK == rtype:
+                # a mask: its file where the ISA has one (SVE's and SME's
+                # p0-p15), a vector register where masks are vectors (AVX2)
+                if "mreg" in e.rt.registered_types and e.rt.available("mreg"):
+                    # a governing predicate is p0-p7: the lowest free, where
+                    # the tracker hands out the highest first
+                    used = e.rt.get_used_regs("mreg")
+                    number = next(i for i in range(e.gen.max_mregs()) if i not in used)
+                    e.rt.reserve_specific_reg("mreg", number)
+                    tag = "mreg"
+                    e.phys[key] = e.gen.mreg(number)
+                else:
+                    number = e.rt.reserve_any_reg("vreg")
+                    tag = "vreg"
+                    e.phys[key] = e.gen.vreg(number)
             else:
                 raise specialization_error(f"{rtype.name} registers are not specialized yet")
             e.numbers[key] = (tag, number)
