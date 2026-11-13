@@ -401,6 +401,34 @@ registers' half of step 6. Until then the decisions are made in one place and
 the flow still runs twice - the *ordering* the second run was added for is gone,
 which is what dt-2 and this step bought.
 
+### Where a mask can live: three different facts
+
+asmgen answers these separately, and the allocator needs all three:
+
+| ISA | `mreg` in the tracker | `gen.mreg(i)` | pools | masked operand `amreg` |
+|---|---|---|---|---|
+| rvv, rvv071 | one, shared with `vreg` | `rvv_vreg` — `v0`, the mask *is* a vector register | `mreg, vreg` | role MASK, **rtype VEC** |
+| neon | no tag | — | `freg, vreg` | — (no masked forms) |
+| avx256 | 16, shared with `vreg`/`freg` | `ymm_vreg` | `freg, mreg, vreg` | role MASK, **rtype VEC** |
+| avx512 | 8, its own | `avx512_mreg` | `mreg` alone | role MASK, `mreg` |
+| sve, sme | 8 / 16, its own | `sve_preg` | `mreg` alone | role MASK, **rtype MASK** |
+
+Three facts, and they do not coincide: *the tag exists in the tracker* (it
+rules registers and pools), *the generator can make the register object* (what
+an instruction takes), and *which physical file it lands in* (the pool).
+`pool(tag)` settles the third; `max_regs` the first. The second is the
+generator's, and it is where a file's nature shows: `gen.mreg(i)` returns the
+register object the hardware has - AVX2's `ymm_vreg`, RVV's `rvv_vreg` (the
+mask *is* `v0`), an `sve_preg` or an `avx512_mreg` where masks are a file of
+their own. RVV had no `mreg()` at all although its tracker named one
+(`max_mregs() = 1`, `shared_registers()` mapping `mreg 0` to `vreg 0`); it now
+returns `rvv_vreg(0)`, and only index 0.
+
+The type in an IR value's key is the *value's*, not the instruction's - RVV's
+`v0` is VEC to the signature and a mask to the IR - so a mask's type comes from
+the `lsc_set` that writes it, and the register object handed to the instruction
+follows the signature's operand type.
+
 ### The masks as values: what (c) and (b) cost
 
 The tail's mask is a value now: `tailmask` puts an `lsc_set(set_mask_tail)` in
