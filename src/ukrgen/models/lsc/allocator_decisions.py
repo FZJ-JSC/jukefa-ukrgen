@@ -97,13 +97,22 @@ def decide(program : ir_program, taken : Iterable[branch]) -> int:
 def plan(program : ir_program, taken : Iterable[branch]) -> dict:
     """
     The offsets' plan the emitter reserves registers by: the candidates whose
-    branch was taken, their rank from the ranking
-    :param program: the IR, its candidates (the speller's) as it left them
+    branch was taken, their rank from the ranking, by the polynomial they
+    compute - which is what the emitter looks an offset's register up by
+    :param program: the IR, its candidates and their names (the speller's)
     :param taken: the branches taken
     :return: (the polynomial's text, component) -> rank
     """
     kept = frozenset(taken)
-    return {d.subject: rank for d, rank in (program.offset_candidates or {}).items() if d in kept}
+    polys = {(comp, index): poly
+             for (comp, poly), index in (program.offset_values or {}).items()}
+    out = {}
+    for d, rank in (program.offset_candidates or {}).items():
+        if d not in kept:
+            continue
+        comp, index = d.subject
+        out[(polys.get((comp, index), ""), comp)] = rank
+    return out
 
 
 def loops(program : ir_program) -> list[lsc_loop]:

@@ -33,14 +33,14 @@ def load(branch: decision | None = None) -> lsc_load:
     return op
 
 
-def offset(poly: str = "2*cs", comp: str = "C") -> decision:
+def offset(comp: str = "C", index: int = 0) -> decision:
     """
     An offset's register being taken
-    :param poly: the polynomial's text
     :param comp: the component
+    :param index: the index its value goes by, `Coff0`
     :return: the branch
     """
-    return decision("offset", (poly, comp))
+    return decision("offset", (comp, index))
 
 
 class test_decide(unittest.TestCase):
@@ -53,54 +53,56 @@ class test_decide(unittest.TestCase):
         self.assertEqual([op], ir.blocks[0].sections["body"])
 
     def test_a_decision_taken_keeps_its_operation(self):
-        op = load(offset("ga"))
+        op = load(offset("G", 0))
         ir = program(op)
-        self.assertEqual(0, decide(ir, {offset("ga")}))
+        self.assertEqual(0, decide(ir, {offset("G", 0)}))
         self.assertEqual([op], ir.blocks[0].sections["body"])
 
     def test_a_decision_left_drops_its_operation(self):
         # the question answered the other way: its operations go
-        kept, dropped = load(), load(offset("gb"))
+        kept, dropped = load(), load(offset("G", 1))
         ir = program(kept, dropped)
-        self.assertEqual(1, decide(ir, {offset("gb").alternative}))
+        self.assertEqual(1, decide(ir, {offset("G", 1).alternative}))
         self.assertEqual([kept], ir.blocks[0].sections["body"])
 
     def test_a_question_with_no_answer_is_an_error(self):
         # dropping both branches would be a kernel that silently does less
         with self.assertRaises(ValueError):
-            decide(program(load(offset("ga"))), set())
+            decide(program(load(offset("G", 0))), set())
 
     def test_the_offsets_plan_is_the_decisions_taken(self):
-        # the candidates are the speller's: a name, its rank and its key - the
-        # plan the emitter reserves registers by is the ones taken, in rank
+        # the candidates are the speller's, by component and index; the plan
+        # the emitter reserves registers by is the ones taken, by the
+        # polynomial they compute
         ir = program(load(offset()))
-        ir.offset_candidates = {offset(): 0, offset("rs", "A"): 1}
-        decide(ir, {offset(), offset("rs", "A").alternative})
+        ir.offset_values = {("C", "2*cs"): 0, ("A", "rs"): 1}
+        ir.offset_candidates = {offset(): 0, offset("A", 1): 1}
+        decide(ir, {offset(), offset("A", 1).alternative})
         self.assertEqual({("2*cs", "C"): 0}, plan(ir, ir.decisions))
-        self.assertEqual({}, plan(ir, {offset().alternative, offset("rs", "A").alternative}))
+        self.assertEqual({}, plan(ir, {offset().alternative, offset("A", 1).alternative}))
 
     def test_the_program_records_what_was_taken(self):
-        ir = program(load(offset("ga")))
-        decide(ir, {offset("ga"), decision("tail", ("m",), "mask")})
-        self.assertEqual(frozenset({offset("ga"), decision("tail", ("m",), "mask")}), ir.decisions)
+        ir = program(load(offset("G", 0)))
+        decide(ir, {offset("G", 0), decision("tail", ("m",), "mask")})
+        self.assertEqual(frozenset({offset("G", 0), decision("tail", ("m",), "mask")}), ir.decisions)
 
     def test_every_section_is_pruned(self):
         block = ir_block("A")
-        block.sections["prologue"] = [load(offset("ga"))]
-        block.sections["body"] = [load(offset("ga"))]
-        block.sections["subtail"] = [load(offset("ga"))]
+        block.sections["prologue"] = [load(offset("G", 0))]
+        block.sections["body"] = [load(offset("G", 0))]
+        block.sections["subtail"] = [load(offset("G", 0))]
         ir = ir_program(blocks=[block], offsets=offset_db(), strides={}, addr_setup={},
                         registers={})
-        self.assertEqual(3, decide(ir, {offset("ga").alternative}))
+        self.assertEqual(3, decide(ir, {offset("G", 0).alternative}))
         self.assertEqual([], block.ops())
 
     def test_a_loops_operations_are_pruned_too(self):
         # a loop's body is where most of them are; what it reads follows
-        kept, dropped = load(), load(offset("ga"))
+        kept, dropped = load(), load(offset("G", 0))
         loop = lsc_loop(block=[kept, dropped], subtiling=None, walks=[])
         reads = len(loop.reads)
         ir = program(loop)
-        self.assertEqual(1, decide(ir, {offset("ga").alternative}))
+        self.assertEqual(1, decide(ir, {offset("G", 0).alternative}))
         self.assertEqual([kept], loop.block)
         self.assertLess(len(loop.reads), reads)
 
@@ -110,22 +112,22 @@ class test_offsets(unittest.TestCase):
 
     def program(self, budget: int) -> ir_program:
         ir = program()
-        ir.offset_candidates = {offset(): 0, offset("rs", "A"): 1}
+        ir.offset_candidates = {offset(): 0, offset("A", 1): 1}
         ir.offset_registers = budget
         return ir
 
     def test_the_budget_takes_the_best(self):
         # the rank's first, the rest spelled plain - one name of each pair,
         # so exactly one of the two survives `decide`
-        self.assertEqual({offset(), offset("rs", "A").alternative},
+        self.assertEqual({offset(), offset("A", 1).alternative},
                          allocation.offsets(self.program(1)))
 
     def test_no_budget_takes_none(self):
-        self.assertEqual({offset().alternative, offset("rs", "A").alternative},
+        self.assertEqual({offset().alternative, offset("A", 1).alternative},
                          allocation.offsets(self.program(0)))
 
     def test_a_budget_past_the_candidates_takes_them_all(self):
-        self.assertEqual({offset(), offset("rs", "A")}, allocation.offsets(self.program(9)))
+        self.assertEqual({offset(), offset("A", 1)}, allocation.offsets(self.program(9)))
 
 
 if __name__ == "__main__":

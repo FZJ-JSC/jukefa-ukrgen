@@ -337,6 +337,7 @@ The order:
 | dt-2 | the offset path emits both branches tagged - **done**, the budget's plan taken until the allocator decides; forcing the branch the emitter used to choose reproduces the kernels byte for byte | same, and that is the test |
 | dt-3 | `allocate` returns `taken` - **done**, the offsets' decisions are its (`allocation.offsets`); the budget's *source* still the emitter's measurement, so the second run stays until the general registers are the analysis' (below) | same |
 | dt-4 | `loop_gregs`, `tail_vl` and the `max-*regs` caps become decisions and a pool cap | change; recorded + qemu |
+| dt-5 | the offsets named by index (`Coff0`), the polynomial its payload - done; the set that writes them follows with the plan's move into `allocate` | same |
 
 ### dt-2, as it is: the two spellings of one move
 
@@ -428,6 +429,34 @@ The type in an IR value's key is the *value's*, not the instruction's - RVV's
 `v0` is VEC to the signature and a mask to the IR - so a mask's type comes from
 the `lsc_set` that writes it, and the register object handed to the instruction
 follows the signature's operand type.
+
+### The offsets by index, not by their polynomial
+
+An offset's value is called `Coff0`, `Coff1` - its component's `off` and the
+index it got - not by the polynomial it computes
+(`value:('offset_value', 2*cs, C)` before). The polynomial is the value's
+*payload*: it is what the emitter computes and what its steps' fallbacks spell.
+
+Two things stay keyed by the polynomial, deliberately: the plan
+(`program.offset_plan`, `(polynomial's text, component) -> rank`), because what
+the emitter asks at emission is *"does this amount have a register?"*, and the
+speller's own step lookup. The bridge is one table:
+
+```python
+#: (component, the polynomial's text) -> the index of its value, `Coff[0]`
+offset_values : dict[tuple[str, str], int]
+```
+
+filled in rank order in `spell` - the best offset `Coff0` - so the index is
+stable, and the *decision* names the value rather than the content:
+`decision("offset", (component, index))`.
+
+One trap, found by two NEON kernels changing: `value_setup` sorts the setup
+values by the plan's rank and, for equal ranks, **by the name**. With names
+that were the polynomials, that tie-break was the polynomial's text; with
+`Coff0`, `Coff1` it became the index - a different order, a different register
+numbering. The tie-break has to be the payload (`str(polynomial), component`),
+which is what the order was really about.
 
 ### The masks as values: what (c) and (b) cost
 

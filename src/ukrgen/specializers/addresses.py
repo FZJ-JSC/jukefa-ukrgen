@@ -68,6 +68,8 @@ class address_speller:
         self._shifted: dict[tuple[str, int], bool] = {}
         #: the offsets planned for the program being spelled
         self.planned: set = set()
+        #: the program being spelled: its offsets' names (spell sets it)
+        self.program = None
         #: a scratch multiply's three steps' group, numbered
         self.next_scratch = 0
         reg = self.gen.greg(0)
@@ -303,12 +305,13 @@ class address_speller:
 
     def decision(self, key: tuple) -> decision:
         """
-        The decision an offset's register is, by the offset's polynomial and
-        component
+        The decision an offset's register is: its component and the index the
+        value goes by, not the polynomial it computes
         :param key: (the polynomial's text, the component)
         :return: the branch its operations carry
         """
-        return decision("offset", key)
+        poly, comp = key
+        return decision("offset", (comp, self.offset_indices.get((comp, poly), 0)))
 
     def both(self, op: lsc_addr_compute) -> list:
         """
@@ -486,7 +489,7 @@ class address_speller:
             # the values it adds read by name: what orders it after their
             # setup's operations (docs/ADDRESSING_PLAN.md setup values, 1)
             for value in step_values(st):
-                o.indices.append(lsc_reg_index(value_name(value), [0]))
+                o.indices.append(lsc_reg_index(value_name(value, self.program), [0]))
                 o.tiles.append(scalar_tile)
                 o.reg_types.append(lsc_reg_type.value)
                 o.reads.append(len(o.indices) - 1)
@@ -526,8 +529,12 @@ class address_speller:
         loops' blocks, its cases' - the offsets planned first (plan), a move
         one covers one step adding it. Done once: a step isn't spelled again
         """
+        self.program = program
         candidates = self.ranked(program)
         self.planned = set(candidates)
+        # the offsets' names, in rank order: `Coff[0]` the best, and so on
+        program.offset_values = {(key[1], key[0]): n for n, key in enumerate(candidates)}
+        self.offset_indices = dict(program.offset_values)
         program.offset_candidates = {self.decision(key): n for n, key in enumerate(candidates)}
         def rewrite(ops):
             out = []
@@ -547,8 +554,18 @@ class address_speller:
                     setattr(block, section, rewrite(list(ops)))
 
 
-def value_name(value: tuple) -> str:
-    """A setup value's name as an operand: value: and its tuple"""
+def value_name(value: tuple, program=None) -> str:
+    """
+    A setup value's name: an offset's its component's `off` and an index
+    (`Coff0`, `Coff1`), the polynomial it computes its payload rather than its
+    name; any other value's its tuple as text
+    :param value: the value, a payload tuple
+    :param program: the IR, its offsets' names (value_setup's caller has one)
+    :return: the name
+    """
+    if "offset_value" == value[0] and program is not None:
+        index = (program.offset_values or {}).get((value[2], str(value[1])), 0)
+        return f"{value[2]}off{index}"
     return f"value:{value}"
 
 
@@ -599,7 +616,7 @@ def value_setup(program) -> int:
                 step = (op.properties or {}).get(prop)
                 if step is not None:
                     for value in step_values(step):
-                        values.setdefault(value_name(value), value)
+                        values.setdefault(value_name(value, program), value)
     for block in program.blocks + [b for case in program.cases for b in case.blocks]:
         for section in SECTIONS:
             visit(getattr(block, section))
@@ -608,9 +625,12 @@ def value_setup(program) -> int:
         # rank): registers to them in that order while registers last
         rank = dict(program.offset_plan or {})
         is_offset = lambda name: "offset_value" == values[name][0]
+        # ties by the polynomial they compute, not by the name the value goes
+        # by: the order the setup's registers are taken in is the kernels'
         order = sorted(n for n in values if not is_offset(n)) + sorted(
             (n for n in values if is_offset(n)),
-            key=lambda n: (-rank.get((str(values[n][1]), values[n][2]), 0), n))
+            key=lambda n: (-rank.get((str(values[n][1]), values[n][2]), 0),
+                           str(values[n][1]), values[n][2]))
         ops = [lsc_value_op("value", writes=[name], reads=[], value=values[name]) for name in order]
         setup = ir_block(name=f"{START_BLOCK}values")
         setup.body = ops

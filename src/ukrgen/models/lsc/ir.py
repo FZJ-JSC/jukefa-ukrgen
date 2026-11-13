@@ -350,6 +350,10 @@ class ir_program:
     #: the offsets that could take a register, the speller's candidates - the
     #: decision that takes it -> its rank (best first); the ones taken become
     #: this program's `offset_plan`
+    #: and their names, (component, the polynomial's text) -> the index of its
+    #: value - a component's `off` values, `Coff[0]`, `Coff[1]`; the polynomial
+    #: a value's identity needn't carry, its payload has it
+    offset_values : dict[tuple[str, str], int] = field(default_factory=dict)
     offset_candidates : dict = field(default_factory=dict)
 
     def render(self) -> str:
