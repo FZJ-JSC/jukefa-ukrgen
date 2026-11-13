@@ -356,11 +356,26 @@ class ir_program:
     offset_values : dict[tuple[str, str], int] = field(default_factory=dict)
     #: the general registers the specializer makes - (component, number) ->
     #: what it holds: a stride pointer, a walking one, a walker, a walker's
-    #: start, a scratch address, a column's pointer - the last a *memory*
-    #: column's address register, not the slice index (SME's w12-w15). The
-    #: frame the analysis' general registers need to see
-    #: (docs/REGISTER_ALLOCATION.md, step 6a)
+    #: start, a scratch address, a column's pointer, a slice index, a frame
+    #: counter - the column a *memory* column's address register, not the
+    #: slice index (SME's w12-w15). The frame the analysis' general registers
+    #: need to see (docs/REGISTER_ALLOCATION.md, step 6a)
     address_registers : dict[tuple[str, int], str] = field(default_factory=dict)
+
+    def new_address_register(self, comp : str, role : str) -> int:
+        """
+        The next number of a component's general registers, recorded with what
+        it holds: one place that numbers them, whoever mints (the specializer's
+        address registers, the passes' slice frames)
+        :param comp: the component the register is the component's of
+        :param role: what it holds - a stride pointer, a walker, a scratch
+                     address, a column's pointer, a slice index, a frame counter
+        :return: its number under that component
+        """
+        used = [number for (component, number) in self.address_registers if component == comp]
+        number = max(used, default=-1) + 1
+        self.address_registers[(comp, number)] = role
+        return number
     offset_candidates : dict = field(default_factory=dict)
 
     def render(self) -> str:

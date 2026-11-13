@@ -659,6 +659,12 @@ def slice_frames(program) -> int:
                     # the object's address - a name the IR can keep between
                     # runs (the value's identity, its loop the payload)
                     names = [f"slices({loops}):count", f"slices({loops}):index"]
+                    # its two registers, minted here like any other general
+                    # register: the counter, and the index (which the ISA
+                    # restricts - SME's w12-w15 - the emitter resolving)
+                    comp = op.info.get("component") or op.walks[0].anchor.indices[0].component
+                    registers = (program.new_address_register(comp, "frame counter"),
+                                 program.new_address_register(comp, "slice index"))
                     # before the loop's own setup (its columns' registers): the
                     # frame's registers first, the slice index among those the
                     # slice operands allow (SME's w12-w15) taken before any
@@ -667,7 +673,8 @@ def slice_frames(program) -> int:
                     while at and "slice_setup" in (out[at - 1].properties or {}):
                         at -= 1
                     run = out[at:]
-                    out.insert(at, lsc_value_op("slice_frame", writes=names, reads=[], loop=op))
+                    out.insert(at, lsc_value_op("slice_frame", writes=names, reads=[], loop=op,
+                                                registers=registers))
                     for setup in run:
                         if "slice_setup" in (setup.properties or {}):
                             del setup.properties["slice_setup"]

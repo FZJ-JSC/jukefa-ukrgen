@@ -311,6 +311,35 @@ def _liveness(ops : list, live_out : set[register_key],
     return before, live
 
 
+def _loop_fixpoint(loop, live_out : set[register_key],
+                   key_of : Callable) -> tuple[list, list, set[register_key], set[register_key]]:
+    """
+    A loop body's live-in, iterated: what is live after the loop feeds what the
+    body needs from outside, until the two agree - a value the body reads before
+    writing it is carried (live across the whole loop), one it writes first is
+    the body's own
+    :param loop: the loop
+    :param live_out: what is live after the loop, from the sequence holding it
+    :param key_of: how a register is named
+    :return: (the body's operations, their sections, its live-in, what it writes)
+    """
+    ops, names = [], []
+    for section in lsc_loop.SECTIONS:
+        for op in loop.sections.get(section) or []:
+            ops.append(op)
+            names.append(section)
+    writes = set()
+    for op in ops:
+        writes |= liveness.reads_writes(op, key_of)[1]
+    live_in = set(live_out)
+    for _ in range(len(ops) + 2):
+        _, step = _liveness(ops, live_out | live_in, key_of)
+        if step == live_in:
+            break
+        live_in = step
+    return ops, names, live_in, writes
+
+
 def _analyse_sequence(ops : list, live_out : set[register_key], where : str,
                       resources_ : resources, problem : allocation_problem,
                       section_of : Callable[[int], str] | None = None,
@@ -335,6 +364,16 @@ def _analyse_sequence(ops : list, live_out : set[register_key], where : str,
     for pos, op in enumerate(ops):
         section = section_of(pos) if section_of else where
         reads, writes = liveness.reads_writes(op, key_of)
+        if isinstance(op, lsc_loop):
+            # a loop as one operation hides its carries (a column stepped inside
+            # is written, not read in): its body's live-in is a fixpoint, and its
+            # ranges are inside the body (docs/REGISTER_ALLOCATION.md)
+            body, body_names, body_in, body_writes = _loop_fixpoint(
+                op, set(before[pos]) - reads, key_of)
+            _analyse_sequence(body, body_in, f"{where}<{op.info.get('kind') or 'loop'}>",
+                              resources_, problem, section_of=lambda p: body_names[p],
+                              key_of=key_of)
+            reads, writes = body_in, body_writes
         keeps = liveness.keeps(op)
         for key in reads | writes:
             carried = key in live_in and pos == 0

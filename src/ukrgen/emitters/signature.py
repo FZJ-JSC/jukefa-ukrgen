@@ -391,7 +391,10 @@ class signature_emitter:
         A loop over slices' frame: its index in a register every slice operand
         takes - the values their signatures allow (asmgen's domains:
         operand_values; SME: w12-w15) - set to 0, its count (slice_count) in a
-        counter. :return: the counter, the index, their setting
+        counter. The two are values the IR names (`slice_frames`), the register
+        numbers the emitter's until the allocation takes them
+        :param op: the loop
+        :return: the counter, the index, their setting
         """
         comp = op.info.get("component") or op.walks[0].anchor.indices[0].component
         dt = self.ctx.component_dts[comp]

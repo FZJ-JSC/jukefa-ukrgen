@@ -508,6 +508,9 @@ class signature_specializer:
                      address, a column's pointer, a walker's start
         :return: its number under that component
         """
+        # numbered per block (start_blocks resets the counter): a block's
+        # registers reuse the numbers of the blocks before it, as the emitter's
+        # aregs share them across the program
         reg = self.next_reg.get(comp, 0)
         self.next_reg[comp] = reg + 1
         self.program.address_registers[(comp, reg)] = role
