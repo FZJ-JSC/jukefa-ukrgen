@@ -13,7 +13,7 @@ from .ir import SECTIONS, ir_block, ir_program
 from .operations import lsc_loop, lsc_operation
 
 
-def blocks(program : ir_program) -> list:
+def blocks(program : ir_program) -> list[ir_block]:
     """
     Every block of a program: its own, then each case's
     :param program: the IR
@@ -41,7 +41,7 @@ def decide(program : ir_program, taken : set[str] | frozenset[str]) -> int:
     return dropped
 
 
-def pruned(ops : list, taken : frozenset[str]) -> tuple[list, int]:
+def pruned(ops : list[lsc_operation], taken : frozenset[str]) -> tuple[list[lsc_operation], int]:
     """
     A run of operations with the untaken decisions dropped, their loops'
     operations pruned the same way
