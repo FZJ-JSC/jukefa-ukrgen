@@ -38,6 +38,11 @@ class lsc_operation:
     #: the index slot a bound mask sits in (`bind_operands`), None where the
     #: operation's signatures name none
     mask_slot : int | None = None
+    #: the decision the operation's presence depends on - an offset register it
+    #: would need, a tail set by the vector length, a loop's columns: None means
+    #: unconditional, emitted always (most operations); `decisions.decide`
+    #: keeps it only where the allocator took the decision
+    decision : str | None = None
     walk_plan = None            # how a loop walks its components
 
     def __init__(self,

@@ -7,6 +7,7 @@ import logging
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
+from ...models.lsc.decisions import decide
 from ...specializers.signature import specialization_error
 
 
@@ -31,6 +32,12 @@ class address_stage(stage):
         try:
             for sp in self.context.specializers or []:
                 sp.place()
+            # the operations generated for every path: the ones whose decision
+            # the allocation left dropped here, before the loops and the
+            # scheduler see them (docs/REGISTER_ALLOCATION.md: decisions) - no
+            # decision is taken yet, so nothing carries one and this keeps all
+            for program in self.context.programs:
+                decide(program, program.decisions)
         except specialization_error as err:
             raise stage_error(f"specializing for the ISA: {err}") from err
         text = "\n\n".join(p.render() for p in self.context.programs)

@@ -343,6 +343,9 @@ class ir_program:
     #: move needs (a strided walk's row change: rs - (n - R) cs), computed once
     #: - the moves used most, saving the most instructions, first
     offset_registers : int = 0
+    #: the decisions the allocator took, the operations generated for the
+    #: others dropped by `decisions.decide`
+    decisions : frozenset = frozenset()
 
     def render(self) -> str:
         db = self.offsets
