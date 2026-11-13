@@ -26,14 +26,19 @@ def rename_temporaries(body: list, limit: int, types=(rgt.VEC,)) -> int:
     if len(local) <= limit:
         return 0
     wanted = set(local)
-    first, last = {}, {}
+    first : dict = {}
+    last : dict = {}
     for pos, op in enumerate(body):
         for p in range(len(op.indices)):
             k = liveness.data_key(op, p)
             if k in wanted:
                 first.setdefault(k, pos)
                 last[k] = pos
-    mapping, names, active, free, renamed = {}, set(), [], [], 0
+    mapping : dict = {}
+    names : set = set()
+    active : list = []
+    free : list = []
+    renamed = 0
     for k in sorted(local, key=lambda key: first[key]):
         # names whose values ended before this one starts, oldest freed first
         for end, name in sorted(a for a in active if a[0] < first[k]):
@@ -59,7 +64,7 @@ def rename_temporaries(body: list, limit: int, types=(rgt.VEC,)) -> int:
     return renamed
 
 
-def rename_straight(ops: list, end: set, limit: int, flexible, tags: frozenset,
+def rename_straight(ops: list, end: set, limit: int, flexible, tags: frozenset[str],
                     prefer: str = "new") -> int:
     """
     A straight-line section's flexible values onto at most limit names of a
@@ -91,21 +96,24 @@ def rename_straight(ops: list, end: set, limit: int, flexible, tags: frozenset,
         if liveness.keeps(op) or any(op.properties.get(p) is not None for p in ("lane", "block", "slice")):
             reads |= writes
         rw.append((reads, writes))
-    afters, live = [None] * len(ops), {k for k in end if mine(k)}
+    afters : list = [None] * len(ops)
+    live = {k for k in end if mine(k)}
     for pos in reversed(range(len(ops))):
         afters[pos] = set(live)
         live = (live - rw[pos][1]) | rw[pos][0]
     # each name's values: (first, last, movable) - first -1 where live into
     # the section, last len(ops) where live after it
-    spans, live = {}, {k: -1 for k in live}
+    # a name's first appearance so far, -1 where it is live into the section
+    spans : dict = {}
+    starts : dict = {k: -1 for k in live}
     for pos, (reads, writes) in enumerate(rw):
         for k in reads | writes:
-            live.setdefault(k, pos)
-        for k in [k for k in live if k not in afters[pos]]:
-            first = live.pop(k)
+            starts.setdefault(k, pos)
+        for k in [k for k in starts if k not in afters[pos]]:
+            first = starts.pop(k)
             movable = first >= 0 and k in rw[first][1] and k not in rw[first][0] and flexible(k)
             spans.setdefault(k, []).append((first, pos, movable))
-    for k, first in live.items():
+    for k, first in starts.items():
         spans.setdefault(k, []).append((first, len(ops), False))
     taken = {k: [(f, l) for f, l, m in ss if not m] for k, ss in spans.items()}
     in_use = {k for k, ss in taken.items() if ss}
@@ -141,7 +149,7 @@ def rename_straight(ops: list, end: set, limit: int, flexible, tags: frozenset,
     return len(plan)
 
 
-def bounded(ops: list, limit: int, tags: frozenset) -> bool:
+def bounded(ops: list, limit: int, tags: frozenset[str]) -> bool:
     """
     Whether a section's names of a register file bound what's live at once:
     no more names than limit - a name holds one value at a time, but names

@@ -81,7 +81,7 @@ def render_loop(loop, db: offset_db, indent: str = "") -> list[str]:
     if info.get("frame"):
         head += ", its count and index the setup's"
     out = [head]
-    walks = {}
+    walks : dict = {}
     for w in loop.walks:
         key = (w.anchor.indices[0].component, w.anchor.indices[0].indices[0], str(w.step))
         walks[key] = walks.get(key, 0) + 1
@@ -346,7 +346,7 @@ class ir_program:
     offset_registers : int = 0
     #: the decisions the allocator took, the operations generated for the
     #: others dropped by `decisions.decide`
-    decisions : frozenset = frozenset()
+    decisions : frozenset[decision] = frozenset()
     #: the offsets that could take a register, the speller's candidates - the
     #: decision that takes it -> its rank (best first); the ones taken become
     #: this program's `offset_plan`

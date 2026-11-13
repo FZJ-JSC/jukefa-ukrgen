@@ -23,6 +23,7 @@ from asmgen.asmblocks.op import register_type as rgt
 from asmgen.registers import asm_data_type as adt, reg_tracker
 
 from . import classes, dtypes, liveness
+from .decision import decision
 from .operations import lsc_loop
 from .ir import ir_program
 from .reg import lsc_reg_type
@@ -426,7 +427,7 @@ def _demand(ops : list, live_out : set[register_key], where : str, resources_ : 
 GREG_KINDS = (lsc_reg_type.address, lsc_reg_type.offset, lsc_reg_type.value)
 
 
-def offsets(program : ir_program) -> set:
+def offsets(program : ir_program) -> set[decision]:
     """
     Which of an offset's two spellings is taken: the candidates' registers by
     rank, as many as the program's budget allows (`--max-offset-registers`),

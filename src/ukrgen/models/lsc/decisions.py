@@ -127,7 +127,7 @@ def loops(program : ir_program) -> list[lsc_loop]:
     return out
 
 
-def pruned(ops : list[lsc_operation], taken : frozenset) -> tuple[list[lsc_operation], int]:
+def pruned(ops : list[lsc_operation], taken : frozenset[branch]) -> tuple[list[lsc_operation], int]:
     """
     A run of operations with the untaken decisions dropped
     :param ops: the operations
