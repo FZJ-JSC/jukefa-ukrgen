@@ -236,46 +236,6 @@ def _register_offset_form(op : lsc_operation, gen : asmgen, dt : asm_data_type) 
                and ("adreg" not in s.operands or s.operands["adreg"].dt == dt) for s in full)
 
 
-def slice_columns(op : lsc_loop, plan : dict, loop_gregs : int | None) -> tuple:
-    """
-    A loop over slices' access columns: within the general registers allowed
-    (--loop-gregs), a pointer per access column - an offset's part beside
-    vector lengths; tiles a vector length apart share one, the rest an
-    immediate - set before the loop, stepped once an iteration: no moves
-    between tiles. The first column of a plan register is that register
-    :param op: the loop
-    :param plan: the loop's walk plan (specializers/addresses.py)
-    :param loop_gregs: the general registers the loop's frame and pointers may
-                       take (--loop-gregs), None for no limit
-    :return: (columns, pointers, column_of): columns (plan key, column text)
-             -> (key, column); pointers the same keys -> the column (None:
-             the plan register itself), empty without room; column_of a walk
-             -> (key, column text, vector lengths an immediate or None)
-    """
-    columns, pointers, column_of = {}, {}, {}
-    accesses = {}
-    for b in op.block:
-        if isinstance(b, (lsc_load, lsc_store)):
-            accesses.setdefault(b.properties.get("walk", 0), []).append(b)
-    for key, p in plan.items():
-        for w, offset in p["walks"].items():
-            vectors = dict(offset.terms).get(("VL",))
-            # the vector lengths an immediate only where every access of the
-            # walk takes them
-            folds = vectors and all(any(_vl_form(sig) and _accepts(sig, "voffset", vectors)
-                                        for sig in _sigs(b.sigs))
-                                    for b in accesses.get(w, []))
-            column = offpoly._make({f: c for f, c in dict(offset.terms).items()
-                                if not (folds and ("VL",) == f)})
-            column_of[w] = (key, str(column), dict(offset.terms).get(("VL",)) if folds else None)
-            columns.setdefault((key, str(column)), (key, column))
-    extra = len(columns) - len(plan)
-    if loop_gregs is None or 2 + extra <= loop_gregs:
-        for (key, name), (_, column) in columns.items():
-            pointers[(key, name)] = None if not dict(column.terms) else column
-    return columns, pointers, column_of
-
-
 def _takes(sig, immediate: int, limit: int | None = None) -> bool:
     """
     Whether a load or store signature takes an access at this immediate offset
@@ -514,8 +474,6 @@ class signature_specializer:
         self.imm_offsets = "all"
         #: --ldinc-imm-offsets last: id(first access) -> elements to its last row
         self.jumps = {}
-        #: --loop-gregs (the emit stage's too): a loop over slices' pointers
-        self.loop_gregs = None
         # what's been placed and walked, the stride pointers made on first use
         self.placed = set()
         self.walked_by = {}
@@ -905,27 +863,13 @@ class signature_specializer:
                 back.append(lsc_addr_compute(comp, reg, reg, offpoly.const(0) - walk, scalar_tile))
             self.positions[(comp, reg)] = p["home"]
         op.walk_plan = plan
-        # its access columns planned here - a register of the loop's own for
-        # each, the emitter allocating and emitting them
-        columns, pointers, column_of = slice_columns(op, plan, self.loop_gregs) if plan else ({}, {}, {})
-        op.info["slice_columns"] = (columns, pointers, column_of) if plan else None
         if plan and not op.info.get("preload") \
                 and "slice_registers" not in op.info and "slice_moves" not in op.info:
-            if pointers:
-                # a register of the loop's own per access column, set up
-                # before it: the emitter allocates and emits, nothing chosen
-                # at emission. Their setup after the frame's - the slice index
-                # among the registers its operands allow (w12-w15), taken
-                # first - so the setups carry slice_setup (slice_frames)
-                setups, op.block, regs = self.slice_registers(op, plan, pointers, column_of)
-                for o in setups:
-                    o.properties["slice_setup"] = True
-                inserted += setups
-                op.info["slice_registers"] = regs
-            else:
-                # no pointer to be had: the iteration's moves in the IR
-                op.block = self.slice_moves(op, plan)
-                op.info["slice_moves"] = True
+            # the iteration's moves in the IR, one address computation before
+            # each access on the plan's registers - the frame's two aside, the
+            # loop owns no register (docs/REGISTER_ALLOCATION.md, D')
+            op.block = self.slice_moves(op, plan)
+            op.info["slice_moves"] = True
         # it moves them: the scheduler keeps what addresses through them after
         # it, after it
         op.refresh()
@@ -972,43 +916,6 @@ class signature_specializer:
                 reg = walkers[w["start"]]
                 out.append(lsc_addr_compute(w["comp"], reg, reg, step, scalar_tile))
         return setups, out, regs
-
-    def slice_registers(self, op, plan: dict, pointers: dict,
-                        column_of: dict) -> tuple[list, list, list]:
-        """
-        A loop over slices with a register of its own per access column: each
-        access at its column's register - the home column's the register the
-        loop walks anyway - every other column's set up before the loop from
-        that register, and all of them stepped on in the body by an iteration.
-        Registers of the IR's: the emitter allocates and emits them, nothing
-        chosen at emission (docs/ADDRESSING_PLAN.md 6.6, walkers and columns)
-        :return: (the setup operations before the loop, the block, the
-                 columns' registers - theirs to free after it)
-        """
-        columns = {}
-        setups = []
-        for (key, name), column in pointers.items():
-            if column is None or not any(dict(column.terms).values()):
-                continue                # the home column: the register itself
-            reg = self.new_reg(key[0], "column pointer")
-            columns[(key, name)] = reg
-            setups.append(lsc_addr_compute(key[0], key[1], reg, column, scalar_tile))
-        out = []
-        for b in op.block:
-            if isinstance(b, (lsc_load, lsc_store)):
-                key, name, vectors = column_of[b.properties.get("walk", 0)]
-                if (key, name) in columns:
-                    b.indices[0] = lsc_reg_index(key[0], [columns[(key, name)]])
-                if vectors is not None:
-                    b.add_property("voffset", vectors)
-            out.append(b)
-        for (comp, reg), p in plan.items():
-            step = offpoly._make({f: c * op.subtiling.unroll for f, c in dict(p["step"].terms).items()})
-            if not any(dict(step.terms).values()):
-                continue
-            moved = [reg] + [r for (key, _), r in columns.items() if key == (comp, reg)]
-            out += [lsc_addr_compute(comp, r, r, step, scalar_tile) for r in moved]
-        return setups, out, sorted((key[0], reg) for (key, _), reg in columns.items())
 
     def slice_moves(self, op, plan: dict) -> list:
         """

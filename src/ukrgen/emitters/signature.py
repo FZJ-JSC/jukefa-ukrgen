@@ -44,7 +44,7 @@ from .allocation import register_allocator
 from ..models.lsc import dtypes, liveness
 from ..models.lsc.rename import rename_temporaries
 from ..specializers.signature import (
-    specialization_error, _sigs, _masked, _all_true, _usable, slice_columns, slice_walkers, slice_placements)
+    specialization_error, _sigs, _masked, _all_true, _usable, slice_walkers, slice_placements)
 
 SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
 
@@ -439,31 +439,18 @@ class signature_emitter:
         scale = op.subtiling.unroll if explicit else 1
         plan = op.walk_plan
         # the iteration's address work in the IR already
-        # (specializers/signature.py slice_registers, slice_moves): the
-        # accesses at their registers, the moves emitted as the steps they are
-        # - placed by the scheduler, not here. (A loop's columns may all be its
-        # home's: the keys are, a list of registers may be empty.)
-        moved_in_ir = "slice_moves" in op.info or "slice_registers" in op.info \
-            or "slice_walks" in op.info
+        # (specializers/signature.py slice_moves, slice_walks): the accesses at
+        # their registers, the moves emitted as the steps they are - placed by
+        # the scheduler, not here
+        moved_in_ir = "slice_moves" in op.info or "slice_walks" in op.info
 
         # the plan's registers walk themselves: where each stands, as an offset
         # from its home at this iteration's first slice
         walk_of = {w: key for key, p in (plan or {}).items() for w in p["walks"]}
-        # within the general registers allowed (--loop-gregs), a pointer per
-        # access column - an offset's part beside vector lengths; tiles a
-        # vector length apart share one, the rest an immediate - set before
-        # the loop, stepped once an iteration: no moves between tiles. The
-        # first column of a plan register is that register
-        # the specializer's plan of the access columns (slice_columns): which
-        # columns, which vector lengths immediates, pointers or not
-        planned = op.info.get("slice_columns")
-        if planned is None and plan:
-            planned = slice_columns(op, plan, self.ctx.loop_gregs)
-        columns, pointers, column_of = planned if planned else ({}, {}, {})
-        if moved_in_ir:
-            # its columns' registers are the IR's (slice_registers) - its
-            # accesses' moves the block's (slice_moves): nothing allocated here
-            pointers = {}
+        # the loop's accesses are at the plan's own registers, their moves in
+        # the IR (specializers/signature.py, slice_moves): nothing of the loop's
+        # is allocated here, no pointer per column (docs/REGISTER_ALLOCATION.md,
+        # D')
         def place(b):
             # the access where the register stands, or vector lengths past it
             # where a signature takes them ([x, #n, MUL VL]): no move; else the
@@ -472,10 +459,6 @@ class signature_emitter:
             key = walk_of[w]
             comp = key[0]
             target = plan[key]["walks"][w]
-            if pointers:
-                # its column's own pointer, the vector lengths an immediate
-                _, name, vectors = column_of[w]
-                return [], pointer_regs[(key, name)], vectors
             # the specializer's placement (slice_placements): the move before
             # it, the vector lengths an immediate
             _, move, vectors = placed[id(b)]
@@ -484,20 +467,11 @@ class signature_emitter:
         def step_on(slices):
             # every register to the next iteration's home, slices on
             out = []
-            if pointers:
-                for (key, name), ptr in pointer_regs.items():
-                    step = offpoly._make({f: c * slices for f, c in dict(plan[key]["step"].terms).items()})
-                    out += self.add_bytes(ptr, self.bytes_of(key[0], step), key[0])
-                return out
             for key, p in (plan or {}).items():
                 move = offpoly._make({f: c * slices for f, c in dict(p["step"].terms).items()}) - end[key]
                 if dict(move.terms):
                     out += self.add_bytes(self.aregs[key], self.bytes_of(key[0], move), key[0])
             return out
-        def release_pointers():
-            for (key, name), ptr in pointer_regs.items():
-                if ptr is not self.aregs[key]:
-                    self.rt.unuse_reg("greg", ptr.idx)
         def settle() -> list[str]:
             # where the loop leaves them - a vector length of steps on; the
             # specializer's address computations after it step them back home
@@ -542,15 +516,6 @@ class signature_emitter:
                 steps[key] = delta
             walkers.append(walker)
             deltas.append(steps[key])
-        pointer_regs = {}
-        for (key, name), column in pointers.items():
-            if column is None:
-                pointer_regs[(key, name)] = self.aregs[key]
-                continue
-            ptr = self.greg()
-            lines.append(asmops.mov(self.gen, src=self.aregs[key], dst=ptr))
-            lines += self.add_bytes(ptr, self.bytes_of(key[0], column), key[0])
-            pointer_regs[(key, name)] = ptr
         unroll = op.subtiling.unroll
         # the block's own vector temporaries: written before read (models.lsc.liveness)
         local = liveness.local(op.block)
@@ -598,7 +563,7 @@ class signature_emitter:
                        for w, d in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values()]
             return out + [asmops.add_imm(self.gen, reg=index, imm=unroll)]
         mem = lambda ops: [b for b in ops if isinstance(b, (lsc_load, lsc_store))]
-        if plan and not pointers:
+        if plan:
             order = mem([b for b in op.block if early(b)] + [b for b in op.block if not early(b)]) \
                 if preload else mem(op.block)
             placed, end = slice_placements(order, plan, walk_of)
@@ -620,7 +585,6 @@ class signature_emitter:
                     self.release(k)
             for r in [counter, index] + list(shared.values()) + list(steps.values()):
                 self.rt.unuse_reg("greg", r.idx)
-            release_pointers()
             lines += settle()
             return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
                 if l.strip()]
@@ -680,12 +644,10 @@ class signature_emitter:
                 self.release(k)
         for r in [counter, index] + list(shared.values()) + list(steps.values()):
             self.rt.unuse_reg("greg", r.idx)
-        release_pointers()
-        if op.info.get("slice_registers") or op.info.get("slice_walks"):
-            # its columns' and walkers' registers, dead after the loop (the
-            # emitter's until the allocation frees them where they die)
-            freed = set(op.info.get("slice_registers") or ()) | set(op.info.get("slice_walks") or ())
-            self.release_aregs({k for k in freed if k in self.aregs})
+        if op.info.get("slice_walks"):
+            # its walkers' registers, dead after the loop (the emitter's until
+            # the allocation frees them where they die)
+            self.release_aregs({k for k in op.info["slice_walks"] if k in self.aregs})
         lines += settle()
         return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
                 if l.strip()]

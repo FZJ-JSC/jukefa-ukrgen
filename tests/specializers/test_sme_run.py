@@ -174,9 +174,10 @@ class test_sme_gemm(unittest.TestCase):
 
     def test_runs_scheduled(self):
         # the same through the passes that spell the address moves and place
-        # them: each access column a register of the loop's own, set up before
-        # it, stepped on in the body - docs/ADDRESSING_PLAN.md 6.6, walkers
-        # and columns - the kernel right at both vector lengths
+        # them: an address computation before each access, on the plan's own
+        # registers - the loop owns nothing but its frame
+        # (docs/REGISTER_ALLOCATION.md, D') - the kernel right at both vector
+        # lengths
         from ukrgen.flow.stages.irmods import post_specialize_irmod_stage
         from ukrgen.flow.stages.scheduling import schedule_stage
         from ukrgen.models.lsc.ir import render_loop
@@ -186,19 +187,20 @@ class test_sme_gemm(unittest.TestCase):
         loops = [op for b in program.blocks + [b for c in program.cases for b in c.blocks]
                  for section in ("prologue", "body", "epilogue", "tail", "subtail")
                  for op in (getattr(b, section) or [])
-                 if isinstance(op, lsc_loop) and op.info.get("slice_registers")]
-        self.assertTrue(loops, "no loop over slices with a register per access column")
+                 if isinstance(op, lsc_loop) and op.info.get("slice_moves")]
+        self.assertTrue(loops, "no loop over slices with its address moves in the IR")
         for loop in loops:
             with self.subTest(loop=render_loop(loop, program.offsets)[0]):
-                regs = set(loop.info["slice_registers"])
+                # every access at a register, and the loop's own computations
+                # the ones that reach them
+                moved = {(b.indices[0].component, b.indices[0].indices[0]) for b in loop.block
+                         if isinstance(b, lsc_addr_compute)}
                 used = {(b.indices[0].component, b.indices[0].indices[0]) for b in loop.block
                         if isinstance(b, (lsc_load, lsc_store))}
-                # a column's own register takes its accesses, and every one of
-                # them is stepped on by an address computation of the body
-                self.assertTrue(regs & used, (regs, used))
-                stepped = {(b.indices[0].component, b.indices[0].indices[0]) for b in loop.block
-                           if isinstance(b, lsc_addr_compute)}
-                self.assertLessEqual(regs, stepped, (regs, stepped))
+                self.assertTrue(used, "the loop has no access")
+                self.assertTrue(moved, "the loop's accesses at no register of its own")
+        self.assertFalse([r for r in program.address_registers.values() if r.startswith("column")],
+                         sorted(program.address_registers.values()))
 
 
 class test_slice_irmods(unittest.TestCase):
@@ -428,10 +430,19 @@ class test_slice_scheduling(unittest.TestCase):
         start = next(i for i, l in enumerate(code) if l.endswith("_slices:")
                      and sum(x.startswith("mova") for x in code[i:i + 30]) >= 8)
         # the counter down by the unroll first - the loop's control, loop_code's
-        # - then the body: every slice moved out before the first multiply,
-        # tiles and copies
+        # - then the body: each access's address computed where the scheduler
+        # places it, the slices' moves among them - no column setup lines first
+        # (docs/REGISTER_ALLOCATION.md, D')
         body = [l.split()[0] for l in code[start + 2:start + 26]]
-        self.assertEqual(["mova"] * 8, body[:8])
+        # the slices out of their tiles, and each store's address computed
+        # where the scheduler places it - among the work, not in a block of
+        # setups first (docs/REGISTER_ALLOCATION.md, D')
+        self.assertGreaterEqual(body.count("mova"), 6, body)
+        stores = [i for i, x in enumerate(body) if x == "st1d"]
+        self.assertGreaterEqual(len(stores), 4, body)
+        for i in stores:
+            self.assertTrue({"mova", "add", "sub"} & set(body[max(0, i - 3):i]),
+                            f"no address computed before {body[:i + 1]}")
 
 
 class test_slice_preload(unittest.TestCase):
@@ -589,26 +600,3 @@ class test_packed_c(unittest.TestCase):
                                    capture_output=True, text=True, timeout=120)
                 self.assertIn(f"tile {rows} x {rows}", r.stdout)
                 self.assertIn(", 0 wrong", r.stdout)
-
-
-class test_loop_gregs(unittest.TestCase):
-    """
-    The general registers a loop over slices may take (--loop-gregs): within
-    them, a pointer per access column, no moves between tiles; beyond, the
-    plan's registers walk from tile to tile - exact either way
-    """
-
-    def loop_lines(self, ctx):
-        code = ctx.emitted[0].instructions()
-        start = next(i for i, l in enumerate(code) if l.endswith("_slices:")
-                     and sum(x.startswith("ld1d") for x in code[i:i + 30]) >= 2)
-        end = next(i for i, l in enumerate(code) if i > start and l.startswith("cbnz"))
-        return code[start + 1:end]
-
-    def test_budgets(self):
-        roomy, _ = run_gemm(self, GEMM)
-        tight, _ = run_gemm(self, GEMM, **{"loop-gregs": "2"})
-        self.assertLess(len(self.loop_lines(roomy)), len(self.loop_lines(tight)))
-        # within the budget the loop moves no pointer between its tiles' accesses
-        moves = [l for l in self.loop_lines(roomy) if l.startswith("add x") and "x12" not in l]
-        self.assertLessEqual(len(moves), 6)

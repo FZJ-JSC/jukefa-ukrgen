@@ -344,7 +344,7 @@ The order:
 | B1 | **pins**: a stride pointer, the frame, the slice index declared fixed, not derived | same |
 | A | the `form` family: `imm`/`goffset`/bump variants per access, `decision("form", ...)`, `--<COMP>-addr-forms` forcing | forced-today `same`; forced `goffset` measured |
 | C' | the forms' and offsets' choice into `allocate` (with dt-3's `taken`) | recorded + qemu |
-| D' | slice walks generic: `addr_compute` per access per iteration, `addr-pattern`/`max-addr-regs`; `--loop-gregs` and `--COMP-stride-pointers` go; `_slices` folds into the loop emission | counts + qemu |
+| D' | slice walks generic - **done**: `addr_compute` per access per iteration, `--loop-gregs` and the columns gone (874→844 instructions, 22→11 names, sweep −7,596); still open: `--COMP-stride-pointers` and folding `_slices` into the loop emission | counts + qemu |
 
 ### Three kinds of choice, and the forms
 
@@ -658,10 +658,10 @@ each:
 | `release_aregs`, `release_pointers`, `room`, `peak_registers`, `bounded` | `emitters/signature.py` | pressure guessed per section | step 4 |
 | `moved_in_ir` (`"slice_moves"`, `"slice_registers"`, `"slice_walks"` in `op.info`) | `signature.py:448` | one loop emitted by two code paths | (b), step 3's sections |
 | `properties["slice_reg"]` / `["slice_imm"]` written by the emitter | `signature.py:571,637` | the emitter's bookkeeping stored in the IR | (a), (b) |
-| `--loop-gregs` ("at least 2: a counter and a slice index") | `flow/stages/emit.py:41` | bounds the frame's 2 registers and the extra column pointers, and **nothing else**; all-or-nothing (every column a pointer, or every access re-walked) | `addr-pattern` over `--max-addr-regs` (D'), the frame's 2 as named values (A') |
+| ~~`--loop-gregs`~~ - gone with D' | `flow/stages/emit.py` (removed) | bounded the frame's 2 registers and the extra column pointers, and nothing else, all-or-nothing | `addr-pattern` over `--max-addr-regs` (D'), the frame's 2 as named values (A') |
 | `slice_frame` reserving its own two registers (`reserve_specific_reg` from `allowed`, `self.greg()`) | `emitters/signature.py:389` | the last unnamed mint - the frame is a value in the IR, its registers the emitter's | A': `new_reg` roles |
-| GOFFSET only when the access's *whole* delta is one stride of coefficient 1 | `specializers/signature.py:636` | two `st1d` halves of one ZA slice never qualify, so each gets a column: 16 instead of 8, 15 pointers instead of 7 | A: the `form` variants, the choice priced by the allocator |
-| the columns' plan (`slice_columns`/`slice_registers`/`slice_moves`) | `specializers/signature.py:209,925` | a pointer per access column, or every access re-walked | D': per-access `addr_compute` steps + `addr-pattern` |
+| GOFFSET only when the access's *whole* delta is one stride of coefficient 1 | `specializers/signature.py:636` | the pair never qualified - and measured, it had nothing to qualify for: the columns are `VL*stride` apart, which no offset register holds | A2, measured and dropped; `--COMP-addr-forms goffset` stays as the knob |
+| ~~the columns' plan~~ - gone with D' | `specializers/signature.py` (removed) | a pointer per access column, or every access re-walked; a loop of 16 columns paid 78 column-pointer registers for 30 instructions | D' (done): per-access `addr_compute` steps, the frame the loop's only register |
 | slice immediates in four bits, `immediates_take`, `MERGED_IMMEDIATE` | `irmod/lsc/unroll.py`, `addresses.py` | encoding limits read before `isa_specialize` trims the signatures | (a): read after binding |
 | the mask as state plus `self.tails` | `irmod/lsc/tailmask.py`, `signature.py` | registers with no name of their own | (b), (c) |
 
@@ -812,12 +812,19 @@ The order, approved, each item its own commit:
    one gives the same code - the second run bought nothing, and every golden is
    byte-identical without it. Still to do under this heading: `taken` for
    `form:*` (needs A's variants) and `validate` reporting what did not fit.
-7. **D' - slice walks generic**: each access's address advanced by an
-   `lsc_addr_compute` step inside the loop, the register chosen by
-   `addr-pattern` over `--max-addr-regs`; `--loop-gregs` and
-   `--COMP-stride-pointers` go with the columns' plan, and the emitter's
-   `_slices` folds into the generic loop emission - "the slices going away",
-   which is what the preload needs next.
+7. **D' - done, the loop owns nothing but its frame.** A loop over slices no
+   longer gets a pointer per access column: each access's address is an
+   `lsc_addr_compute` step in the IR before it (`slice_moves`), on the plan's
+   own registers, placed by the scheduler. Gone with the columns:
+   `slice_columns`, `slice_registers`, the emitter's `pointer_regs`/
+   `step_on`/`release_pointers` branches and `--loop-gregs` (the frame's two
+   registers are the loop's only allocation, and they were never the knob's to
+   give). Measured on the golden SME kernel before recording: **874 → 844
+   instructions** and the general-register names at the tightest place **22 →
+   11 of 32**; the sweep **107,109 → 99,513** (7,596 fewer, 7%) across 257
+   kernels. Nine goldens re-recorded (six SME, three SMESVE), the SME gemm runs
+   correct under qemu at SVL 256 and 512 both before and after (the numerical
+   tests never changed - only the columns' shape assertions did).
 8. **dt-4's remainder** (`tail_vl`, the `--max-*regs` caps as a pool cap),
    **(d)**, spilling - the tail, unchanged.
 
