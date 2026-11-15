@@ -66,6 +66,24 @@ class scalar_reduce_provider(resolution_provider):
                     dm_step(op="load", dest=orig_ref(), dest_rtype=rgt.FP)
                     ]))
 
+        # example riscv64 (a scalar FMA, no vector operand anywhere):
+        #  fld f0, (t0)
+        #  fmadd.d f2,f0,f1,f2
+        # The same move as use_scalar's without the VF modifier: use_scalar
+        # says "this operation's other operands are vectors, this one is the
+        # scalar it takes", this one says "the operation is scalar". So it is
+        # registered under the operand's floating-point type - the one its
+        # transformation leaves it with, dm_solver's deduce_operand_rtype - and
+        # not under VEC, where the resolutions above are.
+        registry.add_resolution(
+            key=tfr_key(tfs=frozenset({tf.SCALAR_REDUCE}),
+                        rtype=rgt.FP, ddir=dmd.IN),
+            rsln=tr(
+                unique_tag='scalar_direct',
+                steps=[
+                    dm_step(op="load", dest=orig_ref(), dest_rtype=rgt.FP)
+                    ]))
+
         # example SVE:
         #  fld d0, [x5]
         #  dup z1.d, z0.d[0]
@@ -201,6 +219,18 @@ class scalar_reduce_provider(resolution_provider):
                 opd_mod_reqs={omod.VF},
                 steps=[
                     dm_step(op="store", src=[orig_ref()], src_rtypes=[rgt.FP]),
+                    ]))
+
+        # example riscv64 (a scalar operation): the artifact is in a
+        # floating-point register already
+        #  fsd f2, (t0)
+        registry.add_resolution(
+            key=tfr_key(tfs=frozenset({tf.SCALAR_REDUCE}),
+                        rtype=rgt.FP, ddir=dmd.OUT),
+            rsln=tr(
+                unique_tag='scalar_direct',
+                steps=[
+                    dm_step(op="store", src=[orig_ref()], src_rtypes=[rgt.FP])
                     ]))
 
 

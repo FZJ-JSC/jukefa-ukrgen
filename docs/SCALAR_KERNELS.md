@@ -106,11 +106,17 @@ Both are done, in asmgen:
    1120 -> 1336, additions only, no encoding removed.
 2. **`scalar_direct`**, the VF-free twin of `use_scalar`: an IN step loading
    `orig_ref()` at `rgt.FP`, an OUT step storing from it, no operation
-   modifiers. It is the resolution a scalar instruction needs and the one a
-   vector instruction with a scalar form gains a duplicate of.
-3. **A resident resolution for `SCALAR_REDUCE`**, in the registry's built-in
-   loop beside the `{}`/`{NONE}` ones: a value already in a register moves
-   nothing, and with the rtype rule above the key carries `FP`.
+   modifiers. Registered under `FP` only, because that is the type the rule
+   below leaves a scalar-reduced operand with; under `VEC` it would be a
+   second, VF-free way to say what `use_scalar` says, and no instruction form
+   in the tree needs it (a vector operation's scalar operand is either a VF
+   form or a broadcast).
+3. **A resident resolution for `SCALAR_REDUCE` under `FP`**, beside the
+   registry's built-in `{}`/`{NONE}` ones: a value already in a floating-point
+   register moves nothing. Under `VEC` it would say something else - that a
+   whole vector register is one element of the requirement, which is an
+   accumulator a vector operation fills lane by lane while the store writes
+   every lane (trap below).
 4. **`simd_size` is 1 and `max_vregs`/`max_tregs` are 0, not raising.**
    Nothing in ukrgen reads `simd_size` as a VLA test - `is_vla` is a separate
    query - and every use is `// adt_size` (lanes) or `* simd_size` (bytes).
@@ -160,6 +166,17 @@ Both are done, in asmgen:
   resolution cannot change an existing kernel's choice - but
   `--list-tileop-candidates` output changes and any future "first candidate"
   rule would see it.
+- **The register type a key carries is the whole statement.** Registering the
+  two new resolutions under `VEC` as well as `FP` does not add a duplicate of
+  a vector resolution, it adds a *different claim*: that a vector register
+  holding several elements is one element of the requirement. Measured, with
+  them under both types: Neon's gemm 704 -> 2332 candidates, RVV's 1120 ->
+  1540, SVE's 842 -> 1258, SME's 19454 -> 19870, the AVX2/512 ones +104 each,
+  and every `pack` case +1 - a family of kernels whose accumulator is one
+  element and whose store writes the whole register. Under `FP` alone every
+  candidate set is **identical** (six generators, gemm and pack), because a
+  scalar-reduced operand is still typed `VEC` today and nothing looks up an
+  `FP` key. `tests/support/test_scalar_resolutions.py` pins both facts.
 - **The emitted kernel is C-string fragments until something joins them.**
   `asmwrap` in file mode produces quoted, escaped lines; a probe that writes
   them straight into a `.S` gets `.text\n\t"` as a pseudo-op. `literal_eval`
@@ -185,14 +202,16 @@ Both are done, in asmgen:
 | 1 | asmgen: drop `jvzero` (base, neon, sve, avx, rvv, the test table, `test_rvv071`) | asmgen suite, golden entries removed | done |
 | 2 | asmgen: `riscv64` concrete (is_vla, sizes, constructors, cpuinfo, flags), the four members wired | asmgen suite, `test_asm_implemented`'s `riscv64` entry | done |
 | 3 | asmgen: FP `fma`/`mul`/`add` in `riscv64/optransform/` + `tests/optransform/riscv64/` | asmgen suite | done |
-| 4 | ukrgen: `scalar_direct` and the resident `SCALAR_REDUCE` resolution | full suite, goldens all `same` (should be inert) | todo |
+| 4 | ukrgen: `scalar_direct` and the resident `SCALAR_REDUCE` resolution, both under `FP` | full suite, goldens all `same` (should be inert) - candidate sets identical on six generators, 21/21 goldens, 519 tests | done |
 | 5 | ukrgen: rtype from the transformed operand, `scalar_reduce.py` per-rtype | full suite, golden `diff`, qemu on the `fma_vf` kernels | todo |
 | 6 | ukrgen: `isa_map` entry, `gemm_fma_scalar` preset, `ukrconfig/riscv64/{dgemm,sgemm}.yaml` | kernels build, qemu correctness against a reference | todo |
 
-Steps 1-3 are in asmgen; 4-6 are ukrgen's and not started. With 1-3 in, the
-real `riscv64()` generator drives the measured kernel end to end: the flow
+Steps 1-4 are in (asmgen's three and ukrgen's registry step); 5-6 are ukrgen's
+and not started. With 1-4 in, the real `riscv64()` generator drives the
+measured kernel end to end once step 5's type rule is in place: the flow
 emits it, it assembles with `-march=rv64gc`, and the five alpha/beta cases pass
-under qemu - so nothing further is missing on the generator's side.
+under qemu - so nothing further is missing on the generator's side, and
+nothing is missing from the registry.
 
 ## The reference config
 
