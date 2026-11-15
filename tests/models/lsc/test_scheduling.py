@@ -10,6 +10,7 @@ from ukrgen.flow.ukr_context import ukr_context
 from ukrgen.flow.stage_engine import stage_engine
 from ukrgen.flow.stages.setup import setup_stage
 from ukrgen.flow.stages.datatype import datatype_stage
+from ukrgen.flow.stages.storage import storage_stage
 from ukrgen.flow.stages.layout import layout_stage
 from ukrgen.flow.stages.solve import solve_stage
 from ukrgen.flow.stages.dimension import dimension_stage
@@ -28,7 +29,7 @@ from ukrgen.schedulers.list_scheduler import list_scheduler, dependencies
 
 from tests.specializers.test_signature import assembles
 
-STAGES = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage,
+STAGES = [setup_stage, storage_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage,
           model_stage, pre_specialize_irmod_stage, isa_specialize_stage, loop_stage, address_stage,
           post_specialize_irmod_stage, schedule_stage, emit_stage]
 

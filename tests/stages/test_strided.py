@@ -13,6 +13,7 @@ from ukrgen.flow.ukr_context import ukr_context
 from ukrgen.flow.stage_engine import stage_engine
 from ukrgen.flow.stages.setup import setup_stage
 from ukrgen.flow.stages.datatype import datatype_stage
+from ukrgen.flow.stages.storage import storage_stage
 from ukrgen.flow.stages.layout import layout_stage
 from ukrgen.flow.stages.solve import solve_stage, check_part_chain, to_io
 from ukrgen.flow.stages.stage import stage_error
@@ -20,7 +21,7 @@ from ukrgen.flow.stages.ukr import gemm_composition
 from ukrgen.support.data_move import dm_location as dml, dm_step, dm_repeat, orig_ref
 from ukrgen.support.dm_solver import repeat_fits
 
-STAGES = [setup_stage, datatype_stage, layout_stage, solve_stage]
+STAGES = [setup_stage, storage_stage, datatype_stage, layout_stage, solve_stage]
 
 
 def layout(indices, contiguous):

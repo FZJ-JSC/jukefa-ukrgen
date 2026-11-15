@@ -10,8 +10,17 @@ import tests.specializers.test_signature as t
 FOPA = "fopa(A.VEC:direct, B.VEC:direct, C.TILE){i=m, j=n, k*=1}"
 
 
+def upto(name: str) -> int:
+    """
+    How many of the test pipeline's stages run to reach one, it included
+    :param name: the stage's class name
+    :return: the slice to take
+    """
+    return [s.__name__ for s in t.STAGES].index(name) + 1
+
+
 def listing(**extra):
-    saved, t.STAGES = t.STAGES, t.STAGES[:5]
+    saved, t.STAGES = t.STAGES, t.STAGES[:upto("solve_stage")]
     try:
         ctx, res = t.mm(isa="sme", **extra, **{"list-tileop-candidates": True, "mm-tileop": None})
     finally:
@@ -35,7 +44,7 @@ class test_sme(unittest.TestCase):
     def test_vector_ops_on_a_tile(self):
         # gemm with AB in a tile: alpha's fmul stays on the tile, each slice
         # moved through a vector (slice_vec) - AB and C tiles in the encoding
-        saved, t.STAGES = t.STAGES, t.STAGES[:5]
+        saved, t.STAGES = t.STAGES, t.STAGES[:upto("solve_stage")]
         try:
             ctx, res = t.mm(isa="sme", ukr="gemm", **{
                 "sme-F64F64": "on", "AB-data-type": "FP64", "list-tileop-candidates": True,
@@ -61,7 +70,7 @@ class test_split(unittest.TestCase):
     FOPA = "fopa(A.VEC:direct, B.VEC:direct, C.TILE){i=m, j=n, k*=1}"
 
     def stos(self, **extra):
-        saved, t.STAGES = t.STAGES, t.STAGES[:6]
+        saved, t.STAGES = t.STAGES, t.STAGES[:upto("sto_stage")]
         try:
             ctx, res = t.mm(isa="sme", **{"sme-F64F64": "on", "C-layout": ["n:c", "m:s"],
                                           "print-stos": True, **extra})

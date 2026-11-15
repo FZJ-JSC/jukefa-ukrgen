@@ -8,6 +8,7 @@ from ukrgen.flow.ukr_context import ukr_context
 from ukrgen.flow.stage_engine import stage_engine
 from ukrgen.flow.stages.setup import setup_stage
 from ukrgen.flow.stages.datatype import datatype_stage
+from ukrgen.flow.stages.storage import storage_stage
 from ukrgen.flow.stages.solve import solve_stage
 from ukrgen.flow.stages.dimension import dimension_stage
 from ukrgen.flow.stages.sto import sto_stage, fmt_dim
@@ -15,7 +16,7 @@ from ukrgen.flow.stages.stage import stage_error
 
 from ukrgen.flow.stages.layout import layout_stage
 
-STAGES = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage]
+STAGES = [setup_stage, storage_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage]
 
 
 def run(params):

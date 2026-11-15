@@ -15,6 +15,7 @@ from ...flow.stage_engine import stage_engine
 from ...flow.ukr_context import ukr_context
 from ...flow.stages.setup import setup_stage
 from ...flow.stages.datatype import datatype_stage
+from ...flow.stages.storage import storage_stage
 from ...flow.stages.layout import layout_stage
 from ...flow.stages.solve import solve_stage
 from ...flow.stages.dimension import dimension_stage
@@ -30,7 +31,7 @@ from ...models.lsc.addressing import offpoly
 from ...models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 #: the flow as the command line runs it
-PIPELINE = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage,
+PIPELINE = [setup_stage, storage_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage,
             model_stage, pre_specialize_irmod_stage, isa_specialize_stage, loop_stage, address_stage,
             post_specialize_irmod_stage, schedule_stage, emit_stage]
 

@@ -15,6 +15,7 @@ from ukrgen.flow.ukr_context import ukr_context
 from ukrgen.flow.stage_engine import stage_engine
 from ukrgen.flow.stages.setup import setup_stage
 from ukrgen.flow.stages.datatype import datatype_stage
+from ukrgen.flow.stages.storage import storage_stage
 from ukrgen.flow.stages.layout import layout_stage
 from ukrgen.flow.stages.solve import solve_stage
 from ukrgen.flow.stages.dimension import dimension_stage
@@ -26,7 +27,7 @@ from ukrgen.flow.stages.loops import loop_stage
 from ukrgen.flow.stages.emit import emit_stage
 from ukrgen.models.lsc.operations import lsc_load, lsc_store, lsc_addr_compute
 
-STAGES = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage,
+STAGES = [setup_stage, storage_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage,
           model_stage, isa_specialize_stage, loop_stage, address_stage, emit_stage]
 
 
