@@ -384,6 +384,20 @@ class set_mask_alltrue(lsc_set_payload):
 
 
 @dataclass(frozen=True)
+class set_vl_elements(lsc_set_payload):
+    """
+    The machine's vector length in elements, once per program: what a walk by
+    whole vectors, a loop counting blocks of them and a mask of their lanes
+    all read. The ISA reads it its own way - RVV's vsetvli writes the count
+    into a register the setup keeps, SVE's and SME's setups keep none and read
+    cntd - so the emitter picks the form and the value names the register
+    :param dt: the element type its count is in (a mask's lanes, a walk's
+               units)
+    """
+    dt : adt
+
+
+@dataclass(frozen=True)
 class set_mask_tail(lsc_set_payload):
     """
     A loop's last accesses' mask: the elements it has left, a mask register

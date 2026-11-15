@@ -10,6 +10,7 @@ emitters/signature.py)
 
 from . import asmops
 from asmgen.asmblocks.op.opset import opset_modifier
+from asmgen.asmblocks.op import register_type as rgt
 from asmgen.registers import adt_size
 
 from ..models.lsc.addressing import offpoly
@@ -177,6 +178,10 @@ class offset_planner:
         if self.e.vector_length_kept:
             return self.e.gen.isa_setup().vector_length_register(rt=self.e.rt)
         key = f"VL in {adt_size(dt)}-byte elements"
+        if key in self.e.values:
+            # the IR's value (models/lsc/operations.set_vl_elements): its
+            # register read once, named here
+            return self.e.values[key]
         if key not in self.e.strides_in:
             self.e.recipes.append(("vl_elements", (dt,), self.e.regions_started))
             reg = self.e.greg()
@@ -186,6 +191,11 @@ class offset_planner:
                 raise specialization_error(f"reading the vector length: {why}")
             self.e.late_setup.append(self.e.gen.set(**call))
             self.e.strides_in[key] = reg
+            if key in self.e.value_names:
+                # the set op's value: read here, so that the passes after it
+                # (liveness, the renamer) find it by name; recording the
+                # register as the value's is the next step, with the reads
+                self.e.values[key] = reg
         return self.e.strides_in[key]
 
     def offset_value(self, amount: offpoly, comp: str):

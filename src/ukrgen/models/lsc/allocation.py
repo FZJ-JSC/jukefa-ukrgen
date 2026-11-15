@@ -619,7 +619,7 @@ def _pins(problem : allocation_problem) -> None:
     """
     for key in problem.values:
         name = key[0]
-        if name.startswith(("value:('stride'", "value:('vl_")):
+        if name.startswith(("value:('stride'", "value:('vl_", "VL in ")):
             problem.pinned.add(key)
 
 

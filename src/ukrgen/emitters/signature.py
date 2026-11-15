@@ -36,7 +36,7 @@ from ..models.lsc.ir import ir_program, ir_block, BASE_REGISTER, is_start_block
 from ..specializers.addresses import address_speller
 from ..models.lsc.operations import (lsc_state,
     lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop, lsc_permute,
-    lsc_value_op, lsc_set, set_mask_tail)
+    lsc_value_op, lsc_set, set_mask_tail, set_vl_elements)
 from ..models.lsc.classes import TAGS
 from ..models.lsc.index import lsc_reg_index
 
@@ -80,6 +80,10 @@ class signature_emitter:
         # setup instructions found while emitting: vector length in bytes,
         # constant strides
         self.late_setup: list[str] = []
+        #: the values the IR sets (lsc_set): their registers recorded under
+        #: these names where the ISA reads them (the vector length, in late
+        #: setup) - docs/REGISTER_ALLOCATION.md, the state registers
+        self.value_names: set[str] = set()
         #: setup values placed after the dispatch's loads (placed_at_dispatch):
         #: one of their inputs a stack parameter deferred there
         self.dispatch_setup: list[str] = []
@@ -779,6 +783,13 @@ class signature_emitter:
         :return: the instructions, in order
         """
         payload = op.payload
+        if isinstance(payload, set_vl_elements):
+            # the IR names this value: the read records its register
+            self.value_names.add(op.indices[0].component)
+            # the count is read where a walk, a loop or a mask first needs it
+            # (offsets.vl_elements, in late setup): the value here names the
+            # register, the read records it
+            return []
         if isinstance(payload, set_mask_tail):
             index = payload.count[5:-1] if payload.count.startswith("tail(") else None
             lines = self.tail_mask(index, payload.count, payload.dt) if index is not None \

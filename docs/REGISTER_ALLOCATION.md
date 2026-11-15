@@ -778,7 +778,7 @@ machinery reads are not:
 
 | register | where it is made | should be |
 |---|---|---|
-| **VL in elements** (`offsets.vl_elements`) | SVE/SME: `self.greg()`, cached in `strides_in`, emitted in `late_setup`; RVV: the ISA setup's aliased `vlen` greg, filled by `vsetvli` | an `lsc_set` in the entry (`set(dreg, VLEN)` on SVE/SME; RVV bound to the setup's register and emitting nothing), per element size, pinned - it is a B1 pin the analysis cannot see today |
+| **VL in elements** (`offsets.vl_elements`) | **in the IR now**: `irmod/lsc/vlen.py` names it (`lsc_set("VL in <e>-byte elements", 0, GP, set_vl_elements(dt))`) in the entry for each element type a vector-length step is taken at; its *register* is still the emitter's (SVE/SME `self.greg()` in `late_setup`, RVV's setup alias) | the register becomes the value's (`alloc.bind`), and its consumers - the walks, the loop counts, the masks - read it as a slot, so liveness and the allocation own it. Today the set names the value and `vl_elements` returns that name's register, so nothing moves: 27 goldens byte-identical |
 | the all-true predicate (`isa_setup.all_true_predicate`) | the ISA object hands out a register | the same `lsc_set` pattern (`ptrue`), like the tail's mask |
 | `avl` (RVV's preferred length) | the setup's alias | a parameter value in the IR |
 | `tmp` (`loop_counts`) | `self.greg()`, freed at once | scratch, deliberately unnamed |
@@ -867,11 +867,14 @@ The order, approved, each item its own commit:
    kernels. Nine goldens re-recorded (six SME, three SMESVE), the SME gemm runs
    correct under qemu at SVL 256 and 512 both before and after (the numerical
    tests never changed - only the columns' shape assertions did).
-8. **The state registers into the IR**: the element vector length first (an
-   entry `lsc_set`, RVV bound to its setup's `vlen`), then the all-true
-   predicate, then `avl` as a parameter value - the last holders of the
-   `isaquirks()` era, and the pin the analysis cannot see (see the section
-   above). Deliberately not moved: `loop_counts`' `tmp`.
+8. **The state registers into the IR** - the element vector length is **in**:
+   `lsc_set("VL in <e>-byte elements", …)` in the entry (`irmod/lsc/vlen.py`),
+   `set_vl_elements` as its payload, `set_op` recognising it and
+   `offsets.vl_elements` returning that value's register. What remains is the
+   register *being* the value's: its consumers read it as a slot (or the
+   allocation binds it), which is what makes it a B1 pin the analysis counts
+   rather than a register the emitter keeps; then the all-true predicate, then
+   `avl` as a parameter value. Deliberately not moved: `loop_counts`' `tmp`.
 9. **The n-lane mask** for the columns left of a vector-length block: the
    packing kernels count `n` in blocks, and a combined SME+SVE kernel's `cdim`
    can be `k*VL + j`, so the partial block needs a predicate on the `n` lanes -
