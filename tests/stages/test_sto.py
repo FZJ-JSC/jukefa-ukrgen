@@ -102,8 +102,13 @@ class test_sto_stage(unittest.TestCase):
                                   "fma(A.VEC:direct, B.VEC:bc_scalar, AB.VEC){i=m, n=1, k*=1}"]}))
 
     def test_pack(self):
+        # named, not by index: the candidates a new resolution adds sort first,
+        # and this test is about the tiling, not about which one is offered
         ctx, res = run({"isa": "sve", "ukr": "pack", "X-data-type": "FP64",
-                        "Y-data-type": "FP64", "pack-tileop": ["0"], "copy-tileop": ["0"], "store-tileop": ["0"],
+                        "Y-data-type": "FP64",
+                        "pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+                        "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
+                        "store-tileop": ["Y.VEC:direct"],
                         "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"],
                         "m": "3", "n": "2"})
         self.assertTrue(res.completed)

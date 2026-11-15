@@ -21,7 +21,14 @@ from ukrgen.support.encoding import encode_all
 from ukrgen.support.op import op_support_builder
 
 COPY = node(op.MOVE, ref(name="Y", indices=("m", "n")), ref(name="X", indices=("m", "n")))
-VEC_COPIES = {"move(X.VEC:direct, Y.VEC){i=m, n=1}", "move(X.VEC:direct, Y.VEC){m=1, i=n}"}
+VEC_COPIES = {
+    # the plain copy, X's vectors along either index
+    "move(X.VEC:direct, Y.VEC){i=m, n=1}",
+    "move(X.VEC:direct, Y.VEC){m=1, i=n}",
+    # one element at a time, X in a floating-point register and Y left in one:
+    # a scalar-reduced operand's direct entry (scalar_reduce_provider)
+    "move(X.FP:scalar_direct, Y.FP){m=1, n=1}",
+}
 TILE_COPIES = {"move(X.TILE:slices_row, Y.TILE){i=m, j=n}", "move(X.TILE:slices_col, Y.TILE){i=m, j=n}"}
 
 

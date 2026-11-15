@@ -89,34 +89,44 @@ Both are done, in asmgen:
    registry's built-in "resident" entry (`data_move.py:279`) covers
    `tfs` `{}` and `{NONE}` only. The `mul;add` chain resolved one candidate at
    its first step and **0** at its second - the accumulator.
-3. **The register type came from the untransformed operand.** `deduce_operand_rtype`
-   is called with `solution_step.hw_ast`, so a `SCALAR_REDUCE`d operand is
-   typed `VEC` - the shared hardware AST says `(i,)` whatever the instruction
-   is - and every resolution then narrowed the compute signatures to `VEC`
-   operands, so no scalar signature could ever be chosen.
+3. **The lookup considered one register type.** `deduce_operand_rtype` reads
+   the hardware operand's shape, so a `SCALAR_REDUCE`d operand is typed `VEC`
+   - which is right for the operand's shape and wrong as the *only* type the
+   instruction might take it in: the key decided which resolutions were even
+   seen, and only the `VEC` ones were.
 
 ## The decisions
 
-1. **A scalar-reduced operand's register type is the transformed operand's**
-   (`resolve_ast_solution` deduces from `logical_ast`). 0 dims -> `FP`/`GP`.
-   The consequence is that `SCALAR_REDUCE` keys are looked up under `FP`, so
-   the resolutions in `scalar_reduce.py` register for each rtype instead of
-   `VEC` only. Measured on every ISA's candidate sets, before and after: gemm
-   identical for neon, sve, sme, avx256 and avx512; rvv's gemm grows
-   1120 -> 1336, additions only, no encoding removed.
+1. **A scalar-reduced operand is looked up under every register type an
+   element arrives in.** `SCALAR_REDUCE` says the requirement's operand is one
+   element; it says nothing about the register the instruction takes it in - a
+   scalar instruction takes an FP register, a vector-scalar form takes an FP
+   register, a broadcast or a lane access takes a vector register and uses one
+   element of it. So `deduce_operand_rtype` keeps reading the *untransformed*
+   hardware operand (VEC for one index, TILE for two), the keys such an
+   operand's resolutions are looked up under are `key_rtypes()`'s - its own,
+   plus `ELEMENT_RTYPES`, VEC and FP - and every resolution is filed under the
+   type its own *steps* take the operand in (`get_op_rtype_req`):
+   `use_scalar` and `scalar_direct` under FP, the broadcasts and the lane
+   accesses under VEC. Measured on every ISA: no encoding disappears anywhere,
+   gemm unchanged on Neon, SVE, SME, AVX2 and AVX512; RVV's gemm +12 and
+   `pack` +1 on every generator - the entries the previous step registered,
+   now reachable.
 2. **`scalar_direct`**, the VF-free twin of `use_scalar`: an IN step loading
    `orig_ref()` at `rgt.FP`, an OUT step storing from it, no operation
-   modifiers. Registered under `FP` only, because that is the type the rule
-   below leaves a scalar-reduced operand with; under `VEC` it would be a
-   second, VF-free way to say what `use_scalar` says, and no instruction form
-   in the tree needs it (a vector operation's scalar operand is either a VF
-   form or a broadcast).
+   modifiers, and it forbids what a plain register operand is not
+   (`NOT_A_PLAIN_REGISTER`: `VF`, `BCAST`, the lane and block selections with
+   their shifts and rotations, `ROW`, `COL`). Its steps take an FP register, so
+   by the filing rule above it is an `FP`-keyed entry; the `VEC` key's entries
+   for a one-element operand are the broadcasts and the lane accesses, which
+   read one element out of a register they load whole, and this is neither.
 3. **A resident resolution for `SCALAR_REDUCE` under `FP`**, beside the
    registry's built-in `{}`/`{NONE}` ones: a value already in a floating-point
-   register moves nothing. Under `VEC` it would say something else - that a
-   whole vector register is one element of the requirement, which is an
-   accumulator a vector operation fills lane by lane while the store writes
-   every lane (trap below).
+   register moves nothing. It has no steps, so its key's type *is* the
+   statement - and no `VEC`-keyed twin is registered: that would say a whole
+   vector register is one element of the requirement, a family of 1-element
+   microtiles built from vector instructions (Neon's gemm 704 -> 2332
+   candidates; trap below).
 4. **`simd_size` is 1 and `max_vregs`/`max_tregs` are 0, not raising.**
    Nothing in ukrgen reads `simd_size` as a VLA test - `is_vla` is a separate
    query - and every use is `// adt_size` (lanes) or `* simd_size` (bytes).
@@ -166,6 +176,44 @@ Both are done, in asmgen:
   resolution cannot change an existing kernel's choice - but
   `--list-tileop-candidates` output changes and any future "first candidate"
   rule would see it.
+- **A resolution that requires nothing of the modifiers matches every form
+  with a slot of its type.** `scalar_direct`'s step names an FP register, and
+  with no requirement on the shape it matched RVV's `vf` signatures - whose
+  scalar operand *is* an FP register, with `VF` on its shape - and offered 228
+  candidates on RVV's gemm that are vector instructions, the VF forms reached
+  without naming VF. Nothing false was said (the steps are the code) and no
+  config chose one, but a candidate list is a claim about what an ISA can do.
+  Forbidding `NOT_A_PLAIN_REGISTER` left +1 on every generator's `pack` copy
+  and +12 on RVV, and nothing else changed anywhere.
+- **A key's register type is what the instruction takes, not what the
+  requirement has.** The first attempt at this step deduced the type from the
+  transformed operand, which makes every `SCALAR_REDUCE` key `FP` - and 8 of
+  the provider's 11 entries take a *vector* register (`bc_load`, `bc_lane`,
+  `bc_lanes`, `bc_scalar`, `bc_block`, `use_lane`, `scalar_to_lane`,
+  `lane_to_scalar`), so they were silently relabelled. It worked: a
+  resolution's key type is never consulted when the resolution has steps, so
+  only the no-step (resident) entry showed a difference, and the truth came
+  out of the registry rather than the tests. The rule that holds is
+  `get_op_rtype_req(steps)`, per resolution, with a one-element operand looked
+  up under every type it can arrive in - and deducing the type from the
+  transformations *without* the matching re-keying empties the registry for
+  vector kernels outright (Neon's gemm 704 -> 8 candidates, RVV's `pack`
+  92 -> 27). `tests/support/test_scalar_resolutions.py` asserts the filing
+  rule resolution by resolution.
+- **The type rule and the key it looks up are one change.** Taking the
+  register type from the transformed operand without moving the provider's
+  keys with it does not change what is chosen, it empties the registry for
+  every vector kernel: Neon's gemm 704 -> 8 candidates, RVV's `pack` 92 -> 27,
+  because the keys became `FP` and every resolution was still filed under
+  `VEC`. Landing the two together is what makes the change a re-keying -
+  five of the six generators' gemm sets come out identical.
+- **A candidate's index is not a name.** `tests/stages/test_sto.py` picked its
+  pack chain by `"0"`, the first candidate in sorted order; the scalar copy
+  sorts before the vector one (`X.FP` < `X.VEC`), so the test began building a
+  store from an FP register for a pack that left its result in a vector - and
+  `check_part_chain` said so: "store reads Y from FP, but pack leaves it in
+  VEC". Tests name an encoding; only a person reading
+  `--list-tileop-candidates` should use the numbers.
 - **The register type a key carries is the whole statement.** Registering the
   two new resolutions under `VEC` as well as `FP` does not add a duplicate of
   a vector resolution, it adds a *different claim*: that a vector register
@@ -203,15 +251,13 @@ Both are done, in asmgen:
 | 2 | asmgen: `riscv64` concrete (is_vla, sizes, constructors, cpuinfo, flags), the four members wired | asmgen suite, `test_asm_implemented`'s `riscv64` entry | done |
 | 3 | asmgen: FP `fma`/`mul`/`add` in `riscv64/optransform/` + `tests/optransform/riscv64/` | asmgen suite | done |
 | 4 | ukrgen: `scalar_direct` and the resident `SCALAR_REDUCE` resolution, both under `FP` | full suite, goldens all `same` (should be inert) - candidate sets identical on six generators, 21/21 goldens, 519 tests | done |
-| 5 | ukrgen: rtype from the transformed operand, `scalar_reduce.py` per-rtype | full suite, golden `diff`, qemu on the `fma_vf` kernels | todo |
+| 5 | ukrgen: a one-element operand looked up under every register type it arrives in, and the provider filed by its steps' type | full suite, golden `diff` - 21/21 `same`, 522 tests, no encoding removed anywhere, RVV +12, `pack` +1 | done |
 | 6 | ukrgen: `isa_map` entry, `gemm_fma_scalar` preset, `ukrconfig/riscv64/{dgemm,sgemm}.yaml` | kernels build, qemu correctness against a reference | todo |
 
-Steps 1-4 are in (asmgen's three and ukrgen's registry step); 5-6 are ukrgen's
-and not started. With 1-4 in, the real `riscv64()` generator drives the
-measured kernel end to end once step 5's type rule is in place: the flow
-emits it, it assembles with `-march=rv64gc`, and the five alpha/beta cases pass
-under qemu - so nothing further is missing on the generator's side, and
-nothing is missing from the registry.
+Steps 1-5 are in asmgen and ukrgen; 6 is left. With them, the tree as it stands
+drives asmgen's `riscv64` generator to the measured kernel with no patch at all:
+the flow emits it, it assembles with `-march=rv64gc`, and the five alpha/beta
+cases pass under `qemu-riscv64`.
 
 ## The reference config
 

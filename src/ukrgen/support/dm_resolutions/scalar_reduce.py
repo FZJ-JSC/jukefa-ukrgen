@@ -1,6 +1,17 @@
 from dataclasses import replace
 """
 Resolutions for SCALAR_REDUCE transformation
+
+A scalar-reduced operand is one element of its requirement's - whatever the
+transformation is applied to - so the key these are registered under carries
+the operand's *floating-point* register type, not VEC: the type a
+scalar-reduced operand is left with (dm_solver's deduce_operand_rtype, which
+reads the transformed AST). What the operation then does with the element is
+what these resolutions differ in: take it in a floating-point register
+(use_scalar, a vector-scalar instruction's form; scalar_direct, a scalar
+instruction's), build a vector from it (bc_scalar, bc_load, bc_lane,
+bc_lanes, bc_block, scalar_to_lane) or take it out of one for a store
+(use_lane, lane_to_scalar).
 """
 
 
@@ -27,7 +38,8 @@ from ..data_move import (
 
 class scalar_reduce_provider(resolution_provider):
     """
-    Provides resolutions for a SCALAR_REDUCE vector operand
+    Provides resolutions for a SCALAR_REDUCE operand: one element, in whichever
+    register type the instruction that consumes it takes
     """
     def register_resolutions(self, registry : resolution_registry):
         before = {key: set(registry.tfr_tags.get(key, set())) for key in registry.tfr_map}
@@ -51,6 +63,21 @@ class scalar_reduce_provider(resolution_provider):
     # set of lanes is fused into one load by an irmod where they are contiguous
     WHOLE_VECTOR_IN = frozenset({"bc_lane", "bc_block"})
 
+    #: What a plain register operand is not. A scalar instruction takes the
+    #: register itself, so any form that names part of one - a lane or a block
+    #: of it, a broadcast into it, a tile's row or column, a vector-scalar
+    #: form - is another resolution's business: VF's is use_scalar, a lane's is
+    #: use_lane or bc_*, a slice's the tile ones. Requiring nothing of the
+    #: modifiers instead let scalar_direct match RVV's vf forms, whose scalar
+    #: operand is an FP register with VF on its shape: 228 candidates on RVV's
+    #: gemm that say "a vector instruction" and no scalar instruction at all.
+    NOT_A_PLAIN_REGISTER = frozenset({
+        omod.VF, omod.BCAST,
+        omod.ILANE, omod.GLANE, omod.BLOCKLANE, omod.BLOCK, omod.IBLOCK,
+        omod.ILANESHIFT, omod.ILANEROT, omod.IBLOCKSHIFT, omod.IBLOCKROT,
+        omod.ROW, omod.COL,
+    })
+
     def _register(self, registry : resolution_registry):
 
         # example RVV:
@@ -58,7 +85,7 @@ class scalar_reduce_provider(resolution_provider):
         #  vfmacc.vf v0, f0, v1
         registry.add_resolution(
             key=tfr_key(tfs=frozenset({tf.SCALAR_REDUCE}),
-                        rtype=rgt.VEC, ddir=dmd.IN),
+                        rtype=rgt.FP, ddir=dmd.IN),
             rsln=tr(
                 unique_tag='use_scalar',
                 opd_mod_reqs={omod.VF},
@@ -80,6 +107,7 @@ class scalar_reduce_provider(resolution_provider):
                         rtype=rgt.FP, ddir=dmd.IN),
             rsln=tr(
                 unique_tag='scalar_direct',
+                forbidden_opd_mods=self.NOT_A_PLAIN_REGISTER,
                 steps=[
                     dm_step(op="load", dest=orig_ref(), dest_rtype=rgt.FP)
                     ]))
@@ -213,7 +241,7 @@ class scalar_reduce_provider(resolution_provider):
         # if the output is a scalar we can just store a scalar?
         registry.add_resolution(
             key=tfr_key(tfs=frozenset({tf.SCALAR_REDUCE}),
-                        rtype=rgt.VEC, ddir=dmd.OUT),
+                        rtype=rgt.FP, ddir=dmd.OUT),
             rsln = tr(
                 unique_tag='use_scalar',
                 opd_mod_reqs={omod.VF},
@@ -229,6 +257,7 @@ class scalar_reduce_provider(resolution_provider):
                         rtype=rgt.FP, ddir=dmd.OUT),
             rsln=tr(
                 unique_tag='scalar_direct',
+                forbidden_opd_mods=self.NOT_A_PLAIN_REGISTER,
                 steps=[
                     dm_step(op="store", src=[orig_ref()], src_rtypes=[rgt.FP])
                     ]))
