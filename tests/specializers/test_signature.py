@@ -329,9 +329,14 @@ class test_signature_specializer(unittest.TestCase):
                 self.assertTrue(ok, err)
 
     def test_print_asm(self):
+        # the kernel as a file holds it: a framed, C-callable function, its
+        # symbol --symbol's (the blocks' commented listing is the debug log's)
         _, res = mm(**{"print-asm": True})
         self.assertFalse(res.completed)
-        self.assertIn("// block mm, loop over k", res.output)
+        self.assertIn(".global ukr", res.output)
+        self.assertIn(".size ukr, .-ukr", res.output)
+        _, named = mm(**{"print-asm": True, "symbol": "bli_dgemm_test"})
+        self.assertIn(".global bli_dgemm_test", named.output)
 
 
 if __name__ == "__main__":

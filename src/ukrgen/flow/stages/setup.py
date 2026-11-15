@@ -30,14 +30,12 @@ class setup_stage(stage):
                 description="Microkernel to generate",
                 choices=list(ukr_composition_map.keys()),
                 required=False)
-        self.params["C-storage"] = stage_param(
-                value=None, required=False, multi=True,
-                description="C's storages (row, col, any) as branches of the epilogue, picked "
-                            "at run time by C's strides; the last the default, its layout "
-                            "--C-layout's")
-
-        # the other components' storages (C's above): any composition's
-        for name in sorted({d.name for comp in ukr_composition_map.values() for d in comp.get_components()} - {"C"}):
+        # every composition's components' storages: the ukr isn't known when
+        # the first stage declares its options, so the union is what can be
+        # offered - each name the compositions' own, none hardcoded
+        names = sorted({d.name for comp in ukr_composition_map.values()
+                        for d in comp.get_components()})
+        for name in names:
             self.params[f"{name}-storage"] = stage_param(
                     value=None, required=False, multi=True,
                     description=f"{name}'s storages (row, col, any) as branches of the epilogue, picked at "

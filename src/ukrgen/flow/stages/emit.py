@@ -30,6 +30,10 @@ class emit_stage(stage):
         self.params["print-asm"] = stage_param(
                 value=False, default=False, flag=True, required=False,
                 description="Print the emitted assembly and exit")
+        self.params["symbol"] = stage_param(
+                value="ukr", default="ukr", required=False,
+                description="The name of the function --print-asm prints the kernel in "
+                            "(the emitted assembly framed as a C-callable function)")
         self.params["loop-align"] = stage_param(
                 value=None, required=False,
                 description="Loops' heads on a boundary of this many bytes (a power of two): "
@@ -48,9 +52,13 @@ class emit_stage(stage):
                                     for p in self.context.programs]
         except specialization_error as err:
             raise stage_error(f"emitting: {err}") from err
-        text = "\n\n".join(p.render() for p in self.context.emitted)
         if self.params["print-asm"].value:
-            raise early_exit(text)
+            # the kernel as a file holds it: each program a C-callable
+            # function (fngen frames it), not the blocks' commented listing
+            symbol = self.params["symbol"].value or "ukr"
+            raise early_exit("\n\n".join("\n".join(p.function(symbol))
+                                          for p in self.context.emitted))
+        text = "\n\n".join(p.render() for p in self.context.emitted)
         for line in text.splitlines():
             self.debug(line)
         self.context.params.update(self.params)
