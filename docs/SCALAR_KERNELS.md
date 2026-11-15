@@ -262,7 +262,7 @@ Both are done, in asmgen:
 | 4 | ukrgen: `scalar_direct` and the resident `SCALAR_REDUCE` resolution, both under `FP` | full suite, goldens all `same` (should be inert) - candidate sets identical on six generators, 21/21 goldens, 519 tests | done |
 | 5 | ukrgen: a one-element operand looked up under every register type it arrives in, and the provider filed by its steps' type | full suite, golden `diff` - 21/21 `same`, 522 tests, no encoding removed anywhere, RVV +12, `pack` +1 | done |
 | 6 | ukrgen: `isa_map` entry, `gemm_fma_scalar` preset, `ukrconfig/riscv64/{dgemm,sgemm}.yaml` | kernels build, qemu correctness - 8x3 and 3x8, FP32 and FP64, 16 emulated runs all correct; goldens gain four files, the other 21 `same` | done |
-| 7 | ukrgen: `packm_scalar` preset, `ukrconfig/riscv64/{dpackm,spackm}.yaml`, one `kind: scalar` case | five cdim sizes built each, 10 emulated runs correct (both kappa branches); goldens gain two files | done |
+| 7 | ukrgen: `packm_scalar` preset, `ukrconfig/riscv64/{dpackm,spackm}.yaml`, one `kind: scalar` case, `min-inflight: 8` | cdim 1..8 built each, the panel loop unrolled to 8, 9, 10, 12 or 14 elements in flight; 80 emulated runs correct over n = 1, 3, 7, 8, 11 and both kappa branches; goldens gain two files | done |
 | 8 | ukrgen: a dual-issue model and three distances on the reference configs | the scheduler reports its distances met in the k loop (27 cycles for 37 instructions) and the expected shortfall in the epilogue; a reordering with every count unchanged, and the emulated runs still correct | done |
 
 Steps 1-8 are in. The reference configurations build, assemble and compute
@@ -284,6 +284,11 @@ FMAs a k step, A's element loaded once and reused across the three columns
 32 FP registers, which is what makes 8x3 the largest tile this shape holds -
 the same arithmetic that sizes the vector configurations' 8x3v. The `nm`
 family is the transpose (3x8), the shape BLIS's other blocksize needs.
+
+The golden set records each family at its **first** sizes, so `mn` lands as
+`riscv64-{d,s}gemm-mn-8x3` and `nm` as `...-nm-3x8` without either being
+nominated: nothing in the config decides what is recorded, and the two families
+are what give the pair.
 
 `gemm_fma_scalar` is one variant fixing both extents - there is no index for
 vectors to run along, so it cannot use the `V`/`S` operand axes the vector
@@ -317,13 +322,18 @@ because its C is one element.
 ## The reference packing config
 
 `ukrconfig/riscv64/{dpackm,spackm}.yaml`, the `packm_scalar` preset, one case
-and every cdim size built: `m: [1, 2, 4, 8, 16]` - element counts, one `fld`
-and one `fsd` (and an `fmul.d` for the scaled branch) per element. The
+and every cdim a reference `mr` or `nr` can be: `m: 1..8` - element counts, one
+`fld` and one `fsd` (and an `fmul.d` for the scaled branch) per element. The
+whole range rather than powers of two, because BLIS asks a packm for exactly
+`cdim` rows and anything a case doesn't cover is the reference's: with a kernel
+per cdim from 1 to 8, every panel a reference gemm of either orientation packs
+goes in one pass. The
 composition's own branch gives the two kernels BLIS needs from one program:
 `kappa == 1` is the copy (`fld`/`fsd`), anything else the scaled pack
 (`fld`/`fmul.d`/`fsd`), selected at run time by `feq.d` against 1.0.
 
-        kind: scalar   m: [1, 2, 4, 8, 16]
+        min-inflight: 8
+        kind: scalar   m: 1..8
         X-layout: ['m:c', 'n:s']   Y-layout: ['m:c', 'n:s']
         sched-cycle-slots: "2:sl,f|i"
         dispatch: [scalar]
@@ -345,11 +355,24 @@ requirement - because those are all keyed on the kind. Its `mr` is a fixed
 element count, which `split_size`/`c_expr` already handle (AVX-512's fixed 16 is
 the precedent).
 
-Measured: 53, 63, 83, 123 and 255 instructions for cdim 1, 2, 4, 8, 16 (the same
-in FP32 and FP64), assembled with `-march=rv64gc` and correct under
-`qemu-riscv64` for 7 columns with lda 11 and ldp 19 - both kappa branches, and
-Y past cdim untouched: 10 runs. In the golden set as
-`riscv64-{d,s}packm-pk-scalar` (all five sizes in each file).
+`min-inflight: 8` unrolls the panel loop: `packm_one` sets `n` to
+`ceil(8 / cdim)`, so the elements in flight - columns times rows - are at least
+eight in every kernel, and the measured floating-point registers the copy loop
+holds are 8, 8, 9, 8, 10, 12, 14 and 8 for cdim 1 to 8 (a whole-column unroll
+can only overshoot: `ceil(8/5)` is 2 columns, ten elements). The loop splits
+`n` by the unroll - `andi`/`srli` where it is a power of two, `remu`/`divu`
+against a `li` constant where it isn't (cdim 3, unroll 3) - runs the whole
+iterations, then the last one, then the remainder a column at a time: `.ukr1_loop`,
+`.ukr1_last`, `.ukr1_tail`, and the same three again in the kappa-scaled case.
+
+Measured: 212, 185, 194, 179, 212, 253, 294 and 129 instructions for cdim 1 to 8
+(the same in FP32 and FP64) - up from 53..123 flat, because the body is the
+unrolled one; the *iteration* is what got shorter. Assembled with
+`-march=rv64gc` and correct under `qemu-riscv64` at lda 11 and ldp 19 for 1, 3,
+7, 8 and 11 columns - every unroll from 8 down to 1 has a main loop, a last
+iteration and a tail path exercised, and Y past both cdim and `n` stays
+untouched: **80 runs**, both kappa branches. In the golden set as
+`riscv64-{d,s}packm-pk-scalar`, all eight sizes in each file.
 
 ## Scheduling
 

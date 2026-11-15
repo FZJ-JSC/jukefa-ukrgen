@@ -6,10 +6,14 @@ isa: riscv64
 families:
 - family: pk
   preset: packm_scalar
+  # at least eight elements in flight: the panel loop unrolled ceil(8 / cdim)
+  # columns, so a cdim-1 panel packs eight columns an iteration and a cdim-8
+  # one packs a column's eight rows - eight floating-point registers either way
+  min-inflight: 8
   schedule: ['RAW:data:freg:::3', 'RAW:address:greg:::2']
   cases:
   - kind: scalar
-    m: [1, 2, 4, 8, 16]
+    m: 1..8      # every cdim a reference mr or nr can be
     params:
       X-layout: ['m:c', 'n:s']
       Y-layout: ['m:c', 'n:s']
