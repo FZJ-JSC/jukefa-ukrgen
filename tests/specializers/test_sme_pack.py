@@ -18,89 +18,100 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 #: X a panel of cdim rows, n contiguous and m strided (X-layout n:c, m:s,
 #: stride(X,m) in bytes); Y the packed panel, cdim contiguous and n packed;
-#: kappa scales - the harness asks which rows arrived, then checks every
-#: element of the reference packing
+#: kappa scales. n counts vector-length blocks of columns, as the gemm's k
+#: counts vector-length blocks of elements - the harness calibrates the panel
+#: from X's first column, then checks every element, the extent and the tail
 HARNESS = r"""#include <stdio.h>
 typedef double w;
 void ukr(long n, const w* X, w* Y, const w* kappa, long sXm);
-#define LDX 16
-#define NMAX 17
-#define MMAX 16
-static w X[LDX * NMAX + 64], Ybuf[MMAX * NMAX + 128];
-static w *Y = Ybuf + 16;
+#define LDX 64
+#define MMAX 64
+static w X[LDX * 512], Yb[MMAX * 512];
 int main(void) {
-    for (int i = 0; i < LDX * NMAX + 64; i++) X[i] = 1;
-    for (int i = 0; i < MMAX * NMAX + 128; i++) Ybuf[i] = -7;
+    w *Y = Yb + 16;
+    /* the panel's rows, from X's first column: the first -1 is where one
+       column's panel ends (mr); n counts vector-length blocks of columns, so
+       VL = mr / TILES */
+    for (int i = 0; i < LDX * 512; i++) X[i] = -1;
+    for (int m = 0; m < MMAX; m++) X[m * LDX] = m + 1;
+    for (int i = 0; i < MMAX * 512; i++) Yb[i] = -7;
     w one = 1;
     ukr(1, X, Y, &one, LDX * sizeof(w));
-    int M = 0;
-    while (M < MMAX && Y[M] == 1) M++;
-    printf("panel %d\n", M);
+    int mr = 0;
+    while (mr < MMAX && Y[mr] == mr + 1) mr++;
+    long VL = mr / TILES;
+    printf("panel %d, VL %ld\n", mr, VL);
+    if (mr == 0 || VL == 0) { printf("no panel\n"); return 1; }
     int bad = 0, runs = 0;
     w kappas[] = {1.0, -2.5};
-    for (long N = 0; N <= 8; N++) for (int ki = 0; ki < 2; ki++) {
-        for (int i = 0; i < LDX * NMAX + 64; i++) X[i] = (w)((i * 7) % 13) - 6;
-        for (int i = 0; i < MMAX * NMAX + 128; i++) Ybuf[i] = -7;
-        ukr(N, X, Y, &kappas[ki], LDX * sizeof(w));
+    for (long blocks = 0; blocks <= 5; blocks++) for (int ki = 0; ki < 2; ki++) {
+        long cols = blocks * VL;
+        for (int i = 0; i < LDX * 512; i++) X[i] = (w)((i * 7) % 13) - 6;
+        for (int i = 0; i < MMAX * 512; i++) Yb[i] = -7;
+        ukr(blocks, X, Y, &kappas[ki], LDX * sizeof(w));
         runs++;
-        for (long n = 0; n < N; n++) for (int m = 0; m < M; m++)
-            if (Y[m + n * M] != kappas[ki] * X[m * LDX + n]) {
-                if (bad < 5) printf("N=%ld Y[%d,%ld]=%g want %g\n", N, m, n,
-                                    Y[m + n * M], kappas[ki] * X[m * LDX + n]);
+        for (long c = 0; c < cols; c++) for (int m = 0; m < mr; m++)
+            if (Y[m + c * mr] != kappas[ki] * X[m * LDX + c]) {
+                if (bad < 5) printf("blocks=%ld Y[%d,%ld]=%g want %g\n", blocks, m, c,
+                                    Y[m + c * mr], kappas[ki] * X[m * LDX + c]);
                 bad++;
             }
         for (int i = -16; i < 0; i++) if (Y[i] != -7) bad++;
-        for (int i = M * N; i < M * N + 32; i++) if (Y[i] != -7) { if (bad < 5) printf("written past Y[%d]\n", i); bad++; break; }
+        /* the panel exactly as long as the columns packed, no further */
+        long extent = cols * mr;
+        for (long i = extent; i < extent + 32; i++)
+            if (Y[i] != -7) { if (bad < 5) printf("written past Y[%ld]\n", i); bad++; break; }
+        for (long i = extent - 1; i >= 0 && i > extent - 32; i--)
+            if (Y[i] == -7) { if (bad < 5) printf("short of Y[%ld]\n", i); bad++; break; }
     }
-    printf("%d runs, %d wrong\n", runs, bad);
+    printf("%d runs, %d bad\n", runs, bad);
     return bad != 0;
 }
 """
 
 
-def pack_kernels(case: str, sizes: tuple) -> list:
+def pack_kernels(case: str, sizes: tuple) -> tuple:
     """
     The SME dpackm family's kernels for one case and its sizes
     :param case: the case's kind (ztrans, ztail)
     :param sizes: the tiles of cdim to build (1..8)
-    :return: the kernels built
+    :return: (the kernels built, (data type, (case, size), reason) for each it
+             can't build)
     """
     cfg = gk._config("sme/fopa_bc_vindex/dpackm.yaml")
     fam = copy.deepcopy(next(f for f in cfg.families if f.name == "pk"))
     fam.cases = [(kind, [m for m in ms if m in sizes], params)
                  for kind, ms, params in fam.cases if kind == case]
-    ok, skipped = families.build_packm(cfg.isa, cfg.name, fam)
-    return ok, skipped
+    return families.build_packm(cfg.isa, cfg.name, fam)
 
 
-def run_kernel(kernel, cc: tuple, run: tuple) -> str:
+def run_kernel(kernel, run: tuple, tiles: int) -> str:
     """
-    One kernel linked into the packing harness and run
+    One kernel assembled as SME, linked with the packing harness and run
     :param kernel: the kernel built
-    :param cc: the compiler and its flags
     :param run: the emulator and its flags
+    :param tiles: the tiles of cdim the kernel packs (its case's m)
     :return: what the harness printed
     """
+    cc = "aarch64-linux-gnu-gcc"
+    # the emitted symbol carries the emitter's suffix (.global ..._asm)
+    entry = f"{kernel.symbol}_asm"
     with tempfile.TemporaryDirectory() as d:
         harness = os.path.join(d, "harness.c")
         asm = os.path.join(d, "ukr.s")
+        obj = os.path.join(d, "ukr.o")
         exe = os.path.join(d, "run")
-        # the emitted symbol carries the emitter's suffix (.global ..._asm)
-        entry = f"{kernel.symbol}_asm"
         with open(harness, "w") as f:
-            f.write(HARNESS.replace("void ukr(", f"void {entry}(")
-                    .replace("ukr(1, X", f"{entry}(1, X")
-                    .replace("ukr(N, X", f"{entry}(N, X"))
+            f.write(HARNESS.replace("ukr(", f"{entry}(").replace("TILES", str(tiles)))
         with open(asm, "w") as f:
             f.write(asm_source(kernel))
         # the kernel assembled as SME, the harness as plain C - the order the
         # gemm tests assemble and link in (a C main built for SME segfaults)
-        obj = os.path.join(d, "ukr.o")
-        built = subprocess.run([cc[0], "-c", "-Wa,-march=armv9-a+sme+sme-f64f64",
+        built = subprocess.run([cc, "-c", "-Wa,-march=armv9-a+sme+sme-f64f64",
                                 asm, "-o", obj], capture_output=True, text=True)
         if built.returncode != 0:
             raise AssertionError(built.stderr[-800:])
-        built = subprocess.run([cc[0], "-static", "-O1", harness, obj, "-o", exe],
+        built = subprocess.run([cc, "-static", "-O1", harness, obj, "-o", exe],
                                capture_output=True, text=True)
         if built.returncode != 0:
             raise AssertionError(built.stderr[-800:])
@@ -111,32 +122,44 @@ def run_kernel(kernel, cc: tuple, run: tuple) -> str:
 class test_sme_pack(unittest.TestCase):
     """The SME packing kernels a panel at a time, under qemu"""
 
-    def check(self, case: str, sizes: tuple, svl: int) -> str:
+    def check(self, case: str, sizes: tuple, tiles: int, svl: int) -> str:
+        """
+        One case's kernels under qemu at one streaming vector length
+        :param case: the case's kind
+        :param sizes: the tiles of cdim to build
+        :param tiles: the tiles of cdim the kernel packs (its case's m)
+        :param svl: the streaming vector length, in bits
+        :return: what the harness printed
+        """
         ok, skipped = pack_kernels(case, sizes)
         self.assertTrue(ok, [s[2] for s in skipped][:3])
-        svl_flag = f"sme{svl}=on"
-        cc = ("aarch64-linux-gnu-gcc",)
-        run = ("qemu-aarch64-static", "-cpu", f"max,sme=on,{svl_flag}")
+        run = ("qemu-aarch64-static", "-cpu", f"max,sme=on,sme{svl}=on")
         out = ""
         for k in ok:
             with self.subTest(symbol=k.symbol):
-                out = run_kernel(k, cc, run)
-                self.assertIn(", 0 wrong", out, out[-400:])
+                out = run_kernel(k, run, tiles=tiles)
+                self.assertIn(", 0 bad", out, out[-400:])
         return out
 
-    @unittest.skip("SME packm does not run: ztrans segfaults under qemu at SVL 512 and its "
-                   "packing disagrees at 256 (the reference or the kernel - to be pinned down)")
+    @unittest.skipUnless(shutil.which("aarch64-linux-gnu-gcc") and shutil.which("qemu-aarch64-static"),
+                         "needs aarch64-linux-gnu-gcc and qemu-aarch64-static")
     def test_ztrans_packs_a_panel(self):
-        # a tile's rows scaled into its slices, transposed through ZA and stored
-        # as P's columns: two tiles of cdim, four vectors long
-        out = self.check("ztrans", (2,), 512)
-        self.assertIn("panel 16", out)
+        # a panel's rows scaled into a tile's slices, transposed through ZA and
+        # stored as P's columns: two tiles of cdim, n counting vector-length
+        # blocks of columns - the packed panel exactly as long as the columns
+        # packed, every element scaled by kappa, nothing past it
+        for svl, panel in ((256, 8), (512, 16)):
+            with self.subTest(svl=svl):
+                out = self.check("ztrans", (2,), tiles=2, svl=svl)
+                self.assertIn(f"panel {panel}", out)
+                self.assertIn(", 0 bad", out)
 
-    @unittest.skip("as test_ztrans_packs_a_panel: SME packm does not run yet")
+    @unittest.skip("ztail: the masked rows, and the columns left of a vector-length "
+                   "block (n = k*VL + j, the combined SME+SVE kernels' cdim) - its "
+                   "own reference and the n-lane mask, next")
     def test_ztail_packs_a_masked_panel(self):
         # the rows left under a mask: cdim past the tile
-        out = self.check("ztail", (2,), 512)
-        self.assertIn(", 0 wrong", out)
+        self.check("ztail", (2,), tiles=2, svl=512)
 
 
 if __name__ == "__main__":

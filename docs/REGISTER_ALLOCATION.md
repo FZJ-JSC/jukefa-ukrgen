@@ -747,6 +747,48 @@ Each step's check: the golden kernels, the SME and SMESVE configurations
 qemu-run tests; from step 3 on, instruction counts and runs where kernels
 change.
 
+## What a loop parameter counts, and the registers still outside the IR
+
+Two findings from building a numeric harness for the SME packing kernels
+(`tests/specializers/test_sme_pack.py`, which runs them under qemu against a
+reference packing):
+
+**A parametric loop whose step is a whole vector counts vector-length blocks,
+not elements or columns.** `loop_counts` says so ("its parameter counts chunks
+of a vector length - the caller divides, and takes what's left of one"), and the
+emitted code shows it: the gemm's `k` loop is `and x9,x0,#3` / `lsr x0,x0,#2`
+with `incb` by one vector per row, and the packm's `n` loop is the same shape.
+So `n = 1` in a `pk ztrans` kernel packs **one block of VL columns**, not one
+column; the panel per column is `mr = m*VL` rows, and the extent is
+`n_blocks * VL * mr` doubles - measured exact at SVL 256 and 512, every element
+matching the reference for two kappas and `n_blocks = 0..5`, nothing written
+past the panel. The earlier "over-packs by the vector length" reading was a
+harness that passed columns and sized the buffer for `n*mr`.
+
+What that leaves open is **the columns left of a block**: a combined SME+SVE
+kernel's `cdim` can be `k*VL + j`, and nothing masks the `n` lanes today -
+`ztail`'s mask is on the rows (`cdim` past a tile). So the packm contract is
+"`n` in blocks" until the n-lane mask exists, and a caller with `j` columns
+needs that mask (or a separate call for the remainder).
+
+**The registers the fix would want are not all named.** `loop_counts`' counters
+(`k` and the tail) *are* IR values (`lsc_value_op("counts")`, written by name);
+`tmp` is scratch, freed after `kiterkleft`. But the divisors and state the
+machinery reads are not:
+
+| register | where it is made | should be |
+|---|---|---|
+| **VL in elements** (`offsets.vl_elements`) | SVE/SME: `self.greg()`, cached in `strides_in`, emitted in `late_setup`; RVV: the ISA setup's aliased `vlen` greg, filled by `vsetvli` | an `lsc_set` in the entry (`set(dreg, VLEN)` on SVE/SME; RVV bound to the setup's register and emitting nothing), per element size, pinned - it is a B1 pin the analysis cannot see today |
+| the all-true predicate (`isa_setup.all_true_predicate`) | the ISA object hands out a register | the same `lsc_set` pattern (`ptrue`), like the tail's mask |
+| `avl` (RVV's preferred length) | the setup's alias | a parameter value in the IR |
+| `tmp` (`loop_counts`) | `self.greg()`, freed at once | scratch, deliberately unnamed |
+
+These are the last of the `isaquirks()`-era holders: everything else in
+`isa_setup` is a declaration (`steps()`, `predication()`, `clobbers()`,
+`state(dt)`), and the mask proved the `lsc_set` pattern. The change is for the
+object to stop allocating and hand out registers, and for the emitter to spell a
+`set` the way it spells `set_mask_tail`.
+
 ## Where the work stands
 
 The state this was written at, so that a fresh reading of the code can check it
@@ -825,7 +867,16 @@ The order, approved, each item its own commit:
    kernels. Nine goldens re-recorded (six SME, three SMESVE), the SME gemm runs
    correct under qemu at SVL 256 and 512 both before and after (the numerical
    tests never changed - only the columns' shape assertions did).
-8. **dt-4's remainder** (`tail_vl`, the `--max-*regs` caps as a pool cap),
+8. **The state registers into the IR**: the element vector length first (an
+   entry `lsc_set`, RVV bound to its setup's `vlen`), then the all-true
+   predicate, then `avl` as a parameter value - the last holders of the
+   `isaquirks()` era, and the pin the analysis cannot see (see the section
+   above). Deliberately not moved: `loop_counts`' `tmp`.
+9. **The n-lane mask** for the columns left of a vector-length block: the
+   packing kernels count `n` in blocks, and a combined SME+SVE kernel's `cdim`
+   can be `k*VL + j`, so the partial block needs a predicate on the `n` lanes -
+   the same device `ztail` uses on the rows, applied to the other dimension.
+10. **dt-4's remainder** (`tail_vl`, the `--max-*regs` caps as a pool cap),
    **(d)**, spilling - the tail, unchanged.
 
 The disciplines every one of them owes:
