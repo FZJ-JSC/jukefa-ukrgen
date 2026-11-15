@@ -92,10 +92,14 @@ class addressing_plan:
         accesses at run-time strides (C's columns); None the ISA's default, 0
         none - the pattern's registers walk to them (phase+rotate's in their
         place)
+    :param addr_forms: which addressing forms an access may take where it costs
+        a register - "auto" the specializer's choice (today: none of them),
+        "goffset" the register offset form ([x0, x_cs, lsl #3])
     """
     registers : int = 1
     pattern : addr_pattern = field(default_factory=lambda: addr_pattern("rotate"))
     stride_pointers : int | None = None
+    addr_forms : str = "auto"
 
 
 #: scratch registers a data movement may name (its steps' tags)
@@ -1471,6 +1475,8 @@ class program_builder:
                           addr_setup=self.addr_setup, registers=dict(self.used),
                           stride_pointers={c: p.stride_pointers for c, p in self.addressing.items()
                                            if p.stride_pointers is not None},
+                          addr_forms={c: p.addr_forms for c, p in self.addressing.items()
+                                      if "auto" != p.addr_forms},
                           cases=cases, vector_indices=dict(self.vidx))
 
 @dataclass

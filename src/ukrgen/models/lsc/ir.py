@@ -322,6 +322,10 @@ class ir_program:
     #: stride pointers the specializer may add per address register, by
     #: component (--COMP-stride-pointers); unset the ISA's default
     stride_pointers : dict[str, int] = field(default_factory=dict)
+    #: the addressing forms an access may take where each costs a register, by
+    #: component (--COMP-addr-forms): "goffset" the register offset form,
+    #: unset the specializer's choice (docs/REGISTER_ALLOCATION.md, A1)
+    addr_forms : dict[str, str] = field(default_factory=dict)
     #: the index each component's vector registers run along
     vector_indices : dict[str, str] = field(default_factory=dict)
     #: components whose registers are groups: how many registers, the method

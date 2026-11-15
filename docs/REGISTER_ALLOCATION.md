@@ -376,7 +376,27 @@ Measured today (`at_register` = the register form taken, nothing to gain):
 So SVE already takes the `goffset` form for 30 accesses and leaves 54 *bumped*
 ones that the family would pick up, and SME's carries the `voffset`/walk pair.
 The choice is per component while nothing decides it automatically:
-`--<COMP>-addr-forms`.
+`--<COMP>-addr-forms`. It comes in three pieces, because reading the code
+changed what the first one had to do:
+
+- **A1 - the parameter.** `--<COMP>-addr-forms` (`auto` or `goffset`, default
+  `auto`) through the addressing plan into `program.addr_forms`, read as
+  `forms(comp)`. Inert until something asks.
+- **A2 - the merge, in `slice_columns`.** The GOFFSET condition does **not**
+  live where it looked: it is nested inside `0 == stride_pointers(comp)`, the
+  no-pointer mode, so a component with pointers (SME's epilogue) never reaches
+  it, and relaxing it there would collapse nothing. The `[w12, 0]`/`[w12, 1]`
+  pair are two **columns**, each with its own pointer, each access sitting *at*
+  its register - so folding them is merging two columns that differ by exactly
+  one stride unit of coefficient 1 into one pointer plus an offset register.
+- **A3 - `_slices` must honour it.** `_memory` pops the goffset term and passes
+  `offreg` to `_mem`; `_slices` calls `_mem` with the walker and no goffset
+  path, so a merged column would emit the access **without** the offset register
+  - wrong asm with no error. A2 and A3 are one change.
+
+Default `auto` keeps the gate; the forced `goffset` runs are what measure it,
+and the variants/`decision("form")` machinery waits for C', where an allocator
+can price the choice instead of a parameter forcing it.
 
 **Units.** A form's offset register is scaled by the instruction (`ld1d`
 `LSL #3`, `ld1w` `LSL #2`), so it holds **elements**; a plain add's shift is the

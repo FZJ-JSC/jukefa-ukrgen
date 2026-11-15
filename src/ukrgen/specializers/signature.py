@@ -437,6 +437,22 @@ class signature_specializer:
             return factors[0].startswith(f"stride({comp},")
         return 2 == len(factors) and "VL" == factors[0] and factors[1].startswith(f"stride({comp},")
 
+    def forms(self, comp: str) -> str:
+        """
+        Which addressing forms the component's accesses may take where each
+        costs a register (--COMP-addr-forms): "goffset" the register offset form
+        ([x0, x_cs, lsl #3]), "auto" the specializer's choice - the pointer per
+        column, every access at its register (docs/REGISTER_ALLOCATION.md, A1)
+        :param comp: the component
+        :return: its spec
+        """
+        if comp in self.program.addr_forms:
+            return self.program.addr_forms[comp]
+        base = self.ctx.composition.storage_bases.get(comp)
+        if base is not None and base in self.program.addr_forms:
+            return self.program.addr_forms[base]
+        return "auto"
+
     def stride_pointers(self, comp: str | None = None) -> int:
         """
         Stride pointers kept per component and base: the component's own

@@ -65,6 +65,11 @@ class model_stage(stage):
                                 f"and R, its address registers: blocked:mn/R, blocked:2*n/R) "
                                 f"or phase (one register per STO and direction)",
                     required=False)
+            self.params[f"{comp}-addr-forms"] = stage_param(
+                    value=None, default=None, required=False,
+                    description=f"Which addressing forms {comp}'s accesses may take where "
+                                f"each costs a register: auto (the specializer's choice, today "
+                                f"none), goffset (the register offset form, [x0, x_cs, lsl #3])")
             self.params[f"{comp}-stride-pointers"] = stage_param(
                     value=None, default=None, required=False,
                     description=f"Pointers the specializer may add per {comp} address register "
@@ -155,8 +160,12 @@ class model_stage(stage):
             pointers = self.params[f"{comp}-stride-pointers"].value
             if pointers is not None and not (str(pointers).isdigit()):
                 raise stage_error(f"--{comp}-stride-pointers must be a number, 0 or more, got {pointers}")
+            forms = str(self.params[f"{comp}-addr-forms"].value or "auto")
+            if forms not in ("auto", "goffset"):
+                raise stage_error(f"--{comp}-addr-forms {forms!r}: auto or goffset")
             addressing[comp] = addressing_plan(count, pattern,
-                                               None if pointers is None else int(pointers))
+                                               None if pointers is None else int(pointers),
+                                               forms)
 
         data_regs = {}
         for comp in self.data_components:
