@@ -93,7 +93,6 @@ class signature_emitter:
         #: specializer's (specializers/addresses.py), its setup's moves too
         self.speller = address_speller(ctx)
         #: the fewest general registers free at any reservation (greg)
-        self.min_free_gregs = None
         #: scratch multiplies' registers between their steps: group -> register
         #: (None: none was free, its last step spells the run)
         self.scratches: dict = {}
@@ -276,12 +275,7 @@ class signature_emitter:
 
     def greg(self):
         try:
-            reg = self.gen.greg(self.rt.reserve_any_reg("greg"))
-            # the fewest general registers ever left: what offset registers
-            # could have had (max-offset-registers auto)
-            free = self.rt.available("greg")
-            self.min_free_gregs = free if self.min_free_gregs is None else min(self.min_free_gregs, free)
-            return reg
+            return self.gen.greg(self.rt.reserve_any_reg("greg"))
         except IndexError:
             if self.evictable:
                 # an offset register given up - the least valuable - its moves
@@ -2269,13 +2263,6 @@ class signature_emitter:
             code.extend(lines(gen.label(label=end)))
         return code
 
-#: the last emission's fewest free general registers (emit_program_measured)
-_last_min_free = [None]
-
-#: the most offset registers max-offset-registers auto takes
-AUTO_OFFSET_REGISTERS = 8
-
-
 def emit_program(ctx, program: ir_program) -> emitted_program:
     """
     Emit a program. Values setup computes once (the vector length in bytes,
@@ -2306,18 +2293,10 @@ def emit_program(ctx, program: ir_program) -> emitted_program:
         emitter, out = emit_once()
         for _ in range(3):
             if not any(late for _, _, late in emitter.recipes):
-                _last_min_free[0] = emitter.min_free_gregs
                 return emitter, out
             emitter, out = emit_once([(n, a) for n, a, _ in emitter.recipes])
         raise specialization_error("setup's registers kept changing between emissions")
     return emit_all()[1]
 
 
-def emit_program_measured(ctx, program: ir_program) -> tuple:
-    """
-    A program emitted, with the fewest general registers left free at any
-    reservation: what offset registers could have (max-offset-registers
-    auto, the emit stage's)
-    """
-    out = emit_program(ctx, program)
-    return out, _last_min_free[0]
+

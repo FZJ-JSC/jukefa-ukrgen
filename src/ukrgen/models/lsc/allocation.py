@@ -24,7 +24,7 @@ from asmgen.registers import asm_data_type as adt, reg_tracker
 
 from . import classes, dtypes, liveness
 from .decision import decision
-from .operations import lsc_loop
+from .operations import lsc_loop, lsc_operation
 from .ir import ir_block, ir_program
 from .reg import lsc_reg_type
 
@@ -295,7 +295,7 @@ class allocation_problem:
         return "\n".join(lines)
 
 
-def _liveness(ops : list, live_out : set[register_key],
+def _liveness(ops : list[lsc_operation], live_out : set[register_key],
               key_of : Callable = liveness.data_key) -> tuple[list, set[register_key]]:
     """
     Backward liveness over a straight sequence of operations
@@ -315,8 +315,8 @@ def _liveness(ops : list, live_out : set[register_key],
     return before, live
 
 
-def _loop_fixpoint(loop, live_out : set[register_key],
-                   key_of : Callable) -> tuple[list, list, set[register_key], set[register_key]]:
+def _loop_fixpoint(loop : lsc_loop, live_out : set[register_key], key_of : Callable) \
+        -> tuple[list[lsc_operation], list[str], set[register_key], set[register_key]]:
     """
     A loop body's live-in, iterated: what is live after the loop feeds what the
     body needs from outside, until the two agree - a value the body reads before
@@ -344,7 +344,7 @@ def _loop_fixpoint(loop, live_out : set[register_key],
     return ops, names, live_in, writes
 
 
-def _analyse_sequence(ops : list, live_out : set[register_key], where : str,
+def _analyse_sequence(ops : list[lsc_operation], live_out : set[register_key], where : str,
                       resources_ : resources, problem : allocation_problem,
                       section_of : Callable[[int], str] | None = None,
                       key_of : Callable = liveness.data_key) -> tuple[set[register_key],
@@ -411,7 +411,7 @@ def _analyse_sequence(ops : list, live_out : set[register_key], where : str,
     return live_in, live_in
 
 
-def _demand(ops : list, live_out : set[register_key], where : str, resources_ : resources,
+def _demand(ops : list[lsc_operation], live_out : set[register_key], where : str, resources_ : resources,
             problem : allocation_problem, key_of : Callable = liveness.data_key) -> None:
     """
     What each file needs here: the values of it live at once, and the names -
@@ -467,6 +467,22 @@ def offsets(program : ir_program) -> set[decision]:
     ranked = sorted(program.offset_candidates.items(), key=lambda entry: entry[1])
     budget = max(0, program.offset_registers or 0)
     return {d for d, _ in ranked[:budget]} | {d.alternative for d, _ in ranked[budget:]}
+
+
+def budget(program : ir_program, resources_ : resources) -> int:
+    """
+    The general registers an offset's register may have: the file's pool less
+    the most names any place holds (`analyse`'s demand), where the emitter used
+    to run the flow a second time to measure what the first never needed
+    (--max-offset-registers auto)
+    :param program: the IR, after the address passes' spelling
+    :param resources_: the machine
+    :return: the registers left, 0 or more
+    """
+    problem = analyse(program, resources_)
+    greg = [d for d in problem.demands if "greg" == d.tag]
+    tightest = max((d.names for d in greg), default=0)
+    return max(0, resources_.pools.get("greg", 0) - tightest)
 
 
 def greg_key(op, p) -> tuple | None:

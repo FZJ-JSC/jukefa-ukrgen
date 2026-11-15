@@ -26,14 +26,14 @@ from ..support.sig_group import sig_group
 from ..support.domains import operand_values
 from ..support.data_move import operand_side
 from ..support.tiles import widening_ways
-from asmgen.asmblocks.noarch import comparison
+from asmgen.asmblocks.noarch import asmgen, comparison
 from asmgen.asmblocks.op import (
     register_type as rgt,
     operand_role as orl,
     operand_type as ot,
     opmem_modifier as memmod,
 )
-from asmgen.registers import reg_tracker, adt_size
+from asmgen.registers import reg_tracker, adt_size, asm_data_type
 from asmgen.asmblocks.op.constraint import ConstraintDoesNotApplyError
 
 from ..models.lsc.addressing import offpoly
@@ -41,7 +41,7 @@ from ..models.lsc.ir import ir_program, ir_block, BASE_REGISTER, START_BLOCK
 from ..components.tile import scalar_tile
 from ..models.lsc.operations import (
     lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop,
-    lsc_value_op)
+    lsc_operation, lsc_value_op)
 from ..models.lsc.index import lsc_reg_index
 from ..models.lsc.reg import lsc_reg_type
 from ..models.lsc.offset_polynomial import offset_polynomial as offpoly
@@ -220,7 +220,7 @@ def _walkable(comp: str, factors: tuple) -> bool:
     return 2 == len(factors) and "VL" == factors[0] and factors[1].startswith(f"stride({comp},")
 
 
-def _register_offset_form(op, gen, dt) -> bool:
+def _register_offset_form(op : lsc_operation, gen : asmgen, dt : asm_data_type) -> bool:
     """
     Whether the operation has a register offset form at this type (SVE's
     [x0, x1, lsl #3]) - the operation's own signatures: the access's solved
@@ -236,7 +236,7 @@ def _register_offset_form(op, gen, dt) -> bool:
                and ("adreg" not in s.operands or s.operands["adreg"].dt == dt) for s in full)
 
 
-def slice_columns(op, plan: dict, loop_gregs) -> tuple:
+def slice_columns(op : lsc_loop, plan : dict, loop_gregs : int | None) -> tuple:
     """
     A loop over slices' access columns: within the general registers allowed
     (--loop-gregs), a pointer per access column - an offset's part beside
@@ -448,7 +448,7 @@ class signature_specializer:
             runs[key] = {"column": column, "first": op, "base": const, "last": const}
         return out
 
-    def register_offset_form(self, op, comp: str) -> bool:
+    def register_offset_form(self, op : lsc_operation, comp : str) -> bool:
         """
         Whether the operation has a register offset form at the access's type
         (SVE's [x0, x1, lsl #3]) - the operation's own signatures: the access's
@@ -460,8 +460,13 @@ class signature_specializer:
         return _register_offset_form(op, self.ctx.gen, self.ctx.component_dts[comp])
 
     @staticmethod
-    def walkable(comp: str, factors: tuple) -> bool:
-        """A term an address register walks by (`_walkable`)"""
+    def walkable(comp : str, factors : tuple) -> bool:
+        """
+        A term an address register walks by (`_walkable`)
+        :param comp: the component
+        :param factors: the term's factors
+        :return: whether a register walks by it
+        """
         return _walkable(comp, factors)
 
     def forms(self, comp: str) -> str:
@@ -1037,13 +1042,14 @@ class signature_specializer:
                 out.append(lsc_addr_compute(comp, reg, reg, net, scalar_tile))
         return out
 
-    def forms(self, op) -> None:
+    def forms(self, op : lsc_operation) -> None:
         """
         What an operation's signatures allow whatever its address - the forms
         the ISA takes (a tail's masked ones without an all-true predicate);
         an access's kept with it (properties["usable"], copies of it too) for
         placing its address (adapt). ADDRESSING_PLAN 6.2: the forms of every
         operation first, the addresses after - a loop's copies made between
+        :param op: the operation whose signatures are being resolved
         """
         if isinstance(op, lsc_loop):
             if "slices" != op.info.get("kind"):

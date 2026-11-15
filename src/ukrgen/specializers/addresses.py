@@ -639,13 +639,16 @@ def value_setup(program) -> int:
     return 0
 
 
-def slice_frames(program) -> int:
+def slice_frames(program : ir_program) -> int:
     """
     Each loop over slices' frame in the IR: a value operation before it, in its
     section - its count (its tile's slices, or a masked tile's run-time rows)
     and its index (from 0, in a register its slice operands take) - the loop
-    reading both (info frame) (docs/ADDRESSING_PLAN.md: lowering the loops
-    over slices, 2). :return: the loops
+    reading both (info frame), their two registers minted as the program's
+    general ones (docs/ADDRESSING_PLAN.md: lowering the loops over slices, 2;
+    docs/REGISTER_ALLOCATION.md, A')
+    :param program: the IR
+    :return: the loops
     """
     from ..models.lsc.operations import lsc_value_op
     loops = 0

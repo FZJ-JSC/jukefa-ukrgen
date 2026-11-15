@@ -7,7 +7,7 @@ import logging
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
-from ...emitters.signature import signature_emitter, emit_program, emit_program_measured
+from ...emitters.signature import signature_emitter, emit_program, emit_program
 from ...specializers.signature import specialization_error
 
 
@@ -57,15 +57,8 @@ class emit_stage(stage):
         try:
             # the moves spelled before scheduling (post-specialize); the fewest
             # general registers left free recorded - max-offset-registers
-            # auto's measure, the flow's driver running again with it
-            emitted, frees = [], []
-            for p in self.context.programs:
-                out, free = emit_program_measured(self.context, p)
-                emitted.append(out)
-                frees.append(free)
-            self.context.emitted = emitted
-            known = [f for f in frees if f is not None]
-            self.context.min_free_gregs = min(known) if known else None
+            self.context.emitted = [emit_program(self.context, p)
+                                    for p in self.context.programs]
         except specialization_error as err:
             raise stage_error(f"emitting: {err}") from err
         text = "\n\n".join(p.render() for p in self.context.emitted)

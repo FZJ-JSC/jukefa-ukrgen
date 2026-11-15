@@ -802,10 +802,16 @@ The order, approved, each item its own commit:
    (`imm`/`voffset`/`goffset`/`scaleoffset`) as a tagged branch with its own
    walk moves, `decision("form", (access, variant))`; a per-component
    `--<COMP>-addr-forms` forces the choice until the allocator makes it.
-6. **C' - the choice into `allocate`**: `taken` for `offset:*` and `form:*`
-   against `greg_free`; then `auto`'s re-run, `min_free_gregs`,
-   `emit_program_measured`'s measurement and `auto_offset_budget` go. A/B on
-   today's six `auto` kernels, re-record and qemu where they move.
+6. **C' - done.** The budget is the analysis' (`allocation.budget`: the file's
+   pool less the most names any place holds), taken once where the offsets are
+   decided, so the flow runs **once**. Gone with the second run:
+   `AUTO_OFFSET_REGISTERS`, `ctx.auto_offset_budget`, `ctx.min_free_gregs`,
+   the emitter's measurement in `greg()` and `emit_program_measured` (the emit
+   stage emits). Measured first: the `auto` kernels have **one** offset
+   candidate each against 20-21 free by the analysis, so any budget at or above
+   one gives the same code - the second run bought nothing, and every golden is
+   byte-identical without it. Still to do under this heading: `taken` for
+   `form:*` (needs A's variants) and `validate` reporting what did not fit.
 7. **D' - slice walks generic**: each access's address advanced by an
    `lsc_addr_compute` step inside the loop, the register chosen by
    `addr-pattern` over `--max-addr-regs`; `--loop-gregs` and
