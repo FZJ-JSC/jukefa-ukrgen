@@ -523,10 +523,27 @@ body's live-in is the loop's. Then:
 Write-before-read is not hypothetical: the `slice_moves` mode writes each
 iteration's address fresh, and a body's `copy` temporaries are the same shape.
 
-What the fixpoint does **not** cover is a value kept in a register as a
-*decision*: a stride pointer the pattern pins, the frame's counter and index.
-Those are **pins** - declared like the model's data rings (`fixed_register`) -
-not a separate notion of "held". With the fixpoint in, the emitter's
+What the fixpoint does **not** cover is a value the kernel keeps in a register
+from its setup to its end: **a stride's, a vector length's and its multiples'** -
+the emitter loads each once (`strides_in`) and never lets it go, so a live range
+would let it die at its last read. Those are **pins**: `problem.pinned`, counted
+in every place (`_demand` adds them to each position's set). The frame's counter
+and index are not pins - they are the loop's own, and the fixpoint carries them.
+
+With the fixpoint and the pins in, the report brackets what emission does:
+
+| kernel (one program) | emission: in use | analysis: most live | names | pool |
+|---|---|---|---|---|
+| SME `dpackm` `pk` ztrans | 22-28 | 9-18 | 26-44 | 32 |
+| SME `spackm` `pk` ztail | 19-21 | 8-10 | 26-44 | 32 |
+
+`live` counts a place's values live at once - a local number, where emission's
+in-use counts what is reserved at once across the kernel; `names` counts the
+distinct names a place holds, and **that is the number a static allocation must
+fit** (`demand`'s own definition: a name holds a register the iteration long).
+So the frame is 12 names over the file at the worst place, to be brought under it
+by the **reuse across regions** the emitter performs by hand today - which is
+what the two passes, and the choice in C', are for. With them, the emitter's
 `release_pointers`/`release_aregs` become reads of the problem, and `evictable`
 (the offset register given up under pressure) is the only cost decision left.
 

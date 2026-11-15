@@ -258,6 +258,10 @@ class allocation_problem:
     values: dict[register_key, virtual_register] = field(default_factory=dict)
     demands: list[demand] = field(default_factory=list)
     deferred: list[deferred] = field(default_factory=list)
+    #: the values the kernel keeps in a register from its setup to its end - a
+    #: stride's, a vector length's: the emitter loads them once and never lets
+    #: them go, so every place pays for them (docs/REGISTER_ALLOCATION.md, B1)
+    pinned: set[register_key] = field(default_factory=set)
 
     def short(self) -> list[demand]:
         """The demands that don't fit their file"""
@@ -394,8 +398,6 @@ def _analyse_sequence(ops : list, live_out : set[register_key], where : str,
                                                        ranges=entry.ranges + (rng,),
                                                        parts=parted, fixed=entry.fixed,
                                                        owner=entry.owner)
-        if isinstance(op, lsc_loop):
-            _analyse_loop(op, before[pos] - reads, resources_, problem)
     # a value carried the whole sequence: one range over it
     for key in live_in:
         entry = problem.values.get(key)
@@ -405,41 +407,23 @@ def _analyse_sequence(ops : list, live_out : set[register_key], where : str,
                 key=key, register_class=entry.register_class,
                 ranges=(live_range(where, first.section, 0, len(ops) - 1, True),),
                 parts=entry.parts, fixed=entry.fixed, owner=entry.owner)
-    _demand(ops, live_out, where, resources_, problem)
+    _demand(ops, live_out, where, resources_, problem, key_of=key_of)
     return live_in, live_in
 
 
-def _analyse_loop(loop : lsc_loop, live_out : set[register_key], resources_ : resources,
-                  problem : allocation_problem) -> None:
-    """
-    A loop's iteration: its sections one sequence (a prologue's write the value
-    its body reads), the values across its back edge carried
-    :param loop: the loop, an `lsc_loop` of a block
-    :param live_out: what is live after the loop
-    :param resources_: the machine
-    :param problem: the problem the values and demands are added to
-    """
-    sections = [(name, op) for name in lsc_loop.SECTIONS
-                for op in loop.sections.get(name) or []]
-    ops = [op for _, op in sections]
-    if not ops:
-        return
-    names = [name for name, _ in sections]
-    _analyse_sequence(ops, live_out, f"{loop.info.get('component')}<{loop.info.get('kind')}>",
-                      resources_, problem, section_of=lambda pos: names[pos])
-
-
 def _demand(ops : list, live_out : set[register_key], where : str, resources_ : resources,
-            problem : allocation_problem) -> None:
+            problem : allocation_problem, key_of : Callable = liveness.data_key) -> None:
     """
-    What each file needs here: the values of it live at once, and the names
+    What each file needs here: the values of it live at once, and the names -
+    the pins counted as often as they are kept
     :param ops: the operations, in the order they run
     :param live_out: what is live after the last of them
     :param where: the block or loop, for the demand's name
     :param resources_: the machine - the pools and the classes
     :param problem: the problem the demands are added to
+    :param key_of: how a register is named - the same as the pass that asks
     """
-    before, _ = _liveness(ops, live_out)
+    before, _ = _liveness(ops, live_out, key_of)
     tags: dict[register_key, str | None] = {}
 
     def tag_of(key : register_key) -> str | None:
@@ -452,9 +436,9 @@ def _demand(ops : list, live_out : set[register_key], where : str, resources_ : 
     names: dict[str, set[register_key]] = {}
     live_max: dict[str, int] = {}
     for pos, op in enumerate(ops):
-        reads, writes = liveness.reads_writes(op)
+        reads, writes = liveness.reads_writes(op, key_of)
         per_file: dict[str, set[register_key]] = {}
-        for key in before[pos] | reads | writes:
+        for key in before[pos] | reads | writes | problem.pinned:
             tag = tag_of(key)
             if tag is not None:
                 per_file.setdefault(tag, set()).add(key)
@@ -560,6 +544,8 @@ def analyse(program : ir_program, resources_ : resources) -> allocation_problem:
             problem.values[key] = replace(entry, fixed=fixed_register(
                 int(entry.register_class.allowed[0]),
                 "the only register its instruction takes"))
+    # what the kernel keeps, whatever its last read says
+    _pins(problem)
     # the renames a renamer can't make, with what they need: a value written in
     # parts, one an instruction pins, one the model or the user fixed - the
     # question "must this be the allocation's" answered per value
@@ -605,6 +591,20 @@ def _analyse_block(block : ir_block, later : list, resources_ : resources,
         live_out = liveness.read_before_written(later, key_of)
         _analyse_sequence(ops, live_out, block.name, resources_, problem,
                           section_of=lambda pos: names[pos], key_of=key_of)
+
+
+def _pins(problem : allocation_problem) -> None:
+    """
+    The values the kernel keeps in a register of their own from its setup to its
+    end: a stride's, a vector length's and its multiples' - the emitter loads
+    each once (`strides_in`) and never lets it go, where a live range would let
+    it die at its last read
+    :param problem: the problem the pins are recorded in
+    """
+    for key in problem.values:
+        name = key[0]
+        if name.startswith(("value:('stride'", "value:('vl_")):
+            problem.pinned.add(key)
 
 
 @dataclass
