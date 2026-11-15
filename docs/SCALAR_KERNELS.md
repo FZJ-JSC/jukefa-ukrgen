@@ -252,19 +252,30 @@ Both are done, in asmgen:
 | 3 | asmgen: FP `fma`/`mul`/`add` in `riscv64/optransform/` + `tests/optransform/riscv64/` | asmgen suite | done |
 | 4 | ukrgen: `scalar_direct` and the resident `SCALAR_REDUCE` resolution, both under `FP` | full suite, goldens all `same` (should be inert) - candidate sets identical on six generators, 21/21 goldens, 519 tests | done |
 | 5 | ukrgen: a one-element operand looked up under every register type it arrives in, and the provider filed by its steps' type | full suite, golden `diff` - 21/21 `same`, 522 tests, no encoding removed anywhere, RVV +12, `pack` +1 | done |
-| 6 | ukrgen: `isa_map` entry, `gemm_fma_scalar` preset, `ukrconfig/riscv64/{dgemm,sgemm}.yaml` | kernels build, qemu correctness against a reference | todo |
+| 6 | ukrgen: `isa_map` entry, `gemm_fma_scalar` preset, `ukrconfig/riscv64/{dgemm,sgemm}.yaml` | kernels build, qemu correctness - 8x3 and 3x8, FP32 and FP64, 16 emulated runs all correct; goldens gain four files, the other 21 `same` | done |
 
-Steps 1-5 are in asmgen and ukrgen; 6 is left. With them, the tree as it stands
-drives asmgen's `riscv64` generator to the measured kernel with no patch at all:
-the flow emits it, it assembles with `-march=rv64gc`, and the five alpha/beta
-cases pass under `qemu-riscv64`.
+Steps 1-6 are in. The reference configurations build, assemble and compute
+correctly under qemu; what is left is packm and the fallback question below.
 
 ## The reference config
 
-`blocksizes {mr-in-mc: 1, nr-in-nc: 1, kc: ...}`, one family, `m: 1`,
-`n: 1`, `k: 1` (one element of k per operation, the k loop the count), no
-addressing or schedule tuning, and `dtypes` FP64/FP32 only - F+D. The preset
-names the candidates the flow already offers:
+`ukrconfig/riscv64/{dgemm,sgemm}.yaml`, both data types only (F and D), one
+preset and two families:
+
+    blocksizes: {mr-in-mc: 8, nr-in-nc: 3, kc: 256}
+    - family: mn   m: [8]  n: [3]   order: kmn   default: 8x3
+    - family: nm   m: [3]  n: [8]   order: knm
+
+One operation is one element, so `--m 8 --n 3` is an 8x3 microtile - 24 scalar
+FMAs a k step, A's element loaded once and reused across the three columns
+(`kmn`), 3 B elements beside it. Twenty-four accumulators and the rings fit the
+32 FP registers, which is what makes 8x3 the largest tile this shape holds -
+the same arithmetic that sizes the vector configurations' 8x3v. The `nm`
+family is the transpose (3x8), the shape BLIS's other blocksize needs.
+
+`gemm_fma_scalar` is one variant fixing both extents - there is no index for
+vectors to run along, so it cannot use the `V`/`S` operand axes the vector
+presets have - and its templates are the candidates the flow offers:
 
     mm:        fma(A.FP:scalar_direct, B.FP:scalar_direct, AB.FP){m=1, n=1, k*=1}
     betascale: mul(C.FP:scalar_direct, beta.FP:scalar_direct, C.FP){m=1, n=1}
@@ -276,9 +287,20 @@ names the candidates the flow already offers:
     betaadd:   fma(C.FP:scalar_direct, beta.FP:scalar_direct, AB.FP){m=1, n=1}
     store_ab:  AB.FP:direct
 
-The preset's variants have no vector to orient around, so `gemm_fma_scalar`
-is a single variant fixing every extent to 1 - it cannot use the `V`/`S`
-operand axes the vector presets have.
+Measured: 875 instructions for 8x3 and 687 for 3x8, the same counts for FP32
+and FP64 (the suffixes differ); both assemble with `-march=rv64gc` and are
+correct under `qemu-riscv64` for k = 37 and four (alpha, beta) combinations
+each - alpha=1/beta=0 (store AB), 1/1, 0/1 and 3/2, the last two exercising
+`betascale` and the rest of the epilogue. They are in the golden set as
+`riscv64-{d,s}gemm-{mn-8x3,nm-3x8}`; the other 21 kernels are unchanged by
+their addition.
+
+**A kernel of these configurations takes C's stride in bytes.** `cgen`'s
+argument table multiplies: `"stride(C,n)" -> cs_c * (inc_t)sizeof(ctype)`, which
+is why the emitted `add t0,t0,a6` has no shift. A driver that passes BLIS's
+element count gets the columns packed `sizeof(ctype)` times too close and every
+element past the first column wrong - the 1x1 probe kernel of step 5 hid this
+because its C is one element.
 
 ## Open
 

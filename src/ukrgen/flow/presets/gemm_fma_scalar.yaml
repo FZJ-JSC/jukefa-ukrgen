@@ -1,0 +1,20 @@
+# gemm_fma_scalar: FMA for the main loop, mul/add/fma for the epilogue's cases,
+# one element per operand - the scalar reference kernel, RISC-V's F and D
+description: FMA for the main loop; mul, add and fma for the epilogue's cases; one element per operand, an FP register each (the reference kernel)
+ukr: gemm
+variants:
+  # no index for vectors to run along: every operand is one element, whatever
+  # the microtile's extents are
+  mn:
+    K: m=1, n=1, k*=1
+    T: m=1, n=1
+tileops:
+  mm: fma(A.FP:scalar_direct, B.FP:scalar_direct, AB.FP){$K}
+  betascale: mul(C.FP:scalar_direct, beta.FP:scalar_direct, C.FP){$T}
+  alphascale: fma(AB.FP, alpha.FP:scalar_direct, C.FP){$T}
+  store: C.FP:direct
+  alphamul: mul(AB.FP, alpha.FP:scalar_direct, C.FP){$T}
+  add: add(AB.FP, C.FP:scalar_direct, C.FP){$T}
+  alphaadd: fma(AB.FP, alpha.FP:scalar_direct, C.FP:scalar_direct){$T}
+  betaadd: fma(C.FP:scalar_direct, beta.FP:scalar_direct, AB.FP){$T}
+  store_ab: AB.FP:direct

@@ -1,0 +1,32 @@
+# FP64 gemm, riscv64 (rv64imafdc): the reference kernel - one element per
+# operand and per operation, F and D arithmetic on floating-point registers
+# (the printer's work is the same pattern without the vector part). Mirror the
+# vector configurations' default tile: the k loop's steps are kmn, so A's
+# element is loaded once and its 3 B elements are reused across the 3 columns,
+# 24 accumulators in the 32 FP registers.
+#
+# The second family is the transpose (3x8): the same kernel with the loop over
+# the columns inner - BLIS's other blocksize, and the shape a reference gemm
+# needs when C is packed the other way
+isa: riscv64
+blocksizes: {mr-in-mc: 8, nr-in-nc: 3, kc: 256}
+families:
+- family: mn
+  preset: gemm_fma_scalar
+  m: [8]
+  n: [3]
+  default: 8x3
+  params:
+    order: kmn
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    C-layout: ['m:c', 'n:s']
+- family: nm
+  preset: gemm_fma_scalar
+  m: [3]
+  n: [8]
+  params:
+    order: knm
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    C-layout: ['m:c', 'n:s']

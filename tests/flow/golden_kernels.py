@@ -26,7 +26,10 @@ CONFIGS = ["rvv/fma_vf/dgemm.yaml", "neon/fma_lane/dgemm.yaml", "sve/fma_bc_vind
            "sme/fopa_bc_vindex/dgemm.yaml", "sme/fopa_bc_vindex/sgemm.yaml",
            # SME and SVE split along m or n, its outer-product part tiled
            "smesve/fopa_fma_split/dgemm.yaml", "smesve/fopa_fma_split/sgemm.yaml",
-           "smesve/fopa_fma_split_n/dgemm.yaml"]
+           "smesve/fopa_fma_split_n/dgemm.yaml",
+           # the scalar reference kernels: one element per operand, the 8x3
+           # tile and its transpose (rv64imafdc's F and D)
+           "riscv64/dgemm.yaml", "riscv64/sgemm.yaml"]
 EXTRA = [
     ("rvv/fma_vf/dgemm.yaml", "vm", 2, 14),
     # vn in the loop order the reference configurations moved off (knm now):
