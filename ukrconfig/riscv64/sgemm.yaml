@@ -9,8 +9,10 @@ families:
   m: [8]
   n: [3]
   default: 8x3
+  schedule: ['RAW:data:freg:ld:fma:3', 'RAW:data:freg:fma:fma:4', 'RAW:address:greg:::2']
   params:
     order: kmn
+    sched-cycle-slots: "2:sl,f|i"
     A-layout: ['m:c', 'k:p']
     B-layout: ['n:c', 'k:p']
     C-layout: ['m:c', 'n:s']
@@ -18,8 +20,10 @@ families:
   preset: gemm_fma_scalar
   m: [3]
   n: [8]
+  schedule: ['RAW:data:freg:ld:fma:3', 'RAW:data:freg:fma:fma:4', 'RAW:address:greg:::2']
   params:
     order: knm
+    sched-cycle-slots: "2:sl,f|i"
     A-layout: ['m:c', 'k:p']
     B-layout: ['n:c', 'k:p']
     C-layout: ['m:c', 'n:s']

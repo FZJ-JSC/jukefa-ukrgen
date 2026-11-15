@@ -243,6 +243,15 @@ Both are done, in asmgen:
   narrower than the API; widening it to `data_reg | greg_base` is a separate
   one-line change, not part of this one.
 
+- **A family's `schedule:` is a key, not a parameter.** `key_params` maps the
+  family's and each case's `schedule` to the `distances` stage parameter, so
+  `schedule:` belongs at the family's or the case's level. Written inside
+  `params:` it is a stage parameter no stage takes, and that is a *warning*, not
+  an error ("no stage takes schedule"): the build succeeds, the kernels look
+  scheduled, and no distance was ever applied. `sched-cycle-slots` is the other
+  way round - it is already the stage parameter's name, so it goes inside
+  `params:` where k1 puts it.
+
 ## Phases
 
 | # | change | gated by | state |
@@ -253,9 +262,12 @@ Both are done, in asmgen:
 | 4 | ukrgen: `scalar_direct` and the resident `SCALAR_REDUCE` resolution, both under `FP` | full suite, goldens all `same` (should be inert) - candidate sets identical on six generators, 21/21 goldens, 519 tests | done |
 | 5 | ukrgen: a one-element operand looked up under every register type it arrives in, and the provider filed by its steps' type | full suite, golden `diff` - 21/21 `same`, 522 tests, no encoding removed anywhere, RVV +12, `pack` +1 | done |
 | 6 | ukrgen: `isa_map` entry, `gemm_fma_scalar` preset, `ukrconfig/riscv64/{dgemm,sgemm}.yaml` | kernels build, qemu correctness - 8x3 and 3x8, FP32 and FP64, 16 emulated runs all correct; goldens gain four files, the other 21 `same` | done |
+| 7 | ukrgen: `packm_scalar` preset, `ukrconfig/riscv64/{dpackm,spackm}.yaml`, one `kind: scalar` case | five cdim sizes built each, 10 emulated runs correct (both kappa branches); goldens gain two files | done |
+| 8 | ukrgen: a dual-issue model and three distances on the reference configs | the scheduler reports its distances met in the k loop (27 cycles for 37 instructions) and the expected shortfall in the epilogue; a reordering with every count unchanged, and the emulated runs still correct | done |
 
-Steps 1-6 are in. The reference configurations build, assemble and compute
-correctly under qemu; what is left is packm and the fallback question below.
+Steps 1-8 are in. The reference configurations build, assemble and compute
+correctly under qemu, gemm and packing, with a dual-issue model and distances;
+what is left is the fallback question below and the BLIS-side check.
 
 ## The reference config
 
@@ -302,17 +314,85 @@ element count gets the columns packed `sizeof(ctype)` times too close and every
 element past the first column wrong - the 1x1 probe kernel of step 5 hid this
 because its C is one element.
 
-## Open
+## The reference packing config
 
-- **packm**: the `pack` requirement is `MOVE(Y[m,n], X[m,n])` (kappa 1) or
-  `MOVE(Y, MUL(X, kappa))`, so a scalar packm is `fld` -> (`fmul.d`) -> `fsd`
-  one element at a time, `m` = the cdim extents (1..16 elements per
-  microkernel), `n` = 1 with the panel the loop. The "stride or immediate
-  offset" variants are the layout parameter (`X-layout: [m:c, n:s]` against
-  `[m:s, n:c]`), which the specializer already turns into an immediate offset
-  or a register bump. blisgen's packm families carry case kinds (vec, gather,
-  trans) that index a dispatch, and a reference packm has no `vec` case: the
-  config needs a case shape blisgen accepts, or packing stays BLIS's.
+`ukrconfig/riscv64/{dpackm,spackm}.yaml`, the `packm_scalar` preset, one case
+and every cdim size built: `m: [1, 2, 4, 8, 16]` - element counts, one `fld`
+and one `fsd` (and an `fmul.d` for the scaled branch) per element. The
+composition's own branch gives the two kernels BLIS needs from one program:
+`kappa == 1` is the copy (`fld`/`fsd`), anything else the scaled pack
+(`fld`/`fmul.d`/`fsd`), selected at run time by `feq.d` against 1.0.
+
+        kind: scalar   m: [1, 2, 4, 8, 16]
+        X-layout: ['m:c', 'n:s']   Y-layout: ['m:c', 'n:s']
+        sched-cycle-slots: "2:sl,f|i"
+        dispatch: [scalar]
+
+There is one case, not the vec/gather/trans three: with one element per operand
+the source's layout decides only the *address form* (an immediate offset per
+row inside the panel, or a stride bump between columns), never which form the
+access takes - measured, the candidate encodings for `X-layout [m:c, n:s]` and
+`[m:s, n:c]` are identical. No `mask` (cdim elements are cdim operations, so
+there is no partial vector), no `lmul`, no `min-inflight` (nothing to keep in
+flight).
+
+`kind: scalar` is what makes it usable in a vector configuration too: cgen's
+default dispatch ranks `vec`, `gather`, `trans` and then anything else, so the
+same case drops in last as the fallback for the cdim the vector cases leave to
+the reference. It sorts last because `rank.get(kind, 4)` has no entry for it,
+and it is treated as an ordinary case - unmasked, not blockwise, no `stride(Y,n)`
+requirement - because those are all keyed on the kind. Its `mr` is a fixed
+element count, which `split_size`/`c_expr` already handle (AVX-512's fixed 16 is
+the precedent).
+
+Measured: 53, 63, 83, 123 and 255 instructions for cdim 1, 2, 4, 8, 16 (the same
+in FP32 and FP64), assembled with `-march=rv64gc` and correct under
+`qemu-riscv64` for 7 columns with lda 11 and ldp 19 - both kappa branches, and
+Y past cdim untouched: 10 runs. In the golden set as
+`riscv64-{d,s}packm-pk-scalar` (all five sizes in each file).
+
+## Scheduling
+
+The issue model's classes are decided from the operand shapes already:
+`classify()` (`schedulers/issue.py`) reads `op.rtypes` and returns `vf` for a
+transformation whose operands hold a VEC, `f` for one whose operands are FP,
+`t` for a TILE, `i` otherwise, `vl`/`sl` for a load by the same test. So no
+class is missing for a scalar kernel - `CLASSES` has had `f` ("scalar FP")
+all along - and no new mechanism is needed: what was missing is a
+configuration naming it. Measured on the 8x3 kernel with the model on:
+`{f: 312, addr: 291, sl: 178, ss: 144, i: 25}`, against RVV's
+`{vf: 6102, vl: 2288, vs: 2712, sl: 1890, addr: 5636, i: 349}` - the same
+classification puts each in its own class.
+
+The reference configurations carry a dual-issue model and three distances:
+
+        sched-cycle-slots: "2:sl,f|i"      one memory port, one ALU/FP port
+        schedule: [RAW:data:freg:ld:fma:3,   a load's value three later
+                   RAW:data:freg:fma:fma:4,  an accumulator four later
+                   RAW:address:greg:::2]     an address step before its access
+
+`ss` falls back to `sl` and `addr` to `i` (`FALLBACK`), so stores share the
+memory port and address arithmetic the ALU's - which is the model's point.
+
+What the scheduler reports (`--print-schedule` prints it into the kernel, or
+`list_scheduler.report`): the k loop, 37 operations, takes **27 cycles** with
+`ld->fma` asked for 3 and **reached 5, none short**, `fma->fma` asked for 4 and
+reached 37, `address` asked for 2 and reached 6. The epilogue's 47-operation
+block asks 2 of an address dependence and reaches 1, 23 short - straight-line
+code with a register budget, which is the documented expected shortfall rather
+than an error. The emitted text is a **reordering**: 820 instructions either
+way for 8x3 and 632 for 3x8, the loads hoisted so their values arrive before
+their first use, 742 of the 820 lines in another position. Correctness after
+the reorder: the same 16 emulated runs pass.
+
+
+- **The scalar packing case as a vector configuration's fallback**: adding
+  `kind: scalar` to e.g. `rvv/k1/dpackm.yaml` promises ukrgen code for the cdim
+  ranges its vector cases leave to BLIS's reference (below the smallest case's
+  `mr`, past a case's 16-row window, and where the `inca == 1`/`lda == 1` guards
+  fail). Unmeasured - and the remainder *inside* a vector case's window stays
+  the reference either way, because `overlap()`'s peers are that case's own
+  kernels and not another case's.
 - `--k` unroll > 1 and `subtail` are untested for scalars (the measured
   kernel is unroll 1).
 - FP16 needs Zfh (`fadd.h`, `flh`), and `riscv64_opmem` already offers FP16

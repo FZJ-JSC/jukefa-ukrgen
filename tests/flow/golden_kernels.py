@@ -49,6 +49,9 @@ EXTRA = [
 PACKM = [
     ("sme/fopa_bc_vindex/dpackm.yaml", "pk", ("ztrans",)),
     ("sme/fopa_bc_vindex/spackm.yaml", "pk", ("ztail",)),
+    # the scalar reference packing kernels: one case, every cdim size built
+    ("riscv64/dpackm.yaml", "pk", ("scalar",)),
+    ("riscv64/spackm.yaml", "pk", ("scalar",)),
 ]
 
 
