@@ -382,18 +382,21 @@ changed what the first one had to do:
 - **A1 - the parameter.** `--<COMP>-addr-forms` (`auto` or `goffset`, default
   `auto`) through the addressing plan into `program.addr_forms`, read as
   `forms(comp)`. Inert until something asks.
-- **A2 - the merge, in `slice_columns`.** The GOFFSET condition does **not**
-  live where it looked: it is nested inside `0 == stride_pointers(comp)`, the
-  no-pointer mode, so a component with pointers (SME's epilogue) never reaches
-  it, and relaxing it there would collapse nothing. The `[w12, 0]`/`[w12, 1]`
-  pair are two **columns**, each with its own pointer, each access sitting *at*
-  its register - so folding them is merging two columns that differ by exactly
-  one stride unit of coefficient 1 into one pointer plus an offset register.
-- **A3 - `_slices` must honour it.** `_memory` pops the goffset term and passes
-  `offreg` to `_mem`; `_slices` calls `_mem` with the walker and no goffset
-  path, so a merged column would emit the access **without** the offset register
-  - wrong asm with no error. A2 and A3 are one change.
-
+- **A2 - no candidate, measured.** The `[w12, 0]`/`[w12, 1]` pair are indeed
+  two columns, and the merge was written and tried: **it never fires.** The
+  columns of SME's slice loops are `VL*stride(C,n)` apart - whole vectors, one
+  per slice of the tile - not one stride unit apart, and a vector-length-scaled
+  stride is not something an offset register holds (`[x0, x1, lsl #3]` takes a
+  scalar index; `addvl` is a *step*, which is what a pointer already does). The
+  "+1 element" access is the tile's second vector half, addressed by the slice
+  immediate, not by a memory form. So the column merge has nothing to fold in
+  today's kernels and was removed rather than kept as dead code.
+  `_walkable` and `_register_offset_form` did come out of it as module-level
+  predicates (the method delegates), because any later attempt needs them.
+- **A3 - not needed as first thought.** `_mem` already honours
+  `op.properties["goffset"]` itself (pops the term, adds the `GOFFSET`
+  modifier, `offreg` from `stride_elements`), so `_slices` does not need
+  teaching; it would only have been needed had A2 survived.
 Default `auto` keeps the gate; the forced `goffset` runs are what measure it,
 and the variants/`decision("form")` machinery waits for C', where an allocator
 can price the choice instead of a parameter forcing it.

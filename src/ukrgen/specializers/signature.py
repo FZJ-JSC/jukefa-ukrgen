@@ -206,6 +206,36 @@ def slice_walkers(op, program, component_dts) -> list[dict]:
     return out
 
 
+def _walkable(comp: str, factors: tuple) -> bool:
+    """
+    A term an address register walks by, an add of a register each: one of the
+    component's strides, or the vector length times one (a strided access's next
+    vector - C's rows at a run-time stride)
+    :param comp: the component
+    :param factors: the term's factors
+    :return: whether a register walks by it
+    """
+    if 1 == len(factors):
+        return factors[0].startswith(f"stride({comp},")
+    return 2 == len(factors) and "VL" == factors[0] and factors[1].startswith(f"stride({comp},")
+
+
+def _register_offset_form(op, gen, dt) -> bool:
+    """
+    Whether the operation has a register offset form at this type (SVE's
+    [x0, x1, lsl #3]) - the operation's own signatures: the access's solved
+    forms are its plain and immediate ones
+    :param op: the access
+    :param gen: the generator, for the operation's full signature list
+    :param dt: the access's data type
+    :return: whether a signature adds an offset register
+    """
+    operation = getattr(gen, op.step.op, None)      # IR pseudo-operations have none
+    full = operation.get_signatures() if operation is not None else []
+    return any({"GOFFSET"} == {m.name for m in s.modifiers} - {"MASK"}
+               and ("adreg" not in s.operands or s.operands["adreg"].dt == dt) for s in full)
+
+
 def slice_columns(op, plan: dict, loop_gregs) -> tuple:
     """
     A loop over slices' access columns: within the general registers allowed
@@ -213,6 +243,10 @@ def slice_columns(op, plan: dict, loop_gregs) -> tuple:
     vector lengths; tiles a vector length apart share one, the rest an
     immediate - set before the loop, stepped once an iteration: no moves
     between tiles. The first column of a plan register is that register
+    :param op: the loop
+    :param plan: the loop's walk plan (specializers/addresses.py)
+    :param loop_gregs: the general registers the loop's frame and pointers may
+                       take (--loop-gregs), None for no limit
     :return: (columns, pointers, column_of): columns (plan key, column text)
              -> (key, column); pointers the same keys -> the column (None:
              the plan register itself), empty without room; column_of a walk
@@ -419,23 +453,16 @@ class signature_specializer:
         Whether the operation has a register offset form at the access's type
         (SVE's [x0, x1, lsl #3]) - the operation's own signatures: the access's
         solved forms are its plain and immediate ones
+        :param op: the access
+        :param comp: its component
+        :return: whether a signature adds an offset register
         """
-        dt = self.ctx.component_dts[comp]
-        operation = getattr(self.ctx.gen, op.step.op, None)      # IR pseudo-operations have none
-        full = operation.get_signatures() if operation is not None else []
-        return any({"GOFFSET"} == {m.name for m in s.modifiers} - {"MASK"}
-                   and ("adreg" not in s.operands or s.operands["adreg"].dt == dt) for s in full)
+        return _register_offset_form(op, self.ctx.gen, self.ctx.component_dts[comp])
 
     @staticmethod
     def walkable(comp: str, factors: tuple) -> bool:
-        """
-        A term an address register walks by, an add of a register each: one of
-        the component's strides, or the vector length times one (a strided
-        access's next vector - C's rows at a run-time stride)
-        """
-        if 1 == len(factors):
-            return factors[0].startswith(f"stride({comp},")
-        return 2 == len(factors) and "VL" == factors[0] and factors[1].startswith(f"stride({comp},")
+        """A term an address register walks by (`_walkable`)"""
+        return _walkable(comp, factors)
 
     def forms(self, comp: str) -> str:
         """
