@@ -84,6 +84,10 @@ class signature_emitter:
         #: these names where the ISA reads them (the vector length, in late
         #: setup) - docs/REGISTER_ALLOCATION.md, the state registers
         self.value_names: set[str] = set()
+        #: the values kept in their register for the kernel's whole life (the
+        #: counts): the emitter reads them where the IR's last read may be
+        #: behind it, so the allocation leaves them alone
+        self.kept: set = set()
         #: setup values placed after the dispatch's loads (placed_at_dispatch):
         #: one of their inputs a stack parameter deferred there
         self.dispatch_setup: list[str] = []
@@ -1406,6 +1410,10 @@ class signature_emitter:
             return self.loop(op)
         if isinstance(op, (lsc_load, lsc_store)):
             return self.memory(op)
+        if isinstance(op, lsc_set):
+            # a value set where it stands (the setup's counts; the entry's
+            # masks go through state's dispatch the same way)
+            return self.set_op(op)
         if isinstance(op, lsc_state):
             return self.state(op)
         if isinstance(op, lsc_transformation):

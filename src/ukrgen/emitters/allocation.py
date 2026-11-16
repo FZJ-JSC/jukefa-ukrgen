@@ -160,7 +160,7 @@ class register_allocator:
         (a group's registers stay: a lone member must not be handed out)
         """
         e = self.e
-        if key[0] in e.program.groups:
+        if key in e.kept or key[0] in e.program.groups:
             return
         if key in e.phys:
             tag, number = e.numbers.pop(key)

@@ -778,10 +778,45 @@ machinery reads are not:
 
 | register | where it is made | should be |
 |---|---|---|
-| **VL in elements** (`offsets.vl_elements`) | **in the IR now**: `irmod/lsc/vlen.py` names it (`lsc_set("VL in <e>-byte elements", 0, GP, set_vl_elements(dt))`) in the entry for each element type a vector-length step is taken at; its *register* is still the emitter's (SVE/SME `self.greg()` in `late_setup`, RVV's setup alias) | the register becomes the value's (`alloc.bind`), and its consumers - the walks, the loop counts, the masks - read it as a slot, so liveness and the allocation own it. Today the set names the value and `vl_elements` returns that name's register, so nothing moves: 27 goldens byte-identical |
+| **VL in elements** (`offsets.vl_elements`) | **named in the IR, its register not yet**: see the readers below: `irmod/lsc/vlen.py` names it (`lsc_set("VL in <e>-byte elements", 0, GP, set_vl_elements(dt))`) in the entry for each element type a vector-length step is taken at; its *register* is still the emitter's (SVE/SME `self.greg()` in `late_setup`, RVV's setup alias) | the register becomes the value's once its real readers exist: the products `VL*stride`/`VL²`/bytes, as value ops with operand slots (see the readers below) - *not* the walks or accesses, which take the length as ISA state. Today the set names the value and `vl_elements` returns that name's register, so nothing moves: 27 goldens byte-identical |
 | the all-true predicate (`isa_setup.all_true_predicate`) | the ISA object hands out a register | the same `lsc_set` pattern (`ptrue`), like the tail's mask |
 | `avl` (RVV's preferred length) | the setup's alias | a parameter value in the IR |
 | `tmp` (`loop_counts`) | `self.greg()`, freed at once | scratch, deliberately unnamed |
+
+**What actually reads the count.** `cntd`'s value is consumed two ways, and
+only one is a register read: vector instructions take the length as *state*
+(`incb x0, ALL, MUL #1` names no register), and the planner's own arithmetic
+takes it as an operand (`mul` for `VL*stride`, `sll` for `VL²` or bytes). That
+arithmetic has **no IR operation** - the IR names only its result
+(`value:('vl_stride', …)` with `reads=[]`), and `offsets.scaled_steps`
+recomputes it by hand. So binding a read slot on accesses or address
+computations invents a reader for an instruction the IR doesn't contain: it
+broke 25 tests across op classes that never expected a slot without a signature
+operand.
+
+**`hw_operands` is not a general slot concept.** `indices` + `rtypes` +
+`reg_types` name a register and `reads`/`writes` index into them - any register
+can be modelled so. `hw_operands` says *which signature operand* a slot fills,
+which only ops emitted through a signature have; a `None` there is not "no
+operand" but `None[0]` in the emitter's `{hw[0]_dt}`. So the moved computations
+must be `lsc_transformation`s (their slots are real operand names), the count's
+definition stays a `set` (payload, no slots), and nothing else gets a slot.
+
+**Move both sides at once.** The remaining items are two-sided cycles - a value
+can't be named without the op that defines it, and the op can't exist without a
+register the allocation owns - and the pieces that worked were the ones where
+one side could be inert (a `set` emitted with no consumers) or where the
+emitter's side could be *deleted* (C', D', A2). The element vector length is the
+case that needs both at once: the products that read it become value ops with
+operand slots **and** the hand-emitted `mul`/`sll` in `offsets.scaled_steps`
+goes in the same change, so liveness sees count -> product and the allocation
+owns the register.
+
+**Recompute or keep is a `decision`.** Whether a product is computed at each
+use or held in a register across a region is the offset pattern one level up:
+`decision("value", (name, "inline"))` against `"kept"`, `decide` pruning, the
+allocator pricing it with the budget it already has. `strides_in`'s
+string-keyed cache becomes the `kept` branch of a named decision.
 
 These are the last of the `isaquirks()`-era holders: everything else in
 `isa_setup` is a declaration (`steps()`, `predication()`, `clobbers()`,
@@ -867,14 +902,17 @@ The order, approved, each item its own commit:
    kernels. Nine goldens re-recorded (six SME, three SMESVE), the SME gemm runs
    correct under qemu at SVL 256 and 512 both before and after (the numerical
    tests never changed - only the columns' shape assertions did).
-8. **The state registers into the IR** - the element vector length is **in**:
-   `lsc_set("VL in <e>-byte elements", …)` in the entry (`irmod/lsc/vlen.py`),
-   `set_vl_elements` as its payload, `set_op` recognising it and
-   `offsets.vl_elements` returning that value's register. What remains is the
-   register *being* the value's: its consumers read it as a slot (or the
-   allocation binds it), which is what makes it a B1 pin the analysis counts
-   rather than a register the emitter keeps; then the all-true predicate, then
-   `avl` as a parameter value. Deliberately not moved: `loop_counts`' `tmp`.
+8. **The state registers into the IR.** The element vector length is named
+   (`lsc_set` + `set_vl_elements`, `irmod/lsc/vlen.py`, inert: 27 goldens
+   byte-identical), but its register is still the emitter's and its readers are
+   missing - they are the planner's hand-emitted `mul`/`sll` for `VL*stride`,
+   `VL²` and bytes, not the accesses (see the section above). Next: those
+   products become `lsc_transformation`s whose operand slots are the count and
+   the stride, `offsets.scaled_steps`' hand-emission goes in the same change,
+   and recompute-vs-keep becomes a `decision` the allocator prices. Then the
+   all-true predicate (a real signature operand, so it can be phased like the
+   mask), then `avl` (an input, no cycle). Deliberately unnamed: `loop_counts`'
+   `tmp`.
 9. **The n-lane mask** for the columns left of a vector-length block: the
    packing kernels count `n` in blocks, and a combined SME+SVE kernel's `cdim`
    can be `k*VL + j`, so the partial block needs a predicate on the `n` lanes -

@@ -192,10 +192,14 @@ class offset_planner:
             self.e.late_setup.append(self.e.gen.set(**call))
             self.e.strides_in[key] = reg
             if key in self.e.value_names:
-                # the set op's value: read here, so that the passes after it
-                # (liveness, the renamer) find it by name; recording the
-                # register as the value's is the next step, with the reads
+                # the set op's value: the operations that compute a product
+                # from it read it (value_setup), so the register is the
+                # value's - recorded both ways the allocator keeps them
+                # (allocation.free pops the pair)
                 self.e.values[key] = reg
+                self.e.phys[(key, 0, rgt.GP)] = reg
+                self.e.numbers[(key, 0, rgt.GP)] = ("greg", reg.idx)
+                self.e.kept.add((key, 0, rgt.GP))
         return self.e.strides_in[key]
 
     def offset_value(self, amount: offpoly, comp: str):

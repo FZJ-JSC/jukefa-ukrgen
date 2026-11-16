@@ -19,6 +19,7 @@ resolved as a setup value (by name and element size).
 from __future__ import annotations
 
 from asmgen.asmblocks.op import operand_modifier as opd_mod
+from asmgen.asmblocks.op import register_type as rgt
 from asmgen.registers import adt_size, asm_data_type as adt
 
 from ..components.tile import scalar_tile
@@ -29,7 +30,7 @@ from ..models.lsc.addressing import offpoly
 from ..models.lsc.ir import ir_program
 from ..models.lsc.index import lsc_reg_index
 from ..models.lsc.reg import lsc_reg_type
-from ..models.lsc.operations import lsc_addr_compute, lsc_loop
+from ..models.lsc.operations import (lsc_addr_compute, lsc_loop, lsc_set, set_vl_elements)
 from .signature import specialization_error
 from ..models.lsc.offset_polynomial import offset_polynomial as offpoly
 
@@ -596,6 +597,41 @@ def step_values(step: tuple) -> list:
     return []
 
 
+#: the setup values whose arithmetic reads the vector length: a multiple of it,
+#: a stride times one, its square, and its bytes
+COUNTED = ("vl_multiple", "vl_stride", "vl_squared", "vl_bytes")
+
+
+def _count_dt(value : tuple):
+    """
+    The element type a value's arithmetic reads the vector length in
+    :param value: a setup value's payload tuple
+    :return: the type, None for a value that reads no count
+    """
+    if value[0] not in COUNTED:
+        return None
+    return value[1] if "vl_multiple" == value[0] else value[-1]
+
+
+def _count_name(dt) -> str:
+    """
+    The vector length's name, as the set that defines it names it
+    :param dt: the element type its count is in
+    :return: the name
+    """
+    return f"VL in {adt_size(dt)}-byte elements"
+
+
+def _count_reads(value : tuple) -> list[str]:
+    """
+    The counts a value reads, as names - the value operation's operands
+    :param value: a setup value's payload tuple
+    :return: the names, empty for a value that reads none
+    """
+    dt = _count_dt(value)
+    return [] if dt is None else [_count_name(dt)]
+
+
 def value_setup(program) -> int:
     """
     The setup values spelled steps add (step_values) computed in the IR: a
@@ -631,11 +667,17 @@ def value_setup(program) -> int:
             (n for n in values if is_offset(n)),
             key=lambda n: (-rank.get((str(values[n][1]), values[n][2]), 0),
                            str(values[n][1]), values[n][2]))
-        ops = [lsc_value_op("value", writes=[name], reads=[], value=values[name]) for name in order]
+        ops = [lsc_value_op("value", writes=[name], reads=_count_reads(values[name]), value=values[name])
+               for name in order]
         setup = ir_block(name=f"{START_BLOCK}values")
-        setup.body = ops
+        # the counts the products read, set before them - one per element size
+        # their arithmetic is in (docs/REGISTER_ALLOCATION.md: what reads the
+        # count, and why the products are the readers)
+        counts = sorted({_count_dt(values[name]) for name in order if _count_dt(values[name]) is not None},
+                        key=adt_size)
+        setup.body = [lsc_set(_count_name(dt), 0, rgt.GP, set_vl_elements(dt)) for dt in counts] + ops
         program.blocks = [setup] + list(program.blocks)
-        return len(ops)
+        return len(setup.body)
     return 0
 
 
