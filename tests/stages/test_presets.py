@@ -17,11 +17,14 @@ from ukrgen.injectors.blis.families import run_flow
 BASE = {"ukr": "gemm", "k": "1", "A-layout": ["m:c", "k:p"], "B-layout": ["n:c", "k:p"]}
 
 
-def build(isa, preset, dt="FP64", c_layout=("m:c", "n:s"), m="2", n="2", **extra):
+def build(isa, preset, dt: str | None = "FP64", c_layout=("m:c", "n:s"), m="2", n="2", **extra):
     p = dict(BASE, isa=isa, **{"tileop-preset": preset, "C-layout": list(c_layout), "m": m, "n": n})
-    # (alpha's and beta's types are C's: no data type of their own)
-    for comp in ("A", "B", "C", "AB"):
-        p[f"{comp}-data-type"] = dt
+    # one data type for A, B, C and AB - unless the caller names them (mixed
+    # precision's narrow inputs); alpha's and beta's are C's, no type of their
+    # own
+    if dt is not None:
+        for comp in ("A", "B", "C", "AB"):
+            p[f"{comp}-data-type"] = dt
     p.update(extra)
     return run_flow(p)
 
@@ -34,10 +37,32 @@ class test_presets(unittest.TestCase):
 
     def test_shipped(self):
         self.assertEqual(["gemm_fma_bc", "gemm_fma_bc_blocks", "gemm_fma_bc_lanes", "gemm_fma_bc_vindex",
-                          "gemm_fma_blocklane_vindex", "gemm_fma_lane", "gemm_fma_scalar",
-                          "gemm_fma_vf",
-                          "gemm_fopa_bc_vindex", "packm_bc", "packm_scalar", "packm_vf", "packm_vf_gather", "packm_za"],
+                          "gemm_fma_bc_widen", "gemm_fma_blocklane_vindex", "gemm_fma_lane",
+                          "gemm_fma_scalar", "gemm_fma_vf", "gemm_fma_vf_widen",
+                          "gemm_fopa_bc_vindex", "packm_bc", "packm_scalar", "packm_vf", "packm_vf_gather",
+                          "packm_za"],
                          presets.names())
+
+    def test_mixed_precision_widens(self):
+        # A and B narrow, the accumulator and C wide: the main loop's FMA is
+        # each ISA's own widening form (RVV vfwmacc, NEON fmlal, SVE fmlalb),
+        # the epilogue in C's type; the same preset takes the plain FMA where
+        # no operand widens
+        forms = (("rvv", "gemm_fma_vf_widen", {"rvv-LMUL": "1", "rvv-ZVFH": "on"},
+                  "widening_method=VEC_GROUP"),
+                 ("neon", "gemm_fma_bc_widen", {"neon-FHM": "on"},
+                  "widening_method=SPLIT_CONTIGUOUS"),
+                 ("sve", "gemm_fma_bc_widen", {"sve-SVE2": "on"},
+                  "widening_method=SPLIT_INTERLEAVED"))
+        for isa, preset, extra, method in forms:
+            with self.subTest(isa=isa):
+                mixed = {"A-data-type": "HALF", "B-data-type": "HALF",
+                         "AB-data-type": "SINGLE", "C-data-type": "SINGLE"}
+                wider, _ = build(isa, preset, dt=None, m="1", n="4", **mixed, **extra)
+                self.assertIn(method, chosen(wider, "mm"))
+                # the same preset, one type throughout: the plain FMA
+                plain, _ = build(isa, preset, dt="FP32", m="1", n="4", **extra)
+                self.assertNotIn("widening_method", chosen(plain, "mm"))
 
     def test_layout_decides_the_variant(self):
         ctx, _ = build("neon", "gemm_fma_bc")

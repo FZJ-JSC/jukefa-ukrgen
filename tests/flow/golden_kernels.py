@@ -43,6 +43,17 @@ EXTRA = [
     # tiles along n, the FMA part's vectors along m)
     ("smesve/fopa_fma_split_n/dgemm.yaml", "sf", 2, None),
 ]
+#: mixed precision, through the flow rather than a configuration: A and B
+#: narrow, the accumulator and C wide, each ISA's widening FMA (RVV vfwmacc,
+#: NEON fmlal, SVE fmlalb). A BLIS configuration is one data type per family,
+#: and BLIS's mixed-precision support is other work in flight, so these are
+#: the flow's own parameters with the golden naming the function -
+#: (file, label's family, m, n)
+MIXED = [
+    ("tests/flow/mixed/rvv/gemmf16f16f32.yaml", "vn", 4, 1),
+    ("tests/flow/mixed/neon/gemmf16f16f32.yaml", "vn", 4, 1),
+    ("tests/flow/mixed/sve/gemmf16f16f32.yaml", "vn", 4, 1),
+]
 #: packing kernels too: the same loops over slices (a tile's columns out
 #: through ZA, ztrans; the last one masked to a run-time count, ztail), both
 #: element sizes - (configuration, family, the cases recorded)
@@ -76,6 +87,7 @@ def kernels() -> list[tuple]:
             first = lambda name: (fam.sizes.get(name) or [None])[0]
             out.append((path, fam.name, first("m"), first("n")))
     out += [k for k in EXTRA if k not in out]
+    out += [k for k in MIXED if k not in out]
     out += [(path, fam, None, None) for path, fam, _ in PACKM]
     cases = {path: keep for path, _, keep in PACKM}
     def label(p, f, m, n):
@@ -91,12 +103,44 @@ def kernels() -> list[tuple]:
     return [(label(p, f, m, n), p, f, m, n, cases.get(p)) for p, f, m, n in out]
 
 
+def mixed(path: str, m: int, n: int) -> str:
+    """
+    A kernel the flow builds from a mixed-precision fixture's own parameters:
+    the components' data types, the preset, the unroll - no configuration,
+    which knows one data type per family
+
+    :param path: the fixture, relative to the repository's root
+    :param m: the tile's m extent
+    :param n: the tile's n extent
+    :return: the assembly, the fixture's symbol naming the function
+    """
+    import yaml
+    from ukrgen.injectors.blis.families import run_flow
+    with open(os.path.join(ROOT, path)) as f:
+        spec = yaml.safe_load(f)
+    params = {"isa": spec["isa"], **spec["params"], "m": str(m), "n": str(n)}
+    if "C-layout" not in params and params.get("C-storage"):
+        # the storages are branches of one kernel: its C-layout the last's,
+        # the default's (the storage stage's LAYOUTS)
+        from ukrgen.flow.stages.ukr.storage import LAYOUTS
+        params["C-layout"] = list(LAYOUTS[params["C-storage"][-1]])
+    try:
+        ctx, result = run_flow(params)
+    except Exception as err:  # pylint: disable=broad-except
+        return f"!{type(err).__name__}: {str(err)[:200]}"
+    if not result.completed:
+        return f"!{result.output.splitlines()[0][:200]}"
+    return "\n".join(ctx.emitted[0].function(spec["symbol"])) + "\n"
+
+
 def build(path: str, family: str, m: int, n: int, cases: tuple | None = None) -> str:
     """
     The kernel's assembly - a split family's or a packing family's several,
     each after a line naming its symbol - or why it didn't build
     """
     from ukrgen.injectors.blis.families import build_gemm, build_packm
+    if path in {p for p, _, _, _ in MIXED}:
+        return mixed(path, m, n)
     from ukrgen.injectors.blis.cgen import asm_source
     cfg = _config(path)
     # family@key=value,...: the family with parameters of its own (a loop order

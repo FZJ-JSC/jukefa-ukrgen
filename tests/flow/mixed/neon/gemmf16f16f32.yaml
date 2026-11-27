@@ -1,0 +1,31 @@
+# gemmf16f16f32 on neon - A and B FP16, the accumulator and C FP32 - in the
+# flow's own parameters: the k loop widens into FP32 (fmlal, fmlal2 -
+# FEAT_FHM), the epilogue in FP32; the scalar operand broadcast from memory, C
+# across vectors by strided loads and stores.
+#
+# Not a BLIS configuration: one of those is a single data type per family -
+# its symbol, blocksizes and packers are BLIS's - and BLIS's mixed-precision
+# support is other people's work in flight, so this golden says nothing about
+# it
+isa: neon
+# the golden names the function it records
+symbol: gemmf16f16f32_neon_vn_4x8
+params:
+  ukr: gemm
+  neon-FHM: '1'
+  tileop-preset: gemm_fma_bc_widen
+  tileop-vectorize: n
+  A-data-type: HALF
+  B-data-type: HALF
+  AB-data-type: SINGLE
+  C-data-type: SINGLE
+  A-layout: ['m:c', 'k:p']
+  B-layout: ['n:c', 'k:p']
+  order: knm                 # one vector's rows walked at a time
+  # no unroll: the unrolled tail's walk back and its advance are two adds to
+  # the same register with nothing between them (add x1,x1,#-6 ... #8), which
+  # test_no_mergeable_adds rejects - record the un-unrolled form until that
+  # merge lands
+  k: '1'
+  C-storage: [row, any]      # contiguous rows, and strided C
+  distances: ['RAW:data:vreg:::4']

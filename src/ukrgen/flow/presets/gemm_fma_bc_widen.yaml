@@ -1,0 +1,46 @@
+# gemm_fma_bc_widen: mixed precision - A and B narrow, the accumulator and C wide; the k loop's FMA is the ISA's widening one (RVV's vfwmacc, NEON's fmlal, SVE's fmlalb/fmlalt), the broadcast operand loaded from memory; the epilogue is C's type alone, so plain mul, fma and add
+description: Mixed precision with the broadcast operand loaded from memory; the main loop's FMA the ISA's widening form (RVV vfwmacc, NEON fmlal, SVE fmlalb/fmlalt), the epilogue in C's type
+ukr: gemm
+variants:
+  m:
+    K: i=m, n=1, k*=1
+    T: i=m, n=1
+    V: A
+    S: B
+  n:
+    K: m=1, i=n, k*=1
+    T: m=1, i=n
+    V: B
+    S: A
+alternatives:
+  # C reached across the vectors: each ISA's way - RVV strided, SVE gathered,
+  # NEON lanes - so one preset serves all three; a kernel whose vectors run
+  # along C's contiguous index takes it directly
+  CL:
+  - direct
+  - strided
+  - gather
+  - vla_lanes
+  - lanes
+  CS:
+  - direct
+  - strided
+  - scatter
+  - vla_lanes
+  - lanes
+tileops:
+  # one widening form per ISA, then the plain FMA a kernel whose operands
+  # don't widen uses; the first the ISA offers is the one
+  mm:
+  - fma[widening_method=VEC_GROUP]($V.VEC:direct, $S.VEC:bc_load, AB.VEC){$K}
+  - fma[PART+widening_method=SPLIT_CONTIGUOUS]($V.VEC:direct, $S.VEC:bc_load, AB.VEC){$K}
+  - fma[PART+widening_method=SPLIT_INTERLEAVED]($V.VEC:direct, $S.VEC:bc_load, AB.VEC){$K}
+  - fma($V.VEC:direct, $S.VEC:bc_load, AB.VEC){$K}
+  betascale: mul(C.VEC:$CL, beta.VEC:bc_load, C.VEC){$T}
+  alphascale: fma(AB.VEC, alpha.VEC:bc_load, C.VEC){$T}
+  store: C.VEC:$CS
+  alphamul: mul(AB.VEC, alpha.VEC:bc_load, C.VEC){$T}
+  add: add(AB.VEC, C.VEC:$CL, C.VEC){$T}
+  alphaadd: fma(AB.VEC, alpha.VEC:bc_load, C.VEC:$CL){$T}
+  betaadd: fma(C.VEC:$CL, beta.VEC:bc_load, AB.VEC){$T}
+  store_ab: AB.VEC:$CS

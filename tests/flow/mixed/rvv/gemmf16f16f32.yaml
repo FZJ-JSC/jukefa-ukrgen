@@ -1,0 +1,33 @@
+# gemmf16f16f32 on rvv - A and B FP16, the accumulator and C FP32 - in the
+# flow's own parameters: the k loop widens into FP32 (vfwmacc), the epilogue
+# in FP32, the scalar operand in an FP register, C across vectors by strided
+# loads and stores (LMUL 1).
+#
+# Not a BLIS configuration: one of those is a single data type per family -
+# its symbol, blocksizes and packers are BLIS's - and BLIS's mixed-precision
+# support is other people's work in flight, so this golden says nothing about
+# it
+isa: rvv
+# the golden names the function it records
+symbol: gemmf16f16f32_rvv_vn_4x1v
+params:
+  ukr: gemm
+  rvv-ZVFH: '1'
+  tileop-preset: gemm_fma_vf_widen
+  tileop-vectorize: n
+  A-data-type: HALF
+  B-data-type: HALF
+  AB-data-type: SINGLE
+  C-data-type: SINGLE
+  A-layout: ['m:c', 'k:p']
+  B-layout: ['n:c', 'k:p']
+  order: knm                 # one vector's rows walked at a time
+  k: '4'                     # the k loop's unroll
+  C-storage: [row, any]      # contiguous rows, and strided C
+  sched-cycle-slots: "2:vl|vs|vf,sl,i;vf-sl"
+  distances: ['RAW:data::::13', 'WAW:data::::13', 'WAR:data::::13', 'RAW:address:greg:::3']
+  sched-buckets: "vf:5"
+  A-addr-regs: 2
+  B-addr-regs: 2
+  A-addr-pattern: rotate
+  B-addr-pattern: rotate

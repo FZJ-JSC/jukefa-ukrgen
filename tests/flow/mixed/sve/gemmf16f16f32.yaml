@@ -1,0 +1,29 @@
+# gemmf16f16f32 on sve - A and B FP16, the accumulator and C FP32 - in the
+# flow's own parameters: the k loop widens into FP32 (fmlalb, fmlalt - SVE2),
+# the epilogue in FP32; the scalar operand broadcast from memory, C across
+# vectors by strided loads and stores.
+#
+# Not a BLIS configuration: one of those is a single data type per family -
+# its symbol, blocksizes and packers are BLIS's - and BLIS's mixed-precision
+# support is other people's work in flight, so this golden says nothing about
+# it
+isa: sve
+# the golden names the function it records
+symbol: gemmf16f16f32_sve_vn_4x1v
+params:
+  ukr: gemm
+  sve-SVE2: '1'
+  tileop-preset: gemm_fma_bc_widen
+  tileop-vectorize: n
+  A-data-type: HALF
+  B-data-type: HALF
+  AB-data-type: SINGLE
+  C-data-type: SINGLE
+  A-layout: ['m:c', 'k:p']
+  B-layout: ['n:c', 'k:p']
+  order: knm                 # one vector's rows walked at a time
+  k: '4'                     # the k loop's unroll
+  # contiguous rows only: SVE's split-interleaved group is stored by st2w,
+  # which is contiguous - a strided C would be written as if it were not
+  C-storage: [row]
+  distances: ['RAW:data:vreg:::4']
