@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jukefa-ukrgen"
-version = "0.2.3"
+version = "0.2.4"
 authors = [
   { name="linedot", email="linedot@linedot.org" },
 ]
@@ -20,7 +20,7 @@ dependencies = [
     "mako",
     "GitPython",
     "PyYAML",
-    "jukefa-asmgen>=0.6.3"
+    "jukefa-asmgen>=0.6.4"
 ]
 
 [dependency-groups]
