@@ -7,7 +7,7 @@ import logging
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
 from .stage import stage, early_exit, stage_error
-from ...emitters.signature import signature_emitter, emit_program, emit_program_measured
+from ...emitters.signature import signature_emitter, emit_program, emit_program
 from ...specializers.signature import specialization_error
 
 
@@ -30,26 +30,17 @@ class emit_stage(stage):
         self.params["print-asm"] = stage_param(
                 value=False, default=False, flag=True, required=False,
                 description="Print the emitted assembly and exit")
+        self.params["symbol"] = stage_param(
+                value="ukr", default="ukr", required=False,
+                description="The name of the function --print-asm prints the kernel in "
+                            "(the emitted assembly framed as a C-callable function)")
         self.params["loop-align"] = stage_param(
                 value=None, required=False,
                 description="Loops' heads on a boundary of this many bytes (a power of two): "
                             ".balign before each loop's label - the code falling into the loop "
                             "runs the padding's nops once")
-        self.params["loop-gregs"] = stage_param(
-                value=None, required=False,
-                description="General registers a loop over tiles' slices may take beyond what "
-                            "lives around it - counter, slice index, pointers: within it, an "
-                            "access column (tiles a vector length apart sharing one) gets a "
-                            "pointer of its own, stepped once an iteration; beyond, the "
-                            "plan's address registers walk from tile to tile. Not given: no "
-                            "limit")
 
     def progress(self):
-        value = self.params["loop-gregs"].value
-        if value is not None and (not str(value).isdigit() or int(value) < 2):
-            raise stage_error(f"--loop-gregs takes at least 2 (a counter and a slice index), "
-                              f"got {value}")
-        self.context.loop_gregs = int(value) if value is not None else None
         align = self.params["loop-align"].value
         if align not in (None, "") and (int(align) <= 0 or int(align) & (int(align) - 1)):
             raise stage_error(f"--loop-align {align}: a power of two")
@@ -57,20 +48,17 @@ class emit_stage(stage):
         try:
             # the moves spelled before scheduling (post-specialize); the fewest
             # general registers left free recorded - max-offset-registers
-            # auto's measure, the flow's driver running again with it
-            emitted, frees = [], []
-            for p in self.context.programs:
-                out, free = emit_program_measured(self.context, p)
-                emitted.append(out)
-                frees.append(free)
-            self.context.emitted = emitted
-            known = [f for f in frees if f is not None]
-            self.context.min_free_gregs = min(known) if known else None
+            self.context.emitted = [emit_program(self.context, p)
+                                    for p in self.context.programs]
         except specialization_error as err:
             raise stage_error(f"emitting: {err}") from err
-        text = "\n\n".join(p.render() for p in self.context.emitted)
         if self.params["print-asm"].value:
-            raise early_exit(text)
+            # the kernel as a file holds it: each program a C-callable
+            # function (fngen frames it), not the blocks' commented listing
+            symbol = self.params["symbol"].value or "ukr"
+            raise early_exit("\n\n".join("\n".join(p.function(symbol))
+                                          for p in self.context.emitted))
+        text = "\n\n".join(p.render() for p in self.context.emitted)
         for line in text.splitlines():
             self.debug(line)
         self.context.params.update(self.params)

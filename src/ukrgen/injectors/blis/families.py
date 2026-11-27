@@ -15,6 +15,7 @@ from ...flow.stage_engine import stage_engine
 from ...flow.ukr_context import ukr_context
 from ...flow.stages.setup import setup_stage
 from ...flow.stages.datatype import datatype_stage
+from ...flow.stages.storage import storage_stage
 from ...flow.stages.layout import layout_stage
 from ...flow.stages.solve import solve_stage
 from ...flow.stages.dimension import dimension_stage
@@ -25,12 +26,12 @@ from ...flow.stages.isa_specialize import isa_specialize_stage
 from ...flow.stages.addresses import address_stage
 from ...flow.stages.loops import loop_stage
 from ...flow.stages.scheduling import schedule_stage
-from ...emitters.signature import AUTO_OFFSET_REGISTERS
 from ...flow.stages.emit import emit_stage
-from ...lsc_model.addressing import sym
+from ...models.lsc.addressing import offpoly
+from ...models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 #: the flow as the command line runs it
-PIPELINE = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage,
+PIPELINE = [setup_stage, storage_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage,
             model_stage, pre_specialize_irmod_stage, isa_specialize_stage, loop_stage, address_stage,
             post_specialize_irmod_stage, schedule_stage, emit_stage]
 
@@ -50,17 +51,6 @@ def run_flow(params: dict) -> tuple[ukr_context, object]:
                 taken.add(name)
     ctx = ukr_context()
     result = stage_engine(PIPELINE, ctx, prolog=prolog).run()
-    if result.completed and "auto" == str(params.get("max-offset-registers", "")):
-        # max-offset-registers auto: run again with the general registers the
-        # first run never needed, less one (at most AUTO_OFFSET_REGISTERS) -
-        # the offsets planned before scheduling; a run that fails keeps the first
-        spare = (ctx.min_free_gregs or 0) - 1
-        if spare > 0:
-            again = ukr_context()
-            again.auto_offset_budget = min(spare, AUTO_OFFSET_REGISTERS)
-            second = stage_engine(PIPELINE, again, prolog=prolog).run()
-            if second.completed:
-                ctx, result = again, second
     if result.completed:
         # a parameter no stage took - a key misnamed - does nothing: say so
         ignored = sorted(set(params) - taken)
@@ -569,18 +559,18 @@ class kernel:
     unroll: int | None = None
 
 
-def part_extent(ctx, part: int, idx: str) -> sym:
+def part_extent(ctx, part: int, idx: str) -> offpoly:
     """
     A part's extent along an index: its register tile's extent times its count
     """
     dims = (ctx.part_dims or [ctx.dims] * len(ctx.stos))[part]
     for tiling in ctx.stos[part].values():
         if idx in tiling.extents:
-            return sym.extent(tiling.extents[idx]) * dims[idx]
+            return offpoly.extent(tiling.extents[idx]) * dims[idx]
     raise KeyError(idx)
 
 
-def extent_of(ctx, idx: str) -> sym:
+def extent_of(ctx, idx: str) -> offpoly:
     """
     The microtile's extent along an index - as the model computes it: along a
     split index the parts' extents summed

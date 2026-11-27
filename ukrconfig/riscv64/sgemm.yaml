@@ -1,0 +1,29 @@
+# FP32 gemm, riscv64 (rv64imafdc): the reference kernel, F arithmetic on
+# floating-point registers - fadd.s/fmul.s/fmadd.s - one element per operand
+# and per operation. Same tiles as the FP64 file, see there.
+isa: riscv64
+blocksizes: {mr-in-mc: 8, nr-in-nc: 3, kc: 256}
+families:
+- family: mn
+  preset: gemm_fma_scalar
+  m: [8]
+  n: [3]
+  default: 8x3
+  schedule: ['RAW:data:freg:ld:fma:3', 'RAW:data:freg:fma:fma:4', 'RAW:address:greg:::2']
+  params:
+    order: kmn
+    sched-cycle-slots: "2:sl,f|i"
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    C-layout: ['m:c', 'n:s']
+- family: nm
+  preset: gemm_fma_scalar
+  m: [3]
+  n: [8]
+  schedule: ['RAW:data:freg:ld:fma:3', 'RAW:data:freg:fma:fma:4', 'RAW:address:greg:::2']
+  params:
+    order: knm
+    sched-cycle-slots: "2:sl,f|i"
+    A-layout: ['m:c', 'k:p']
+    B-layout: ['n:c', 'k:p']
+    C-layout: ['m:c', 'n:s']

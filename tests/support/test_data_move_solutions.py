@@ -14,6 +14,7 @@ from asmgen.registers import asm_data_type as adt
 
 from ukrgen.matching.math import transformation as tf
 from ukrgen.support.dm_resolutions.scalar_reduce import scalar_reduce_provider
+from ukrgen.support.dm_solver import key_rtypes
 from ukrgen.support.data_move import (
     resolution_registry,
     resolution_provider,
@@ -92,18 +93,20 @@ class test_resolution_checker(unittest.TestCase):
 
         # Verify every operand in the solution
         for opd_name, tfs in transformations.items():
-            key = tfr_key(tfs=frozenset(tfs), rtype=rgt.VEC, ddir=directions[opd_name])
-
-            candidates = self.registry.tfr_map.get(key, [])
-            self.assertTrue(len(candidates) > 0, f"No resolutions registered for {key}")
-
+            # every register type such an operand's resolutions can be filed
+            # under: a scalar-reduced operand is one element, which an FP
+            # register or one lane of a vector register holds
             valid_resolution_found = False
-            for rsln in candidates:
-                # Check if this specific hardware supports this resolution path
-                if check_resolution(self.gen, rsln, opd_name, target_dt, target_op):
-                    valid_resolution_found = True
-                    break
+            for rtype in key_rtypes(rgt.VEC, set(tfs)):
+                key = tfr_key(tfs=frozenset(tfs), rtype=rtype, ddir=directions[opd_name])
 
+                for rsln in self.registry.tfr_map.get(key, []):
+                    # Check if this specific hardware supports this resolution path
+                    if check_resolution(self.gen, rsln, opd_name, target_dt, target_op):
+                        valid_resolution_found = True
+                        break
+                if valid_resolution_found:
+                    break
             self.assertTrue(
                 valid_resolution_found,
                 f"Hardware does not support operand '{opd_name}' with transforms {tfs}"

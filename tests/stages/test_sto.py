@@ -8,6 +8,7 @@ from ukrgen.flow.ukr_context import ukr_context
 from ukrgen.flow.stage_engine import stage_engine
 from ukrgen.flow.stages.setup import setup_stage
 from ukrgen.flow.stages.datatype import datatype_stage
+from ukrgen.flow.stages.storage import storage_stage
 from ukrgen.flow.stages.solve import solve_stage
 from ukrgen.flow.stages.dimension import dimension_stage
 from ukrgen.flow.stages.sto import sto_stage, fmt_dim
@@ -15,7 +16,7 @@ from ukrgen.flow.stages.stage import stage_error
 
 from ukrgen.flow.stages.layout import layout_stage
 
-STAGES = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage]
+STAGES = [setup_stage, storage_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage]
 
 
 def run(params):
@@ -102,8 +103,13 @@ class test_sto_stage(unittest.TestCase):
                                   "fma(A.VEC:direct, B.VEC:bc_scalar, AB.VEC){i=m, n=1, k*=1}"]}))
 
     def test_pack(self):
+        # named, not by index: the candidates a new resolution adds sort first,
+        # and this test is about the tiling, not about which one is offered
         ctx, res = run({"isa": "sve", "ukr": "pack", "X-data-type": "FP64",
-                        "Y-data-type": "FP64", "pack-tileop": ["0"], "copy-tileop": ["0"], "store-tileop": ["0"],
+                        "Y-data-type": "FP64",
+                        "pack-tileop": ["mul(X.VEC:direct, kappa.VEC:bc_load, Y.VEC){i=m, n=1}"],
+                        "copy-tileop": ["move(X.VEC:direct, Y.VEC){i=m, n=1}"],
+                        "store-tileop": ["Y.VEC:direct"],
                         "X-layout": ["m:c", "n:s"], "Y-layout": ["m:c", "n:s"],
                         "m": "3", "n": "2"})
         self.assertTrue(res.completed)

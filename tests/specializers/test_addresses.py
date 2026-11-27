@@ -2,7 +2,7 @@
 The signature emitter's address resolution - as test_addr_resolver was for
 the old resolver (legacy/): kernels with different numbers of address
 registers per component and each pattern of advancing them (rotate,
-blocked:N, phase - lsc_model/addressing.py's addr_pattern) compute what a
+blocked:N, phase - models/lsc/addressing.py's addr_pattern) compute what a
 reference gemm does, run natively (AVX2) or emulated (NEON, RVV), and the
 registers' number changes the kernel. Patterns taking a register back to an
 earlier column of C walk it there (test_back_to_earlier_columns); C's

@@ -29,25 +29,28 @@ from asmgen.asmblocks.op import (
 from asmgen.asmblocks.op.opset import opset_modifier
 from asmgen.registers import adt_size
 
-from ..lsc_model.state import merge_switches
-from ..lsc_model.addressing import sym
-from ..lsc_model.ir import ir_program, ir_block, BASE_REGISTER, is_start_block
+from ..models.lsc.state import merge_switches
+from ..models.lsc.addressing import offpoly
+from ..models.lsc.ir import ir_program, ir_block, BASE_REGISTER, is_start_block
 
 from ..specializers.addresses import address_speller
-from ..models.load_store_operations import (lsc_state, 
+from ..models.lsc.operations import (lsc_state,
     lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, lsc_addr_compute, lsc_loop, lsc_permute,
-    lsc_value_op)
+    lsc_value_op, lsc_set, set_mask_tail, set_vl_elements)
+from ..models.lsc.classes import TAGS
 from ..models.lsc.index import lsc_reg_index
 
 from .allocation import register_allocator
-from ..lsc_model import liveness
+from ..models.lsc import dtypes, liveness
+from ..models.lsc.rename import rename_temporaries
 from ..specializers.signature import (
-    specialization_error, _sigs, _masked, _all_true, _usable, slice_columns, slice_walkers, slice_placements)
+    specialization_error, _sigs, _masked, _all_true, _usable, slice_walkers, slice_placements)
 
 SECTIONS = ("prologue", "body", "epilogue", "tail", "subtail")
 
 from .emitted import _labels, emitted_block, emitted_program  # noqa: F401 (their home now)
 from .offsets import offset_planner  # noqa: F401
+from ..models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 class signature_emitter:
@@ -77,6 +80,14 @@ class signature_emitter:
         # setup instructions found while emitting: vector length in bytes,
         # constant strides
         self.late_setup: list[str] = []
+        #: the values the IR sets (lsc_set): their registers recorded under
+        #: these names where the ISA reads them (the vector length, in late
+        #: setup) - docs/REGISTER_ALLOCATION.md, the state registers
+        self.value_names: set[str] = set()
+        #: the values kept in their register for the kernel's whole life (the
+        #: counts): the emitter reads them where the IR's last read may be
+        #: behind it, so the allocation leaves them alone
+        self.kept: set = set()
         #: setup values placed after the dispatch's loads (placed_at_dispatch):
         #: one of their inputs a stack parameter deferred there
         self.dispatch_setup: list[str] = []
@@ -90,7 +101,6 @@ class signature_emitter:
         #: specializer's (specializers/addresses.py), its setup's moves too
         self.speller = address_speller(ctx)
         #: the fewest general registers free at any reservation (greg)
-        self.min_free_gregs = None
         #: scratch multiplies' registers between their steps: group -> register
         #: (None: none was free, its last step spells the run)
         self.scratches: dict = {}
@@ -113,6 +123,7 @@ class signature_emitter:
         #: the last vectors' masks and, for the vl route, the full vector
         #: length's registers (tailmask): set up by the setup
         self.tails: dict = {}
+        self.tail_regs: dict = {}
         self.tail_vl: dict = {}
         self.recipes: list[tuple[str, tuple, bool]] = []
         self.regions_started = False
@@ -138,33 +149,13 @@ class signature_emitter:
     def _register_types(self) -> dict[tuple, object]:
         """
         Data type of every virtual data register: the memory component it is
-        loaded from or stored to, or the component it holds
+        loaded from or stored to, or the component it holds - the analysis'
+        own (models.lsc.dtypes), so the allocation and the instruction agree
         """
-        comps = self.ctx.component_dts
-        dts: dict[tuple, object] = {}
-
-        # by the value's own register (value(): a renamed value's owner) -
-        # its data type the value's, whose register it is in or not
-        def note(idx, dt):
-            dts.setdefault(idx.value(), dt)
-
-        for op in self._all_ops():
-            if isinstance(op, (lsc_load, lsc_store)):
-                note(op.indices[1], comps[op.indices[0].component])
-        for op in self._all_ops():
-            for idx in op.indices:
-                if idx.value()[0] in comps:
-                    note(idx, comps[idx.value()[0]])
-        default = next(iter(comps.values()))
-        for op in self._all_ops():
-            for idx in op.indices:
-                note(idx, default)
-        return dts
+        return dtypes.register_types(self.program, self.ctx.component_dts)
 
     def _all_ops(self):
-        for block in self.program.blocks + [b for c in self.program.cases for b in c.blocks]:
-            for section in ("prologue", "body", "epilogue", "tail", "subtail"):
-                yield from getattr(block, section)
+        return dtypes.ops_of(self.program)
 
     def reg(self, idx, rtype):
         """The physical register for a virtual one (register_allocator.take)"""
@@ -292,12 +283,7 @@ class signature_emitter:
 
     def greg(self):
         try:
-            reg = self.gen.greg(self.rt.reserve_any_reg("greg"))
-            # the fewest general registers ever left: what offset registers
-            # could have had (max-offset-registers auto)
-            free = self.rt.available("greg")
-            self.min_free_gregs = free if self.min_free_gregs is None else min(self.min_free_gregs, free)
-            return reg
+            return self.gen.greg(self.rt.reserve_any_reg("greg"))
         except IndexError:
             if self.evictable:
                 # an offset register given up - the least valuable - its moves
@@ -315,7 +301,7 @@ class signature_emitter:
 
     # --- addresses ---------------------------------------------------------
 
-    def bytes_of(self, component: str, elements: sym) -> sym:
+    def bytes_of(self, component: str, elements: offpoly) -> offpoly:
         return elements * adt_size(self.ctx.component_dts[component])
 
     def stride_reg(self, *args, **kwargs):
@@ -339,21 +325,30 @@ class signature_emitter:
 
     def slices(self, op) -> list[str]:
         """
-        A loop over slices, its body as scheduled - its temporaries renamed
-        within the registers there are for them (lsc_model.rename), no order
-        of the scheduler's holds more; the values live at once in it
-        (peak_registers) checked against the room there is all the same
+        A loop over slices, its body as scheduled - its own temporaries under as
+        many names as there are registers for them (models.lsc.rename): the
+        scheduler's, within the section's budget, or here where nothing
+        scheduled the block - a name keeps its register the iteration long, so
+        nothing is freed by hand and no order the scheduler gives holds more of
+        them than there are registers
         """
-        peak, room = self.peak_registers(op.block, "vreg"), self.room("vreg")
-        if peak > room:
-            raise specialization_error(
-                f"{op.info.get('component')}: {peak} values live at once in a loop over slices, "
-                f"{room} registers of their file there - fewer data registers or a smaller "
-                f"microtile fit")
+        if not op.info.get("renamed"):
+            # its own temporaries under as many names as the room leaves once
+            # what the block reads first holds its registers - the peak after
+            # that no more than the room there is
+            room = self.room("vreg")
+            held = {k for k in liveness.exposed(op.block) if rgt.VEC == k[2]}
+            if rename_temporaries(op.block, max(1, room - len(held))):
+                op.refresh()
+            peak = self.peak_registers(op.block, "vreg")
+            if peak > room:
+                raise specialization_error(
+                    f"{op.info.get('component')}: {peak} values live at once in a loop over slices, "
+                    f"{room} registers of their file there - fewer data registers or a smaller "
+                    f"microtile fit")
         return self._slices(op)
 
-    #: a value's register type, the tracker's tag for it
-    TAGS = {rgt.VEC: "vreg", rgt.FP: "freg", rgt.TILE: "treg"}
+
 
     def room(self, tag: str) -> int:
         """
@@ -374,7 +369,7 @@ class signature_emitter:
         untouched
         """
         pool = self.rt.pool(tag)
-        mine = lambda k: self.TAGS.get(k[2]) in pool
+        mine = lambda k: TAGS.get(k[2]) in pool
         held = {k for k in self.phys if mine(k)}
         after = self.after if self.after is not None else held
         writes = {k for o in ops for k in self.reads_writes(o)[1]}
@@ -398,7 +393,10 @@ class signature_emitter:
         A loop over slices' frame: its index in a register every slice operand
         takes - the values their signatures allow (asmgen's domains:
         operand_values; SME: w12-w15) - set to 0, its count (slice_count) in a
-        counter. :return: the counter, the index, their setting
+        counter. The two are values the IR names (`slice_frames`), the register
+        numbers the emitter's until the allocation takes them
+        :param op: the loop
+        :return: the counter, the index, their setting
         """
         comp = op.info.get("component") or op.walks[0].anchor.indices[0].component
         dt = self.ctx.component_dts[comp]
@@ -448,21 +446,19 @@ class signature_emitter:
                                        f"without its copies in the block (expand_slice_copies)")
         scale = op.subtiling.unroll if explicit else 1
         plan = op.walk_plan
+        # the iteration's address work in the IR already
+        # (specializers/signature.py slice_moves, slice_walks): the accesses at
+        # their registers, the moves emitted as the steps they are - placed by
+        # the scheduler, not here
+        moved_in_ir = "slice_moves" in op.info or "slice_walks" in op.info
 
         # the plan's registers walk themselves: where each stands, as an offset
         # from its home at this iteration's first slice
         walk_of = {w: key for key, p in (plan or {}).items() for w in p["walks"]}
-        # within the general registers allowed (--loop-gregs), a pointer per
-        # access column - an offset's part beside vector lengths; tiles a
-        # vector length apart share one, the rest an immediate - set before
-        # the loop, stepped once an iteration: no moves between tiles. The
-        # first column of a plan register is that register
-        # the specializer's plan of the access columns (slice_columns): which
-        # columns, which vector lengths immediates, pointers or not
-        planned = op.info.get("slice_columns")
-        if planned is None and plan:
-            planned = slice_columns(op, plan, self.ctx.loop_gregs)
-        columns, pointers, column_of = planned if planned else ({}, {}, {})
+        # the loop's accesses are at the plan's own registers, their moves in
+        # the IR (specializers/signature.py, slice_moves): nothing of the loop's
+        # is allocated here, no pointer per column (docs/REGISTER_ALLOCATION.md,
+        # D')
         def place(b):
             # the access where the register stands, or vector lengths past it
             # where a signature takes them ([x, #n, MUL VL]): no move; else the
@@ -471,10 +467,6 @@ class signature_emitter:
             key = walk_of[w]
             comp = key[0]
             target = plan[key]["walks"][w]
-            if pointers:
-                # its column's own pointer, the vector lengths an immediate
-                _, name, vectors = column_of[w]
-                return [], pointer_regs[(key, name)], vectors
             # the specializer's placement (slice_placements): the move before
             # it, the vector lengths an immediate
             _, move, vectors = placed[id(b)]
@@ -483,34 +475,26 @@ class signature_emitter:
         def step_on(slices):
             # every register to the next iteration's home, slices on
             out = []
-            if pointers:
-                for (key, name), ptr in pointer_regs.items():
-                    step = sym._make({f: c * slices for f, c in dict(plan[key]["step"].terms).items()})
-                    out += self.add_bytes(ptr, self.bytes_of(key[0], step), key[0])
-                return out
             for key, p in (plan or {}).items():
-                move = sym._make({f: c * slices for f, c in dict(p["step"].terms).items()}) - end[key]
+                move = offpoly._make({f: c * slices for f, c in dict(p["step"].terms).items()}) - end[key]
                 if dict(move.terms):
                     out += self.add_bytes(self.aregs[key], self.bytes_of(key[0], move), key[0])
             return out
-        def release_pointers():
-            for (key, name), ptr in pointer_regs.items():
-                if ptr is not self.aregs[key]:
-                    self.rt.unuse_reg("greg", ptr.idx)
         def settle() -> list[str]:
             # where the loop leaves them - a vector length of steps on; the
             # specializer's address computations after it step them back home
             for key, p in (plan or {}).items():
-                self.positions[key] = p["home"] + sym._make(
+                self.positions[key] = p["home"] + offpoly._make(
                     {tuple(sorted(("VL",) + f)): c for f, c in dict(p["step"].terms).items()})
             return []
         walkers, deltas, steps, shared = [], [], {}, {}
         # the specializer's walkers (slice_walkers): which walks share a
-        # pointer, which a step register - allocated and set here
+        # pointer, which a step register - allocated and set here. With its
+        # walks' registers the IR's (slice_walks) none is left to do.
         planned = op.info.get("slice_walkers")
-        if planned is None and not plan:
+        if planned is None and not plan and not moved_in_ir:
             planned = slice_walkers(op, self.program, self.ctx.component_dts)
-        for w in ([] if plan else planned):
+        for w in ([] if plan or moved_in_ir else (planned or [])):
             wcomp, wreg, elements, terms, key, start = (w["comp"], w["reg"], w["elements"], w["terms"],
                                                         w["key"], w["start"])
             wdt = self.ctx.component_dts[wcomp]
@@ -540,35 +524,9 @@ class signature_emitter:
                 steps[key] = delta
             walkers.append(walker)
             deltas.append(steps[key])
-        pointer_regs = {}
-        for (key, name), column in pointers.items():
-            if column is None:
-                pointer_regs[(key, name)] = self.aregs[key]
-                continue
-            ptr = self.greg()
-            lines.append(asmops.mov(self.gen, src=self.aregs[key], dst=ptr))
-            lines += self.add_bytes(ptr, self.bytes_of(key[0], column), key[0])
-            pointer_regs[(key, name)] = ptr
-        loop = f"ukr{next(self.labels)}_slices"
-        lines.append(self.gen.label(label=loop))
         unroll = op.subtiling.unroll
-        def keys(b, positions):
-            types = b.rtypes or []
-            return [(b.indices[p].component, b.indices[p].indices[0], types[p] if p < len(types) else None)
-                    for p in positions]
-        # the block's own vector temporaries: written before read (lsc_model.liveness)
+        # the block's own vector temporaries: written before read (models.lsc.liveness)
         local = liveness.local(op.block)
-        # a temporary free again after its last use in the iteration - the
-        # next tile's slice takes its register (cluster and the scheduler's
-        # budget ordered the tiles' chains one by one; copies' own names)
-        dead_after = {}
-        last_use = {}
-        for pos, b in enumerate(op.block):
-            for k in keys(b, list(b.reads) + list(b.writes)):
-                if k in local:
-                    last_use[k] = pos
-        for k, pos in last_use.items():
-            dead_after.setdefault(pos, []).append(k)
         # software pipelined (preload): the first copy's loads - memory loads,
         # slices moved out of tiles - before the loop and, for the next
         # iteration, at the end of each; the last iteration without them
@@ -602,6 +560,10 @@ class signature_emitter:
                     out += self._emit_op(b)
             return out
         def advance():
+            if moved_in_ir:
+                # the iteration's address steps in the IR (slice_moves,
+                # slice_walks): the frame's index the emitter's
+                return [asmops.add_imm(self.gen, reg=index, imm=unroll)]
             if plan:
                 out = step_on(unroll)
             else:
@@ -609,42 +571,51 @@ class signature_emitter:
                        for w, d in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values()]
             return out + [asmops.add_imm(self.gen, reg=index, imm=unroll)]
         mem = lambda ops: [b for b in ops if isinstance(b, (lsc_load, lsc_store))]
-        if plan and not pointers:
+        if plan:
             order = mem([b for b in op.block if early(b)] + [b for b in op.block if not early(b)]) \
                 if preload else mem(op.block)
             placed, end = slice_placements(order, plan, walk_of)
         if preload:
+            # software pipelined as any block is (loop_code): the first
+            # copies' loads in the prologue, the next iteration's at the end
+            # of the body, the last iteration without them
             first = [b for b in op.block if early(b)]
             rest = [b for b in op.block if not early(b)]
-            last = f"{loop}_last"
-            # the label emitted above starts the steady state; the first
-            # loads go before it, the count is the slices after the last group
-            label_line = lines.pop()
-            lines += emit_ops(first)
-            lines.append(asmops.add_imm(self.gen, reg=counter, imm=-unroll))
-            lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.EZ, label=last))
-            lines.append(label_line)
-            lines += emit_ops(rest) + advance() + emit_ops(first)
-            lines.append(asmops.add_imm(self.gen, reg=counter, imm=-unroll))
-            lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
-            lines.append(self.gen.label(label=last))
-            lines += emit_ops(rest)
+            lines += self.loop_code(emitted_block(
+                name=f"{comp} slices", loop_index="slices",
+                sections={"prologue": emit_ops(first),
+                          "body": emit_ops(rest) + advance() + emit_ops(first),
+                          "epilogue": emit_ops(rest)},
+                counters=(counter, None), step=unroll, prologue_step=unroll,
+                label="slices"))
+            for k in local:
+                if k in self.phys:
+                    self.release(k)
             for r in [counter, index] + list(shared.values()) + list(steps.values()):
                 self.rt.unuse_reg("greg", r.idx)
-            release_pointers()
             lines += settle()
             return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
                 if l.strip()]
         # one pass over the block: the copies (explicit) or the one slice an
-        # iteration takes
+        # iteration takes - its control loop_code's, the counter's decrement
+        # and the branch the emitter's still: no operation of the IR is a
+        # branch, the scheduler's back edge the dependencies carried into the
+        # next iteration (dependencies(loop=True))
+        body = []
         for pos, b in enumerate(op.block):
             if b in sliced:
                 b.properties.update(slice_reg=index, slice_imm=b.properties.get("copy", 0))
             if isinstance(b, (lsc_load, lsc_store)):
                 vectors = None
-                if plan:
+                if moved_in_ir:
+                    # at its own register - the plan's, a column's - where the
+                    # IR's setup and its steps left it
+                    idx = b.indices[0]
+                    walker = self.aregs[(idx.component, idx.indices[0])]
+                    vectors = int(b.properties["voffset"]) if "voffset" in b.properties else None
+                elif plan:
                     moves, walker, vectors = place(b)
-                    lines += moves
+                    body += moves
                 else:
                     walker = walkers[b.properties.get("walk", 0)]
                 line = self._mem(b, self.reg(b.indices[1], b.rtypes[1]), walker, 0,
@@ -654,26 +625,37 @@ class signature_emitter:
                                                f"of a slice's {b.indices[0].component} takes "
                                                f"a plain address at slice immediate "
                                                f"{b.properties.get('copy', 0)}")
-                lines.append(line)
+                body.append(line)
             elif isinstance(b, lsc_move):
-                lines.append(self.move(b))
+                body.append(self.move(b))
             else:
-                lines += self._emit_op(b)
-            for k in dead_after.get(pos, ()):
-                if k in self.phys:
-                    self.release(k)
-        if plan:
-            # an iteration takes unroll slices (its copies, explicit)
-            lines += step_on(unroll)
-        else:
-            for walker, delta in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values():
-                lines.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
-        lines.append(asmops.add_imm(self.gen, reg=index, imm=unroll))
-        lines.append(asmops.add_imm(self.gen, reg=counter, imm=-unroll))
-        lines.append(self.gen.cb(reg1=counter, reg2=None, cmp=comparison.NZ, label=loop))
+                body += self._emit_op(b)
+        if not moved_in_ir:
+            if plan:
+                # an iteration takes unroll slices (its copies, explicit)
+                body += step_on(unroll)
+            else:
+                for walker, delta in {w.idx: (w, d) for w, d in zip(walkers, deltas)}.values():
+                    body.append(asmops.add(self.gen, dst=walker, reg1=walker, reg2=delta))
+        # an iteration takes unroll slices: the index on by them, the counter
+        # down by them
+        body.append(asmops.add_imm(self.gen, reg=index, imm=unroll))
+        lines += self.loop_code(emitted_block(
+            name=f"{comp} slices", loop_index="slices", sections={"body": body},
+            counters=(counter, None), step=unroll, guarded=False, plain=True, label="slices"))
+        # the body's temporaries dead where the loop ends: a name held its
+        # register the iteration long (nothing freed by hand within it); the
+        # allocation's liveness frees them where they die
+        # (docs/REGISTER_ALLOCATION.md step 6)
+        for k in local:
+            if k in self.phys:
+                self.release(k)
         for r in [counter, index] + list(shared.values()) + list(steps.values()):
             self.rt.unuse_reg("greg", r.idx)
-        release_pointers()
+        if op.info.get("slice_walks"):
+            # its walkers' registers, dead after the loop (the emitter's until
+            # the allocation frees them where they die)
+            self.release_aregs({k for k in op.info["slice_walks"] if k in self.aregs})
         lines += settle()
         return [l.strip() for chunk in lines for l in (chunk.splitlines() if isinstance(chunk, str) else chunk)
                 if l.strip()]
@@ -771,6 +753,7 @@ class signature_emitter:
         form = next(iter(self.gen.set.forms(modifiers={opset_modifier.MASKAVL}, dts={"dreg": dt})), None)
         if form is not None and rgt.VEC == form.operands["dreg"].rtype:
             self.alloc.reserve("vreg", 0)
+            tag, number = "vreg", 0
             mreg = self.gen.vreg(0)
         else:
             # the lowest free mask register: a mask governs accesses, and a
@@ -779,6 +762,7 @@ class signature_emitter:
             used = self.rt.get_used_regs("mreg")
             number = next(i for i in range(self.gen.max_mregs()) if i not in used)
             self.rt.reserve_specific_reg("mreg", number)
+            tag = "mreg"
             mreg = self.gen.mreg(number)
         call = dict(dreg=mreg, dt=dt, modifiers={opset_modifier.MASKAVL}, avlreg=self.params[count])
         taken = self.scratch(form, call) if form is not None else []
@@ -790,7 +774,40 @@ class signature_emitter:
         text = self.gen.set(**call)
         self.unscratch(taken)
         self.tails[index] = mreg
+        self.tail_regs[index] = (tag, number)
         return [l.strip() for l in text.splitlines() if l.strip()]
+
+    def set_op(self, op) -> list[str]:
+        """
+        An lsc_set emitted: its payload says what the register is set to, the
+        instruction form chosen by the ISA's signature for it - the value's
+        register recorded under its name, so that the operations reading it
+        find it (docs/REGISTER_ALLOCATION.md: the masks as values)
+        :param op: the operation, its payload one of `lsc_set_payload`
+        :return: the instructions, in order
+        """
+        payload = op.payload
+        if isinstance(payload, set_vl_elements):
+            # the IR names this value: the read records its register
+            self.value_names.add(op.indices[0].component)
+            # the count is read where a walk, a loop or a mask first needs it
+            # (offsets.vl_elements, in late setup): the value here names the
+            # register, the read records it
+            return []
+        if isinstance(payload, set_mask_tail):
+            index = payload.count[5:-1] if payload.count.startswith("tail(") else None
+            lines = self.tail_mask(index, payload.count, payload.dt) if index is not None \
+                else self.tail_mask("", payload.count, payload.dt)
+            mreg = self.tails.get(index) if index is not None else None
+            if mreg is not None:
+                # the value's name as the liveness spells it - component,
+                # number and register type (models/lsc/liveness.data_key) -
+                # so that the reads keep it alive and the sweep sees it
+                key = (*op.indices[0].value(), op.rtypes[0])
+                self.phys[key] = mreg
+                self.numbers[key] = self.tail_regs[index]
+            return lines
+        raise specialization_error(f"{op}: the emitter has no form for {type(payload).__name__}")
 
     def state(self, op) -> list[str]:
         """
@@ -800,6 +817,8 @@ class signature_emitter:
         writing its avl operand's (RVV's vsetvli zero, avl)
         """
         from asmgen.asmblocks.op.opset import opset_modifier as setmod
+        if isinstance(op, lsc_set):
+            return self.set_op(op)
         # the engine's switches (SME's smstart, smstop): the form writing them
         engine = next((f for f in self.gen.set.forms()
                        if setmod.ENGINE in f.modifiers and f.state_writes == op.values), None)
@@ -812,7 +831,9 @@ class signature_emitter:
         lines = []
         for name, value in op.values.items():
             if name.startswith("mask(") and name.endswith(")"):
-                lines += self.tail_mask(name[5:-1], value, op.dt)
+                # the mask is a value of its own now (its lsc_set emits it);
+                # what stays here is the state the accesses' signatures are
+                # pruned by, until that pruning moves (dt-4's (d))
                 continue
             if "vtype" == name:
                 # the element type and grouping, the vector length kept (RVV's
@@ -964,10 +985,24 @@ class signature_emitter:
         masks = [n for n, o in sig.operands.items() if orl.MASK == o.orole]
         tail = op.properties.get("tail") if op is not None else None
         if tail is not None and tail not in self.tail_vl:
-            if not masks or tail not in self.tails:
+            # a last vector only under its mask: the value the tail's set
+            # wrote
+            slot = op.mask_slot if op is not None else None
+            if not masks:
                 return False                # a last vector only under its mask
+            # an ISA whose mask is not an operand but its signature's
+            # convention (RVV's v0.t) names the value by the tail's index
+            if slot is None:
+                # not an operand but the signature's convention (RVV's v0.t):
+                # the value the tail's set wrote, by its name and type
+                key = (f"mask({tail})", 0, rgt.MASK)
+            else:
+                key = (*op.indices[slot].value(), op.rtypes[slot])
+            reg = self.phys.get(key)
+            if reg is None:
+                return False
             for name in masks:
-                kwargs[name] = self.tails[tail]
+                kwargs[name] = reg
             return True
         if not masks:
             return True
@@ -1161,7 +1196,7 @@ class signature_emitter:
             else:
                 lines = self.move_step(step, self.aregs[src_key], dest)
             advance = (op.properties or {}).get("advance")
-            self.positions[dest_key] = self.positions[src_key] + op.delta - (advance or sym.const(0))
+            self.positions[dest_key] = self.positions[src_key] + op.delta - (advance or offpoly.const(0))
             return lines
         amount = self.bytes_of(comp, op.delta)
         k = self.vector_multiple(amount, comp)
@@ -1189,7 +1224,7 @@ class signature_emitter:
         # a loop's advance moves to the next iteration: offsets are measured
         # within one, so that part isn't a move of the register
         advance = (op.properties or {}).get("advance")
-        self.positions[dest_key] = self.positions[src_key] + op.delta - (advance or sym.const(0))
+        self.positions[dest_key] = self.positions[src_key] + op.delta - (advance or offpoly.const(0))
         return lines
 
     def members(self, op, data, sig) -> list:
@@ -1375,6 +1410,10 @@ class signature_emitter:
             return self.loop(op)
         if isinstance(op, (lsc_load, lsc_store)):
             return self.memory(op)
+        if isinstance(op, lsc_set):
+            # a value set where it stands (the setup's counts; the entry's
+            # masks go through state's dispatch the same way)
+            return self.set_op(op)
         if isinstance(op, lsc_state):
             return self.state(op)
         if isinstance(op, lsc_transformation):
@@ -1542,15 +1581,15 @@ class signature_emitter:
         return lines
 
     def exposed(self, ops: list) -> set:
-        """The data registers operations read before they write them (lsc_model.liveness)"""
+        """The data registers operations read before they write them (models.lsc.liveness)"""
         return liveness.exposed(ops)
 
     def live_afters(self, ops: list, end: set) -> list:
-        """What's live after each operation (lsc_model.liveness)"""
+        """What's live after each operation (models.lsc.liveness)"""
         return liveness.live_afters(ops, end)
 
     def reads_writes(self, op) -> tuple[set, set]:
-        """The data registers an operation reads and writes (lsc_model.liveness)"""
+        """The data registers an operation reads and writes (models.lsc.liveness)"""
         return liveness.reads_writes(op)
 
     def data_keys(self, op) -> list:
@@ -2098,7 +2137,7 @@ class signature_emitter:
             name = f"base({comp})"
             if name in self.params and (comp, BASE_REGISTER) not in self.aregs:
                 self.aregs[(comp, BASE_REGISTER)] = self.params[name]
-                self.positions[(comp, BASE_REGISTER)] = sym.const(0)
+                self.positions[(comp, BASE_REGISTER)] = offpoly.const(0)
         return []
 
     def release_aregs(self, keys):
@@ -2155,8 +2194,9 @@ class signature_emitter:
         code.extend(sec.get("init", []))
         code.extend(lines(gen.cb(reg1=n, reg2=None, cmp=ez, label=done)))
         code.extend(sec.get("prologue", []))
-        code.extend(lines(asmops.add_imm(gen, reg=n, imm=-1)))
-        counted(n, f"ukr{tag}_loop", sec.get("body", []) + block.advance, f"ukr{tag}_last")
+        code.extend(lines(asmops.add_imm(gen, reg=n, imm=-block.prologue_step)))
+        counted(n, f"ukr{tag}_loop", sec.get("body", []) + block.advance, f"ukr{tag}_last",
+                step=block.step)
         code.extend(sec.get("epilogue", []) + block.advance)
         code.extend(lines(gen.label(label=done)))
         if sec.get("tail") and left is not None:
@@ -2204,13 +2244,6 @@ class signature_emitter:
             code.extend(lines(gen.label(label=end)))
         return code
 
-#: the last emission's fewest free general registers (emit_program_measured)
-_last_min_free = [None]
-
-#: the most offset registers max-offset-registers auto takes
-AUTO_OFFSET_REGISTERS = 8
-
-
 def emit_program(ctx, program: ir_program) -> emitted_program:
     """
     Emit a program. Values setup computes once (the vector length in bytes,
@@ -2241,18 +2274,10 @@ def emit_program(ctx, program: ir_program) -> emitted_program:
         emitter, out = emit_once()
         for _ in range(3):
             if not any(late for _, _, late in emitter.recipes):
-                _last_min_free[0] = emitter.min_free_gregs
                 return emitter, out
             emitter, out = emit_once([(n, a) for n, a, _ in emitter.recipes])
         raise specialization_error("setup's registers kept changing between emissions")
     return emit_all()[1]
 
 
-def emit_program_measured(ctx, program: ir_program) -> tuple:
-    """
-    A program emitted, with the fewest general registers left free at any
-    reservation: what offset registers could have (max-offset-registers
-    auto, the emit stage's)
-    """
-    out = emit_program(ctx, program)
-    return out, _last_min_free[0]
+

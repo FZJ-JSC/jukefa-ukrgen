@@ -23,20 +23,20 @@ transpose's rows by the copy's registers (ZA's tiles have no shuffles).
 
 from asmgen.asmblocks.op import register_type as rgt
 
-from ...models.load_store_operations import lsc_loop, lsc_move
+from ...models.lsc.operations import lsc_loop, lsc_move
 from .vectorize import loop_of
 from ...models.lsc.index import lsc_reg_index
-from ...lsc_model import liveness
+from ...models.lsc import liveness
 from .base import irmod_placement, lsc_irmod, blocks_and_sections
 
-#: the register types holding data (lsc_model.liveness': one definition)
+#: the register types holding data (models.lsc.liveness': one definition)
 DATA = liveness.DATA
 
 
 def _keys(op, positions) -> list:
     """
     The data registers at positions of an operation: (component, register,
-    register type) - lsc_model.liveness' data_key
+    register type) - models.lsc.liveness' data_key
     """
     return [k for p in positions for k in [liveness.data_key(op, p)] if k is not None]
 
@@ -54,7 +54,7 @@ def _events(ops):
 
 def _live_in(ops, key) -> bool:
     """
-    Whether operations read a register before writing it (lsc_model.liveness:
+    Whether operations read a register before writing it (models.lsc.liveness:
     a loop by what its body does first)
     """
     return key in liveness.exposed(list(ops))

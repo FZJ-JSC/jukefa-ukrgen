@@ -6,11 +6,13 @@ from __future__ import annotations
 from asmgen.asmblocks.op import register_type as rgt
 from asmgen.asmblocks.op.opset import opset_modifier
 
-from ...lsc_model.addressing import sym
-from ...models.load_store_operations import lsc_load, lsc_state, lsc_store
+from ...models.lsc.addressing import offpoly
+from ...models.lsc.operations import (lsc_load, lsc_set, lsc_state, lsc_store,
+                                       set_mask_tail)
 from ...specializers.signature import _sigs
 from .base import lsc_irmod, irmod_param, irmod_placement, blocks_and_sections
 from .slices import slice_loop, tiles_of
+from ...models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 def _masked(gen, op) -> list:
@@ -38,7 +40,7 @@ def _vectors(offset) -> int | None:
     lengths where they're symbolic (SVE, RVV: k*VL), elements where the
     length is a number (AVX-512's 0, 8, 16); None where it's neither
     """
-    terms = dict(offset.terms) if isinstance(offset, sym) else {}
+    terms = dict(offset.terms) if isinstance(offset, offpoly) else {}
     if not terms:
         return 0
     if set(terms) <= {("VL",)}:
@@ -207,11 +209,17 @@ class tailmask(lsc_irmod):
             comp = next((c for c, i in program.vector_indices.items() if i == index),
                         next(iter(program.vector_indices)))     # a tile's rows: its component's
             sets.append(lsc_state({f"mask({index})": f"tail({index})"}, self.ctx.component_dts[comp]))
+            # the same mask as a value: its register numbered here, before the
+            # accesses are specialised, and read by their slots
+            # (docs/REGISTER_ALLOCATION.md: the masks, (c))
+            sets.append(lsc_set(f"mask({index})", 0, rgt.MASK,
+                                set_mask_tail(f"tail({index})", self.ctx.component_dts[comp])))
         program.entry = list(program.entry) + sets
         if masked:
             for block, section in blocks_and_sections(program):
                 for op in getattr(block, section) or []:
                     index = op.properties.get("tail")
-                    if index in masked:
-                        op.extra_reads_state.add(f"mask({index})")
+                    # no state read: the binding pass gives each of these a
+                    # slot for the mask's value, and that is the read the
+                    # schedulers order by (docs/REGISTER_ALLOCATION.md: (b))
         return marked

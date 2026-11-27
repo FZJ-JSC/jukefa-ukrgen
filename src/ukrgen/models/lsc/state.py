@@ -1,0 +1,142 @@
+"""
+Processor state through a program: what each operation's signatures
+require (asmgen's state_requires) checked against the state the ISA's setup
+leaves and lsc_state operations set - each access keeping the signatures
+whose requirements hold where it is
+"""
+from __future__ import annotations
+
+from ...irmod.lsc.base import blocks_and_sections, first_blocks
+from .operations import lsc_load, lsc_loop, lsc_move, lsc_state, lsc_store
+
+
+def satisfied(requires: dict[str, str], state: dict[str, str]) -> bool:
+    """whether state meets requirements: name -> "!=None" (set), "==v", "!=v" """
+    for name, condition in requires.items():
+        value = state.get(name)
+        if "!=None" == condition:
+            ok = value is not None
+        elif condition.startswith("=="):
+            ok = value == condition[2:]
+        elif condition.startswith("!="):
+            ok = value != condition[2:]
+        else:
+            raise ValueError(f"state requirement {name}: {condition!r} - !=None, ==value or !=value")
+        if not ok:
+            return False
+    return True
+
+
+def check_state(program, initial: dict[str, str]) -> list[str]:
+    """
+    The state through each section, from the setup's: an access's
+    signatures pruned to those whose requirements hold (none left: a
+    problem, said); a section ending in other state than it began - a loop's
+    iterations would differ - a problem. The problems, empty where none
+    """
+    problems = []
+    # the program's entry first (the ISA's engine switched on): every section
+    # begins, and ends, with the state it leaves
+    start = dict(initial)
+    for op in program.entry:
+        if isinstance(op, lsc_state):
+            start.update(op.values)
+    # states set once, in the first block's prologue (a masked tail's mask) -
+    # the branch the whole kernel, in each case's first block's: every later
+    # section begins with them
+    firsts = first_blocks(program)
+    once = {k: v for first in firsts for op in (first.prologue or []) if isinstance(op, lsc_state)
+            for k, v in op.values.items() if k not in start}
+    for block, section in blocks_and_sections(program):
+        state = dict(start) if (any(block is f for f in firsts) and "prologue" == section) \
+            else {**start, **once}
+        _walk(getattr(block, section) or [], state, section, problems)
+        # the setup's states as they were (states set once may stay)
+        if any(state.get(k) != v for k, v in start.items()):
+            problems.append(f"{section}: ends with other state than it began with "
+                            f"({', '.join(f'{k}={v}' for k, v in sorted(state.items()))})")
+    return problems
+
+
+
+def _walk(ops, state: dict, where: str, problems: list) -> None:
+    """
+    Operations in order from a state, updated as they set it: each one's
+    state reads set, its signatures' requirements held (a load's, store's or
+    move's pruned to those that hold - a transformation's only checked); a
+    loop's block walked where the loop is, ending in the state it began with
+    - its iterations alike
+    """
+    for op in ops:
+        if isinstance(op, lsc_state):
+            state.update(op.values)
+            continue
+        for name in sorted(op.extra_reads_state):
+            if state.get(name) is None:
+                problems.append(f"{where}: {type(op).__name__[4:]} reads {name} before it's set")
+        if isinstance(op, lsc_loop):
+            began = dict(state)
+            _walk(op.block, state, f"{where}, a loop", problems)
+            if state != began:
+                problems.append(f"{where}: a loop's block ends with other state than it began with "
+                                f"({', '.join(f'{k}={v}' for k, v in sorted(state.items()))})")
+            continue
+        sigs = op.state_sigs()
+        held = [s for s in sigs if satisfied(s.state_requires, state)]
+        if sigs and not held:
+            needs = sorted({f"{k} {v}" for s in sigs for k, v in s.state_requires.items()})
+            what = f"{op.indices[1]}'s " if isinstance(op, (lsc_load, lsc_store)) else ""
+            problems.append(f"{where}: {what}{type(op).__name__[4:]}: no form whose state "
+                            f"requirements hold ({', '.join(needs)}; the state "
+                            f"{', '.join(f'{k}={v}' for k, v in sorted(state.items())) or 'none'})")
+        elif len(held) < len(sigs) and isinstance(op, (lsc_load, lsc_store, lsc_move)):
+            op.sigs = held
+
+def merge_switches(program) -> int:
+    """
+    Adjacent short-length regions as one, after scheduling: an lsc_state
+    setting a value back (vlen max) followed by one setting the same value the
+    region before had (tail(m)), nothing between reading or writing that
+    state - both dropped. A pipelined loop's last-vector store and the next
+    column's load so share their region. How many pairs it dropped
+    """
+    dropped = 0
+    for block, section in blocks_and_sections(program):
+        ops = list(getattr(block, section) or [])
+        out, k = [], 0
+        while k < len(ops):
+            op = ops[k]
+            if isinstance(op, lsc_state) and len(out) and _drop_pair(out, ops, k):
+                k = _next_switch(ops, k) + 1
+                dropped += 1
+                continue
+            out.append(op)
+            k += 1
+        setattr(block, section, out)
+    return dropped
+
+
+def _previous_values(out: list) -> dict | None:
+    """the values the last lsc_state already placed set"""
+    for op in reversed(out):
+        if isinstance(op, lsc_state):
+            return op.values
+    return None
+
+
+def _next_switch(ops: list, k: int) -> int:
+    """the next operation after k reading or writing state k's lsc_state sets"""
+    names = set(ops[k].values)
+    for j in range(k + 1, len(ops)):
+        if names & (ops[j].reads_state | ops[j].writes_state):
+            return j
+    return len(ops)
+
+
+def _drop_pair(out: list, ops: list, k: int) -> bool:
+    """whether ops[k] sets back what the next switch sets again, unread between"""
+    before = _previous_values(out)
+    j = _next_switch(ops, k)
+    if before is None or j >= len(ops) or not isinstance(ops[j], lsc_state):
+        return False
+    return ops[j].values == before and set(ops[k].values) == set(before)

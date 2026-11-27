@@ -9,12 +9,13 @@ import subprocess
 import tempfile
 import unittest
 
-from ukrgen.lsc_model.ir import is_start_block
+from ukrgen.models.lsc.ir import is_start_block
 
 from ukrgen.flow.ukr_context import ukr_context
 from ukrgen.flow.stage_engine import stage_engine
 from ukrgen.flow.stages.setup import setup_stage
 from ukrgen.flow.stages.datatype import datatype_stage
+from ukrgen.flow.stages.storage import storage_stage
 from ukrgen.flow.stages.layout import layout_stage
 from ukrgen.flow.stages.solve import solve_stage
 from ukrgen.flow.stages.dimension import dimension_stage
@@ -24,9 +25,9 @@ from ukrgen.flow.stages.isa_specialize import isa_specialize_stage
 from ukrgen.flow.stages.addresses import address_stage
 from ukrgen.flow.stages.loops import loop_stage
 from ukrgen.flow.stages.emit import emit_stage
-from ukrgen.models.load_store_operations import lsc_load, lsc_store, lsc_addr_compute
+from ukrgen.models.lsc.operations import lsc_load, lsc_store, lsc_addr_compute
 
-STAGES = [setup_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage,
+STAGES = [setup_stage, storage_stage, datatype_stage, layout_stage, solve_stage, dimension_stage, sto_stage,
           model_stage, isa_specialize_stage, loop_stage, address_stage, emit_stage]
 
 
@@ -329,9 +330,14 @@ class test_signature_specializer(unittest.TestCase):
                 self.assertTrue(ok, err)
 
     def test_print_asm(self):
+        # the kernel as a file holds it: a framed, C-callable function, its
+        # symbol --symbol's (the blocks' commented listing is the debug log's)
         _, res = mm(**{"print-asm": True})
         self.assertFalse(res.completed)
-        self.assertIn("// block mm, loop over k", res.output)
+        self.assertIn(".global ukr", res.output)
+        self.assertIn(".size ukr, .-ukr", res.output)
+        _, named = mm(**{"print-asm": True, "symbol": "bli_dgemm_test"})
+        self.assertIn(".global bli_dgemm_test", named.output)
 
 
 if __name__ == "__main__":

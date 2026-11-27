@@ -2,7 +2,7 @@
 Element loops into vector accesses
 """
 
-from ...models.load_store_operations import lsc_loop
+from ...models.lsc.operations import lsc_loop
 from .base import irmod_placement, lsc_irmod, blocks_and_sections
 
 

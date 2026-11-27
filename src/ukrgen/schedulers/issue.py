@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from asmgen.asmblocks.op import register_type as rgt
 
-from ..models.load_store_operations import (lsc_load, lsc_store, lsc_addr_compute, lsc_move,
+from ..models.lsc.operations import (lsc_load, lsc_store, lsc_addr_compute, lsc_move,
                                             lsc_loop, lsc_transformation)
 
 #: instruction classes: vector and scalar loads and stores, vector FP and

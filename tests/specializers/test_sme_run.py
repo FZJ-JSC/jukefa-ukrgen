@@ -12,6 +12,7 @@ import unittest
 
 import tests.specializers.test_signature as t
 from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage
+from ukrgen.models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PARAMS = {"sme-F64F64": "on", "mm-tileop": ["fopa(A.VEC:direct, B.VEC:direct, C.TILE){i=m, j=n, k*=1}"],
@@ -171,6 +172,36 @@ class test_sme_gemm(unittest.TestCase):
                 self.assertIn(tile, r.stdout)
                 self.assertIn(", 0 wrong", r.stdout)
 
+    def test_runs_scheduled(self):
+        # the same through the passes that spell the address moves and place
+        # them: an address computation before each access, on the plan's own
+        # registers - the loop owns nothing but its frame
+        # (docs/REGISTER_ALLOCATION.md, D') - the kernel right at both vector
+        # lengths
+        from ukrgen.flow.stages.irmods import post_specialize_irmod_stage
+        from ukrgen.flow.stages.scheduling import schedule_stage
+        from ukrgen.models.lsc.ir import render_loop
+        from ukrgen.models.lsc.operations import lsc_addr_compute, lsc_load, lsc_store, lsc_loop
+        ctx, outs = run_gemm(self, GEMM, passes=[post_specialize_irmod_stage, schedule_stage])
+        program = ctx.programs[0]
+        loops = [op for b in program.blocks + [b for c in program.cases for b in c.blocks]
+                 for section in ("prologue", "body", "epilogue", "tail", "subtail")
+                 for op in (getattr(b, section) or [])
+                 if isinstance(op, lsc_loop) and op.info.get("slice_moves")]
+        self.assertTrue(loops, "no loop over slices with its address moves in the IR")
+        for loop in loops:
+            with self.subTest(loop=render_loop(loop, program.offsets)[0]):
+                # every access at a register, and the loop's own computations
+                # the ones that reach them
+                moved = {(b.indices[0].component, b.indices[0].indices[0]) for b in loop.block
+                         if isinstance(b, lsc_addr_compute)}
+                used = {(b.indices[0].component, b.indices[0].indices[0]) for b in loop.block
+                        if isinstance(b, (lsc_load, lsc_store))}
+                self.assertTrue(used, "the loop has no access")
+                self.assertTrue(moved, "the loop's accesses at no register of its own")
+        self.assertFalse([r for r in program.address_registers.values() if r.startswith("column")],
+                         sorted(program.address_registers.values()))
+
 
 class test_slice_irmods(unittest.TestCase):
     """
@@ -281,9 +312,12 @@ GEMM_ROWS = {
                       "C.TILE:slice_vec_row[0:adreg:ROW]>slice_vec_row[0:bdreg:ROW]){m=1, i=n}"]}
 
 
-def run_gemm(test, params, defines=(), march="armv9-a+sme+sme-f64f64", ctype="double", **extra):
+def run_gemm(test, params, defines=(), march="armv9-a+sme+sme-f64f64", ctype="double", passes=(),
+             **extra):
     """
-    An SME gemm against the gemm harness under qemu at SVL 256 and 512
+    An SME gemm against the gemm harness under qemu at SVL 256 and 512 -
+    with the passes given after the addresses stage (the spelling, the
+    scheduling), as the family pipeline runs them
     """
     cc, qemu = "aarch64-linux-gnu-gcc", "qemu-aarch64-static"
     if not (shutil.which(cc) and shutil.which(qemu)):
@@ -291,7 +325,9 @@ def run_gemm(test, params, defines=(), march="armv9-a+sme+sme-f64f64", ctype="do
     from tests.specializers.test_native import header
     stages = list(t.STAGES)
     i = [x.__name__ for x in stages].index("model_stage") + 1
-    saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:]
+    j = [x.__name__ for x in stages].index("address_stage") + 1
+    saved, t.STAGES = t.STAGES, stages[:i] + [pre_specialize_irmod_stage] + stages[i:j] + \
+        list(passes) + stages[j:]
     try:
         ctx, res = t.mm(isa="sme", ukr="gemm", **params, **extra)
     finally:
@@ -393,9 +429,20 @@ class test_slice_scheduling(unittest.TestCase):
         code = ctx.emitted[0].instructions()
         start = next(i for i, l in enumerate(code) if l.endswith("_slices:")
                      and sum(x.startswith("mova") for x in code[i:i + 30]) >= 8)
-        body = [l.split()[0] for l in code[start + 1:start + 25]]
-        # every slice moved out before the first multiply: tiles and copies
-        self.assertEqual(["mova"] * 8, body[:8])
+        # the counter down by the unroll first - the loop's control, loop_code's
+        # - then the body: each access's address computed where the scheduler
+        # places it, the slices' moves among them - no column setup lines first
+        # (docs/REGISTER_ALLOCATION.md, D')
+        body = [l.split()[0] for l in code[start + 2:start + 26]]
+        # the slices out of their tiles, and each store's address computed
+        # where the scheduler places it - among the work, not in a block of
+        # setups first (docs/REGISTER_ALLOCATION.md, D')
+        self.assertGreaterEqual(body.count("mova"), 6, body)
+        stores = [i for i, x in enumerate(body) if x == "st1d"]
+        self.assertGreaterEqual(len(stores), 4, body)
+        for i in stores:
+            self.assertTrue({"mova", "add", "sub"} & set(body[max(0, i - 3):i]),
+                            f"no address computed before {body[:i + 1]}")
 
 
 class test_slice_preload(unittest.TestCase):
@@ -412,12 +459,44 @@ class test_slice_preload(unittest.TestCase):
             "unroll_loops-factor": "2", "unroll_loops-registers": "2",
             "unroll_loops-preload": "1"})
         code = ctx.emitted[0].instructions()
-        start = next(i for i, l in enumerate(code) if l.endswith("_slices:")
+        # the loop's label - a software-pipelined block's, ukrN_loop, as
+        # every one: its counter down by the iteration's slices first, then
+        # the body
+        start = next(i for i, l in enumerate(code) if l.endswith("_loop:")
                      and sum(x.startswith("mova") for x in code[i:i + 30]) >= 4)
         before = [l.split()[0] for l in code[start - 8:start]]
         self.assertGreaterEqual(before.count("mova"), 4)
-        self.assertEqual("fmul", code[start + 1].split()[0])
+        self.assertEqual("fmul", code[start + 2].split()[0])
         self.assertTrue(any(l.endswith("_last:") for l in code))
+
+    def test_runs_moved(self):
+        # the same through the passes that put an iteration's steps in the IR
+        # and schedule the block (docs/ADDRESSING_PLAN.md 6.6, preloading in
+        # the loop's sections): the prologue's loads and the body's last ones
+        # as any operation, the index stepped once an iteration
+        from ukrgen.flow.stages.irmods import post_specialize_irmod_stage
+        from ukrgen.flow.stages.scheduling import schedule_stage
+        ctx, outs = run_gemm(self, GEMM, passes=[post_specialize_irmod_stage, schedule_stage], **{
+            "pre-specialize-irmods": ["fuse_slices", "forward_slices", "hoist_slices",
+                                      "unroll_loops", "hoist"],
+            "unroll_loops-factor": "2", "unroll_loops-registers": "2",
+            "unroll_loops-preload": "1"})
+        code = ctx.emitted[0].instructions()
+        start = next(i for i, l in enumerate(code) if l.endswith("_loop:")
+                     and sum(x.startswith("mova") for x in code[i:i + 30]) >= 4)
+        end = next(i for i, l in enumerate(code) if i > start and l.startswith("cbnz"))
+        self.assertGreaterEqual([l.split()[0] for l in code[start - 8:start]].count("mova"), 4)
+        self.assertEqual(1, sum(l.startswith("add x12,x12,#") for l in code[start:end]))
+        self.assertTrue(any(l.endswith("_last:") for l in code))
+
+
+#: a loop over slices unrolled by 4 with two register sets, its accesses'
+#: columns beyond what --loop-gregs leaves: no pointer per column, each
+#: access moved to (docs/ADDRESSING_PLAN.md 6.6, an iteration's address moves)
+UNROLL4 = {"pre-specialize-irmods": ["fuse_slices", "forward_slices", "hoist_slices",
+                                     "unroll_loops", "hoist"],
+           "unroll_loops-factor": "4", "unroll_loops-registers": "2", "loop-gregs": "2"}
+UNROLL4_DEFINES = ["-DWT=float", "-DNT=float", "-DTOL=1e-4", "-DNCOLS=64"]
 
 
 class test_slice_pointers(unittest.TestCase):
@@ -425,17 +504,13 @@ class test_slice_pointers(unittest.TestCase):
     Loops over slices walk the address registers the model's plan gave their
     accesses - C's loads one, its stores another - from tile to tile: not a
     pointer per tile and copy. Unrolled by 4 (singles) with two register
-    sets it fits, and runs
+    sets, their columns beyond what --loop-gregs leaves: each access moved
+    to, the moves the IR's and the emitter's no more
     """
 
     def test_unroll4(self):
-        ctx, outs = run_gemm(self, GEMM32, defines=["-DWT=float", "-DNT=float", "-DTOL=1e-4",
-                                                    "-DNCOLS=64"],
-                             march="armv9-a+sme", ctype="float", **{
-                                 "pre-specialize-irmods": ["fuse_slices", "forward_slices",
-                                                           "hoist_slices", "unroll_loops", "hoist"],
-                                 "unroll_loops-factor": "4", "unroll_loops-registers": "2",
-                                 "loop-gregs": "2"})
+        ctx, outs = run_gemm(self, GEMM32, defines=UNROLL4_DEFINES,
+                             march="armv9-a+sme", ctype="float", **UNROLL4)
         code = ctx.emitted[0].instructions()
         start = next(i for i, l in enumerate(code) if l.endswith("_slices:")
                      and any(x.startswith("mova") for x in code[i:i + 40]))
@@ -444,6 +519,43 @@ class test_slice_pointers(unittest.TestCase):
         bases = {l.split("[")[1].split(",")[0].split("]")[0] for l in code[start:end]
                  if l.startswith(("ld1w", "st1w")) and "[" in l}
         self.assertLessEqual(len(bases), 2, bases)
+
+    def test_unroll4_scheduled(self):
+        # the same through the passes that spell the moves and schedule them:
+        # an iteration's moves steps of the IR, placed among the accesses -
+        # docs/ADDRESSING_PLAN.md 6.6, an iteration's address moves
+        from ukrgen.flow.stages.irmods import post_specialize_irmod_stage
+        from ukrgen.flow.stages.scheduling import schedule_stage
+        from ukrgen.models.lsc.ir import render_loop
+        from ukrgen.models.lsc.operations import lsc_addr_compute, lsc_load, lsc_store, lsc_loop
+        ctx, outs = run_gemm(self, GEMM32, defines=UNROLL4_DEFINES, march="armv9-a+sme",
+                             ctype="float", passes=[post_specialize_irmod_stage, schedule_stage],
+                             **UNROLL4)
+        program = ctx.programs[0]
+        loops = [op for b in program.blocks + [b for c in program.cases for b in c.blocks]
+                 for section in ("prologue", "body", "epilogue", "tail", "subtail")
+                 for op in (getattr(b, section) or [])
+                 if isinstance(op, lsc_loop) and op.info.get("slice_moves")]
+        self.assertTrue(loops, "no loop over slices with its moves in the IR")
+        from ukrgen.models.lsc.addressing import offpoly
+        for loop in loops:
+            with self.subTest(loop=render_loop(loop, program.offsets)[0]):
+                moves = [b for b in loop.block if isinstance(b, lsc_addr_compute)]
+                # the moves among the accesses, each spelled into its steps: the
+                # scheduler places them, nothing left to the emitter
+                self.assertTrue(moves, loop.block)
+                self.assertTrue(all("step" in (b.properties or {}) for b in moves),
+                                [b.properties for b in moves])
+                # an iteration nets its step on, whatever way the accesses
+                # moved the register between them
+                for key, p in (loop.walk_plan or {}).items():
+                    step = offpoly._make({f: c * loop.subtiling.unroll
+                                      for f, c in dict(p["step"].terms).items()})
+                    total = offpoly.const(0)
+                    for b in moves:
+                        if (b.indices[0].component, b.indices[0].indices[0]) == key:
+                            total = total + b.delta
+                    self.assertEqual(dict(step.terms), dict(total.terms), (key, loop.block))
 
 
 class test_packed_c(unittest.TestCase):
@@ -488,26 +600,3 @@ class test_packed_c(unittest.TestCase):
                                    capture_output=True, text=True, timeout=120)
                 self.assertIn(f"tile {rows} x {rows}", r.stdout)
                 self.assertIn(", 0 wrong", r.stdout)
-
-
-class test_loop_gregs(unittest.TestCase):
-    """
-    The general registers a loop over slices may take (--loop-gregs): within
-    them, a pointer per access column, no moves between tiles; beyond, the
-    plan's registers walk from tile to tile - exact either way
-    """
-
-    def loop_lines(self, ctx):
-        code = ctx.emitted[0].instructions()
-        start = next(i for i, l in enumerate(code) if l.endswith("_slices:")
-                     and sum(x.startswith("ld1d") for x in code[i:i + 30]) >= 2)
-        end = next(i for i, l in enumerate(code) if i > start and l.startswith("cbnz"))
-        return code[start + 1:end]
-
-    def test_budgets(self):
-        roomy, _ = run_gemm(self, GEMM)
-        tight, _ = run_gemm(self, GEMM, **{"loop-gregs": "2"})
-        self.assertLess(len(self.loop_lines(roomy)), len(self.loop_lines(tight)))
-        # within the budget the loop moves no pointer between its tiles' accesses
-        moves = [l for l in self.loop_lines(roomy) if l.startswith("add x") and "x12" not in l]
-        self.assertLessEqual(len(moves), 6)

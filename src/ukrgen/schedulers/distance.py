@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+from typing import Type
+
 from ..components.tile import determine_dreg_tag
-from ..models.load_store_operations import (
+from ..models.lsc.operations import (
         lsc_operation,
         lsc_load,
         lsc_store,
@@ -15,7 +17,6 @@ from ..models.load_store_operations import (
         lsc_transformation,
         lsc_move,
         lsc_value_op,
-        lsc_addr_add,
         )
 from ..models.lsc.reg import lsc_reg_type
 
@@ -134,7 +135,6 @@ class distance_specification:
             "st" : lsc_store,
             "mv" : lsc_move,
             "z" : lsc_zero,
-            "aadd" : lsc_addr_add,
             "oadd" : lsc_value_op,      # lsc_add_val_off's successor
             "val" : lsc_value_op,
         }

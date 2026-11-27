@@ -30,18 +30,6 @@ class setup_stage(stage):
                 description="Microkernel to generate",
                 choices=list(ukr_composition_map.keys()),
                 required=False)
-        self.params["C-storage"] = stage_param(
-                value=None, required=False, multi=True,
-                description="C's storages (row, col, any) as branches of the epilogue, picked "
-                            "at run time by C's strides; the last the default, its layout "
-                            "--C-layout's")
-
-        # the other components' storages (C's above): any composition's
-        for name in sorted({d.name for comp in ukr_composition_map.values() for d in comp.get_components()} - {"C"}):
-            self.params[f"{name}-storage"] = stage_param(
-                    value=None, required=False, multi=True,
-                    description=f"{name}'s storages (row, col, any) as branches of the epilogue, picked at "
-                                f"run time by {name}'s strides; the last the default, its layout --{name}-layout's")
         self.params["hooks"] = stage_param(
                 value=None, required=False, multi=True,
                 description="Scripts run around stages, each 'WHEN STAGE SCRIPT [FUNCTION] "
@@ -59,13 +47,8 @@ class setup_stage(stage):
 
         composition = ukr_composition_map[ukr]
         composition.validate()
-        # each component's storages as branches (--C-storage, --Y-storage...)
-        from .ukr.storage import storage_branches
-        for c in [d.name for d in composition.get_components()]:
-            param = self.params.get(f"{c}-storage")
-            storages = param.value if param is not None else None
-            if storages and len(storages) > 1:
-                composition = storage_branches(composition, storages, c)
+        # the storages are the storage stage's (--C-storage, --Y-storage...):
+        # its options are the composition's components, which only exist now
         self.context.composition = composition
 
         self.context.params.update(self.params)

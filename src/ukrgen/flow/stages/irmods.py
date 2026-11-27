@@ -4,6 +4,8 @@ IR modifications before and after specialization for the ISA
 
 import logging
 
+from ...models.lsc import allocation
+from ...models.lsc.allocator_decisions import decide
 from ...specializers.addresses import address_speller, value_setup, spells, slice_frames
 from ..stage_param import stage_param
 from ..ukr_context import ukr_context
@@ -153,12 +155,19 @@ class post_specialize_irmod_stage(irmod_stage_base):
             if spells(p):
                 auto = p.offset_registers is not None and p.offset_registers < 0
                 if auto:
-                    p.offset_registers = self.context.auto_offset_budget or 0
+                    # --max-offset-registers auto: the registers the analysis
+                    # leaves free, taken once - the flow used to run again for
+                    # the emitter's measurement (docs/REGISTER_ALLOCATION.md, C')
+                    p.offset_registers = allocation.budget(
+                        p, allocation.resources.of(p, self.context.gen,
+                                                   self.context.component_dts))
                 speller = address_speller(self.context)
                 speller.spell(p)
+                # the paths' operations: the one the allocation took, kept
+                # before anything looks at their neighbours - steps of one path
+                # only merge (docs/REGISTER_ALLOCATION.md: decisions)
+                decide(p, allocation.offsets(p))
                 speller.merge(p)        # adjacent steps where shorter (ADDRESSING_PLAN 3.2)
-                if auto:
-                    p.offset_registers = -1
         # passes on the steps (ldinc: a walk's step a post-increment)
         for cls in self.on_steps:
             self.run(cls)

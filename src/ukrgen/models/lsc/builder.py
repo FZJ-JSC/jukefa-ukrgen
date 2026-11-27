@@ -1,0 +1,1556 @@
+"""
+Building LSC IR from tiled STOs and their chosen implementations.
+
+Each STO operation becomes the data movement its implementation's resolutions
+describe - loads on demand, skipped when the register already holds the data -
+followed by the computation. A loop block emits one iteration once, as access
+groups and computations; preloading is a rearrangement of those items, not a
+second run with saved and restored state.
+"""
+
+from __future__ import annotations
+from asmgen.asmblocks.op import register_type as rgt
+from ...components.tile import (
+    tile, subtiling, dimension_properties as dimp, dimension_type as dimt,
+)
+
+import copy
+
+from dataclasses import dataclass, field
+
+from asmgen.asmblocks.op import operand_modifier as omod
+from asmgen.registers import adt_size
+
+from ...flow.stages.ukr.ukr import read_access, write_access, sto_kind, block_description
+from ...matching.math import get_operand_io
+from ...support.data_move import resident_ref
+from ...support.domains import operand_values
+from ...support.data_move import (
+    dm_direction as dmd,
+    orig_ref,
+    filter_by_step_requirements,
+)
+from ...support.dm_solver import repeat_fits, resolved_operation_chain
+from ...support.sig_group import group_sigs, sig_group
+from .addressing import offpoly, offset_db, layout_strides, addr_pattern
+from ...components.tile import scalar_tile
+from .operations import (
+    lsc_loop,
+    loop_walk,
+    lsc_operation, lsc_load, lsc_store, lsc_move, lsc_zero, lsc_transformation, ldst_modifier)
+from .index import lsc_reg_index
+from .ir import vreg, addr_ref, ir_block, ir_case, ir_program
+from .offset_polynomial import offset_polynomial as offpoly
+
+
+
+def _flat_sigs(sigs) -> list:
+    """
+    Signatures out of a group, a list of groups, or a list of signatures
+    """
+    if isinstance(sigs, sig_group):
+        return list(sigs.sigs)
+    if isinstance(sigs, (list, tuple)):
+        return [s for g in sigs for s in _flat_sigs(g)]
+    return [sigs]
+
+class model_error(Exception):
+    """
+    The kernel cannot be built as parameterized, e.g. too few data registers
+    for an accumulator
+    """
+
+
+@dataclass
+class access_group:
+    """
+    The data movement bringing one operand tile into a register
+    """
+    component : str
+    reg : vreg
+    ops : list[lsc_operation]
+    streamed : bool
+    coord : tuple = ()
+    #: what it reads: nothing - it moves data (compute items read)
+    reads : tuple = ()
+
+
+@dataclass
+class compute_item:
+    op : lsc_transformation
+    reads : list = field(default_factory=list)
+
+
+@dataclass
+class addressing_plan:
+    """
+    How a component's accesses use its address registers
+
+    :param registers: number of address registers
+    :param pattern: which register an access uses
+    :param stride_pointers: pointers the specializer may add per register for
+        accesses at run-time strides (C's columns); None the ISA's default, 0
+        none - the pattern's registers walk to them (phase+rotate's in their
+        place)
+    :param addr_forms: which addressing forms an access may take where it costs
+        a register - "auto" the specializer's choice (today: none of them),
+        "goffset" the register offset form ([x0, x_cs, lsl #3])
+    """
+    registers : int = 1
+    pattern : addr_pattern = field(default_factory=lambda: addr_pattern("rotate"))
+    stride_pointers : int | None = None
+    addr_forms : str = "auto"
+
+
+#: scratch registers a data movement may name (its steps' tags)
+SCRATCH_STRIDE = 16
+
+
+class program_builder:
+    """
+    Builds the IR program of one part of the microtile
+
+    :param ctx: context after the STO stage
+    :param part: index of the part
+    :param addressing: component -> address register plan
+    :param data_regs: component -> data registers to use; components left out
+                      get one per distinct tile they need
+    :param preload: whether loop blocks preload streamed operands
+    :param resolve_order: components in the order an operation loads them
+    """
+
+    def __init__(self, ctx, part: int = 0,
+                 addressing: dict[str, addressing_plan] | None = None,
+                 data_regs: dict[str, int] | None = None,
+                 preload: bool = True,
+                 resolve_order: list[str] | None = None,
+                 subtilings: dict | None = None, max_data_regs: dict | None = None, max_preload: dict | None = None):
+        # scratch registers' numbering, until a part asks otherwise
+        self.scratch_base = 0
+        self.unique_scratch = False
+        self.next_scratch = 0
+        #: per component, [(resolution or None, {unroll, registers, order})]
+        self.subtilings = subtilings or {}
+        self.lane_groups: dict = {}
+        self.vidx: dict[str, str] = {}
+        self.ctx = ctx
+        self.gen = ctx.gen
+        self.comp = ctx.composition
+        # the parts of a split microtile, built into one program: their STOs
+        # one after another in each section; part and stos are the current one
+        ids = list(part) if isinstance(part, (list, tuple)) else [part]
+        self.parts = [(ctx.to_parts[p], ctx.stos[p]) for p in ids]
+        self.part, self.stos = self.parts[0]
+        self.flow = self.comp.dataflow()
+        self.addressing = addressing or {}
+        self.data_regs = data_regs or {}
+        self.preload = preload
+        self.components = {c.name for c in self.comp.get_components()}
+
+        self.db = offset_db()
+        self.extents: dict[str, offpoly] = {}
+        part_dims = ctx.part_dims or [ctx.dims] * len(ctx.to_parts)
+        split = ctx.split_index
+        for n, (pid, (_, stos)) in enumerate(zip(ids, self.parts)):
+            seen = set()
+            for tiling in stos.values():
+                for idx, ext in tiling.extents.items():
+                    if idx in seen:
+                        continue
+                    seen.add(idx)
+                    here = offpoly.extent(ext) * part_dims[pid][idx]
+                    if 0 == n:
+                        self.extents[idx] = here
+                    elif idx == split:
+                        # along the split index the microtile is every part's
+                        self.extents[idx] = self.extents[idx] + here
+        self.strides = {
+            comp: layout_strides(comp, kinds, ctx.component_packing.get(comp, []), self.extents)
+            for comp, kinds in ctx.component_strides.items()}
+
+        first = ids[0]
+        self.subtails = ctx.subtail_stos[first] if len(ctx.subtail_stos) > first else {}
+        self.subtail_impls = ctx.subtail_parts[first] if len(ctx.subtail_parts) > first else {}
+
+        # Register coordinates of each component in the order the STOs first
+        # use them: the rank names the register and picks the address
+        # register. A component cycling through fewer registers than tiles
+        # then spreads consecutive tiles over all of them, rather than
+        # crowding the tiles of one loop step into a few - sorted coordinates
+        # would interleave the loop index.
+        coords: dict[str, list] = {}
+        order = [n for n in self.comp.sto_order() if n in self.stos]
+        for tiling in [stos[n] for n in order for _, stos in self.parts if n in stos] + \
+                list(self.subtails.values()):
+            for op in tiling.ops:
+                for name in op.tile_strs:
+                    if name in self.components:
+                        seen = coords.setdefault(name, [])
+                        g = self.gcoord(tiling, name, op.coord(name))
+                        if g not in seen:
+                            seen.append(g)
+        self.coords = coords
+        self.max_data_regs = dict(max_data_regs or {})
+        self.max_preload = dict(max_preload or {})
+        self.data_regs = self.fit_registers(dict(self.data_regs))
+
+        # the order an operation's components get their data in: which
+        # component's memory is touched first
+        self.resolve_order = resolve_order or [c.name for c in self.comp.get_components()]
+
+        self.holder: dict[vreg, tuple] = {}
+        # for registers loaded lane by lane: (register, lane) -> what it holds
+        self.lane_holder: dict[tuple, tuple] = {}
+        self.future: list[dict] = []
+        self.pos = 0
+        self.clock = 0
+        self.last_access: dict[vreg, int] = {}
+        self.used: dict[str, tuple] = {}
+        self.phases: dict[str, list] = {}
+        #: how many (sto, direction) phases each component's accesses fall into
+        self._phase_counts: dict[str, int] = {}
+        #: the STOs whose phases phase_count counts: a case's while it's built
+        #: (the cases are alternatives - only one case's phases share the
+        #: registers), else the part's
+        self._phase_scope: list[str] | None = None
+        self.addr_setup: dict[tuple[str, int], int] = {}
+
+    # --- registers ---------------------------------------------------------
+
+    def fit_registers(self, given: dict) -> dict:
+        """
+        Data register counts fitting the register file. An accumulator keeps
+        a register per tile - all are live at once. An input component given
+        no count (--COMP-data-regs) has a register per tile where that fits
+        beside the accumulators and the counts given; where not, the inputs
+        without counts share what is left - each at least one, as a ring.
+        Vector and FP registers count against one file where they share it
+        (AArch64, x86); tiles have their own
+        """
+        rtypes: dict[str, set] = {}
+        written: set[str] = set()
+        written_by: dict[str, set] = {}
+        for part, stos in self.parts:
+            for sto in stos:
+              impl = part[sto].impl if sto in part else None
+              if not isinstance(impl, resolved_operation_chain):
+                  # a store's choice: no operation
+                  continue
+              for res, step in zip(impl.resolved_chain, impl.math_chain):
+                  out = step.name_mapping.get(step.hw_ast.left.name, step.hw_ast.left.name)
+                  written.add(out)
+                  written_by.setdefault(sto, set()).add(out)
+                  for hw, math in step.name_mapping.items():
+                      shape = res.compute_sg.representative.operands.get(hw)
+                      strat = [st for (n, _), st in res.operand_strategies.items() if n == hw]
+                      resident = next((st.rsln.resident_rtype for st in strat
+                                       if st.rsln.resident_rtype), None)
+                      rtype = resident or (shape.rtype if shape is not None else None)
+                      # brought as a scalar (bc_scalar: an FP register the
+                      # instruction takes, vfmacc.vf), whatever the group's
+                      # representative signature says
+                      if any("bc_scalar" == st.rsln.unique_tag for st in strat):
+                          rtype = rgt.FP
+                      if rtype is not None:
+                          rtypes.setdefault(math, set()).add(rtype)
+        rt = self.gen.get_reg_tracker()
+        def pool_of(comp):
+            """
+            The register file a component's registers are in, as the tracker
+            pools them: its vector registers', or its FP registers' - one file
+            where FP registers are vector registers (SVE, NEON, x86), their
+            own where they're not (RVV's vfmacc.vf takes its scalar from it)
+            """
+            kinds = rtypes.get(comp, set())
+            if rgt.VEC in kinds:
+                return rt.pool("vreg")
+            if rgt.FP in kinds:
+                return rt.pool("freg")
+            return None
+        # each register file fitted on its own - the vectors' first - its
+        # budget its registers, reserved ones included
+        pools: dict = {}
+        for c in self.coords:
+            pool = pool_of(c)
+            if pool is not None:
+                pools.setdefault(pool, set()).add(c)
+        files = [(pool, members, rt.capacity(pool))
+                 for pool, members in sorted(pools.items(), key=lambda kv: "vreg" not in kv[0])]
+        for tag, members, budget in files:
+            if not members:
+                continue
+            on_file = {c for c in self.coords if c in members}
+            # what each block of the composition holds at once: the accumulators
+            # its STOs touch - a register per tile - and its inputs
+            blocks = []
+            uses: dict[str, int] = {}
+            for block in self.comp.all_blocks():
+                comps, wrote = set(), set()
+                for name in block.stos:
+                    wrote |= written_by.get(name, set())
+                    for _, stos in self.parts:
+                        if name in stos:
+                            for op in stos[name].ops:
+                                comps |= {n for n in op.tile_strs if n in on_file}
+                if comps:
+                    blocks.append((comps, wrote, block.loop_index is not None))
+                    for c in comps:
+                        uses[c] = uses.get(c, 0) + 1
+            accumulated = set().union(*[wrote for _, wrote, looped in blocks if looped])
+            # all of a component's tiles live at once: accumulated in a loop - in
+            # it, and carried after it (AB into the epilogue). One written in
+            # straight-line code only (C in each epilogue case) streams: a model
+            # register per tile, which scheduling renames into the accumulators'
+            # registers as they are consumed - none kept for it here. A block's
+            # inputs share what its accumulators leave; an input used in several
+            # blocks takes the least it gets in any
+            def share(comps):
+                """
+                What a block's inputs get beside its accumulators and streamed
+                components: the emitter frees a component's registers after the
+                last block using it - the loop's A and B before the epilogue
+                """
+                accumulators = sorted(c for c in comps if c in accumulated)
+                streamed = sorted(c for c in comps if c in written and c not in accumulated)
+                inputs = sorted(c for c in comps if c not in written)
+                need = sum(len(self.coords[c]) for c in accumulators)
+                fixed = sum(int(given[c]) for c in inputs if c in given)
+                free = [c for c in inputs if c not in given]
+                # a streamed tile is loaded before the accumulator it's combined with
+                # is consumed - into a register of its own, where vector instructions
+                # can't take it from memory (all but x86): one kept per streamed
+                # component there
+                folds = "avx" in type(self.gen).__module__
+                kept = 0 if folds else len(streamed)
+                left = budget - need - fixed - kept
+                held = f"the accumulators ({', '.join(accumulators)}) take {need}" + \
+                       (f" and the streamed ({', '.join(streamed)}) {kept}" if kept else "")
+                if left < 0:
+                    raise model_error(
+                        f"{held} vector registers and the data registers given {fixed}: "
+                        f"{need + kept + fixed} of {budget} - fewer data registers "
+                        f"(--COMP-data-regs) or a smaller microtile fit")
+                if left < len(free):
+                    raise model_error(
+                        f"{held} of {budget} vector registers{' beside ' + str(fixed) + ' given' if fixed else ''}"
+                        f": {left} left for {', '.join(free)}, at least one each - a smaller microtile fits")
+                # an input's ceiling: the tiles it has and --COMP-max-data-regs
+                # (--COMP-max-preload limits loads moved ahead, not registers)
+                minimal = {c: self.minimal_ring(c) for c in free}
+                caps = {}
+                for c in free:
+                    cap = len(self.coords[c])
+                    if c in self.max_data_regs:
+                        cap = min(cap, int(self.max_data_regs[c]))
+                    caps[c] = max(1, cap)
+                if sum(caps[c] for c in free) <= left:
+                    return {c: caps[c] for c in free if caps[c] < len(self.coords[c])}
+                # first what keeps an input from loading a tile twice an iteration
+                # (its minimal ring), where the registers allow; then the rest up to
+                # the ceilings, the inputs with most tiles first
+                shares = {c: 1 for c in free}
+                left -= len(free)
+                for c in sorted(free, key=lambda c: -len(self.coords[c])):
+                    more = min(minimal[c], caps[c]) - shares[c]
+                    if 0 < more <= left:
+                        shares[c] += more
+                        left -= more
+                while left > 0:
+                    grow = [c for c in free if shares[c] < caps[c]]
+                    if not grow:
+                        break
+                    for c in sorted(grow, key=lambda c: -len(self.coords[c])):
+                        if left <= 0:
+                            break
+                        shares[c] += 1
+                        left -= 1
+                # whole k steps: a share rounded down to its minimal ring's
+                # multiples - B's scalars in two sets of a step's, not a ring
+                # shifting through the registers - unless --COMP-max-data-regs says
+                for c in list(shares):
+                    unit = minimal.get(c, 1)
+                    if 1 < unit <= shares[c] < len(self.coords[c]) and c not in self.max_data_regs:
+                        shares[c] = shares[c] // unit * unit
+                return shares
+            shares = {}
+            for comps, _, _ in blocks:
+                for c, n in share(comps).items():
+                    shares[c] = min(shares.get(c, n), n)
+            given.update(shares)
+        return given
+
+    def loop_ops(self) -> list[tuple]:
+        """
+        The operations of the first loop block, in order, with their tilings
+        """
+        for block in self.comp.all_blocks():
+            if block.loop_index is not None:
+                return [(stos[n], op) for n in block.stos for _, stos in self.parts if n in stos
+                        for op in stos[n].ops]
+        return []
+
+    def minimal_ring(self, comp: str) -> int:
+        """
+        The registers an input needs not to load a tile twice in an iteration
+        of the loop: the most of its tiles needed again later at once
+        """
+        uses = [self.gcoord(tiling, comp, op.coord(comp)) for tiling, op in self.loop_ops()
+                if comp in op.tile_strs]
+        if not uses:
+            return 1
+        last = {g: i for i, g in enumerate(uses)}
+        live, most = set(), 1
+        for i, g in enumerate(uses):
+            live.add(g)
+            most = max(most, len(live))
+            live = {h for h in live if last[h] > i}
+        return most
+
+    def tiles_per_step(self, comp: str) -> int:
+        """
+        An input's tiles in an iteration of the loop
+        """
+        return max(1, len({self.gcoord(tiling, comp, op.coord(comp)) for tiling, op in self.loop_ops()
+                           if comp in op.tile_strs}))
+
+    def reg_of(self, comp: str, rtype, coord: tuple) -> vreg:
+        """
+        The register for a component's tile. A tile still held keeps its
+        register. With a register per tile, each tile has its own, in order of
+        first use. With fewer, new data goes to a free register, else to one
+        holding data not needed again in this section - the one accessed
+        longest ago, so a reload lands far from its last reads - else to the
+        one holding data needed furthest ahead. That loads as rarely as the
+        registers allow.
+        """
+        for reg, held in self.holder.items():
+            if reg.owner == comp and reg.rtype == rtype and held == (comp, coord):
+                return self._touch(reg)
+        ring = self.data_regs.get(comp, len(self.coords[comp]))
+        if ring >= len(self.coords[comp]):
+            return self._touch(vreg(comp, rtype, self.coords[comp].index(coord)))
+
+        regs = [vreg(comp, rtype, i) for i in range(ring)]
+        free = [r for r in regs if r not in self.holder]
+        if free:
+            return self._touch(free[0])
+        upcoming = {r: self.next_use(*self.holder[r]) for r in regs}
+        dead = [r for r in regs if upcoming[r] is None]
+        if dead:
+            return self._touch(min(dead, key=lambda r: self.last_access.get(r, -1)))
+        return self._touch(max(regs, key=lambda r: upcoming[r]))
+
+    def _touch(self, reg: vreg) -> vreg:
+        self.clock += 1
+        self.last_access[reg] = self.clock
+        self._use(reg)
+        return reg
+
+    def next_use(self, comp: str, coord: tuple) -> int | None:
+        """
+        How many operations ahead of the current one a tile is needed again in
+        this section; None if it is not
+        """
+        for ahead, needs in enumerate(self.future[self.pos + 1:], start=1):
+            if needs.get(comp) == coord:
+                return ahead
+        return None
+
+    def begin_section(self, stos_ops: list[tuple[str, list]]):
+        """
+        Start emitting a run of operations - a loop iteration, a tail, a block -
+        whose tile accesses decide which registers to reuse
+        """
+        self.future = [{c: self.gcoord(tiling or self.stos[sto], c, op.coord(c))
+                        for c in op.tile_strs if c in self.components}
+                       for sto, ops, tiling in stos_ops for op in ops]
+        self.pos = 0
+
+    def _use(self, reg: vreg):
+        rtype, count = self.used.get(reg.owner, (reg.rtype, 0))
+        self.used[reg.owner] = (rtype, max(count, reg.index + 1))
+
+    def ref_reg(self, ref, rtype, final: vreg) -> vreg:
+        """
+        Register a step reference names: the operand's own register, or scratch
+        space between the steps of a data movement
+        """
+        if isinstance(ref, orig_ref):
+            return final
+        tag = str(ref.tag)
+        base = self.scratch_base if self.unique_scratch else 0
+        reg = vreg("S", rtype, base + (int(tag) if tag.isdigit() else 0))
+        self._use(reg)
+        return reg
+
+    # --- addresses ---------------------------------------------------------
+
+    def gcoord(self, tiling, comp: str, coord: tuple) -> tuple:
+        """
+        A tile's coordinate for everything that tells tiles apart - holders,
+        rings, the operations ahead: its first element's offset along each
+        index, a part's offset included, and its register tile's shape. Two
+        parts' tiles holding the same elements alike are the same tile: one
+        register, loaded once (B's vectors beside an m split)
+        """
+        if _is_gcoord(coord):
+            return coord
+        reg = tiling.registers.get(comp) if tiling.registers else None
+        shape = (str(reg.dima), str(reg.dimb)) if reg is not None else ()
+        if comp in (tiling.resident or ()):
+            # reached slice by slice through vectors: the whole tile
+            shape = ("1v", "1v")
+        return tuple(sorted(self.elements(tiling, comp, coord).items())) + ((_SHAPE, shape),)
+
+    def elements(self, tiling, comp: str, coord: tuple) -> dict[str, offpoly]:
+        """
+        Element offsets of a component tile: its register coordinate times the
+        register tile's extent along each index
+        """
+        if _is_gcoord(coord):
+            return {idx: e for idx, e in coord if _SHAPE != idx}
+        indices = tiling.generate_args["operands"][comp]
+        reg_tile = tiling.registers[comp]
+        dims = (reg_tile.dima, reg_tile.dimb)
+        live = [(pos, idx) for pos, idx in enumerate(indices) if idx is not None]
+        # an STO looping over a tile's slices covers the tile along the index
+        # they iterate: its coordinates step by the tile there
+        loop = tiling.slice_loop
+        step = lambda pos, idx: offpoly.extent(tiling.extents[idx]) if loop is not None \
+            and idx == loop[0] else offpoly.extent(dims[pos])
+        out = {idx: step(pos, idx) * c for (pos, idx), c in zip(live, coord)}
+        # a part of a split microtile starts along the split index where the
+        # one before ends
+        for idx, offset in (tiling.part_offset or {}).items():
+            if idx in out:
+                out[idx] = out[idx] + offset
+        return out
+
+    def phase_count(self, comp: str) -> int:
+        """
+        How many phases a component's accesses fall into - (sto, direction)
+        pairs over the part's STOs, as ``address`` numbers them - which
+        ``phase+...`` splits the component's address registers among. Known
+        before the first access, where the phases are not yet seen: the flow
+        says which STOs load the component and which write its memory
+        """
+        if comp in self._phase_counts:
+            return self._phase_counts[comp]
+        n = 0
+        for sto in (self.stos if self._phase_scope is None else self._phase_scope):
+            for (entry, touched), access in self.flow.items():
+                if entry != sto:
+                    continue
+                if touched == comp and access.read in (read_access.LOAD, read_access.STREAM):
+                    n += 1
+                if access.write in (write_access.MEMORY, write_access.MEMORY_STREAM) and \
+                        self.comp.get_sto(sto).memory_of(touched) == comp:
+                    n += 1
+        self._phase_counts[comp] = max(1, n)
+        return self._phase_counts[comp]
+
+    def address(self, sto: str, comp: str, direction: str, coord: tuple,
+                elements: dict[str, offpoly]) -> addr_ref:
+        """
+        Register an access and pick its address register. The pick depends
+        only on the tile's rank and the access's phase, so it is the same in
+        the prologue as in the loop body, and it cannot drift.
+        """
+        plan = self.addressing.get(comp, addressing_plan())
+        phases = self.phases.setdefault(comp, [])
+        key = (sto, direction)
+        if key not in phases:
+            phases.append(key)
+        reg = plan.pattern.select(self.coords[comp].index(coord), phases.index(key),
+                                  plan.registers, self.phase_count(comp))
+        oid = self.db.add(comp, elements)
+        self.addr_setup.setdefault((comp, reg), oid)
+        return addr_ref(component=comp, reg=reg, offset=oid)
+
+    # --- data movement -----------------------------------------------------
+
+    def step_sigs(self, step, dt):
+        sigs = filter_by_step_requirements(getattr(self.gen, step.op).get_signatures(), step, dt)
+        return group_sigs([s for s in sigs if repeat_fits(self.gen, s, step, dt)])
+
+    def vector_index(self, tiling, comp: str) -> str | None:
+        """
+        The index a component's register runs along, for lane-by-lane steps
+        """
+        indices = tiling.generate_args["operands"][comp]
+        reg_tile = tiling.registers[comp]
+        for pos, idx in enumerate(indices):
+            d = (reg_tile.dima, reg_tile.dimb)[pos]
+            if idx is not None and not (1 == d.size and "fixed" == d.dt.name):
+                return idx
+        return None
+
+    def reg_tile(self, tiling, reg: vreg):
+        """
+        Tile a register holds: its component's register tile, a scalar for
+        scratch space
+        """
+        return tiling.registers.get(reg.owner, scalar_tile)
+
+    def move_data(self, *args, **kwargs) -> list[lsc_operation]:
+        """
+        One data movement, its scratch registers its own in straight-line code
+        """
+        if not self.unique_scratch:
+            return self._move_data(*args, **kwargs)
+        saved = self.scratch_base
+        self.next_scratch = self.next_scratch + 1
+        self.scratch_base = SCRATCH_STRIDE * self.next_scratch
+        try:
+            return self._move_data(*args, **kwargs)
+        finally:
+            self.scratch_base = saved
+
+    def _move_data(self, sto: str, tiling, comp: str, coord: tuple, reg: vreg,
+                   steps, direction: str, tag: str,
+                   memory: str | None = None, lane: int | None = None) -> list[lsc_operation]:
+        """
+        The operations of one data movement: its steps in order, a repeated
+        step once per lane, each load or store at the tile's address - in
+        comp's own memory, or the memory a store writes it into
+        """
+        memory = memory or comp
+        dt = self.ctx.component_dts[memory]
+        self.vidx.setdefault(memory, self.vector_index(tiling, comp))
+        repeats = [rs.step.repeat for rs in steps]
+        if any(r is not None and r.group for r in repeats):
+            return self.move_lane_group(sto, tiling, comp, coord, reg, steps, direction, tag,
+                                        memory, dt)
+        if any(isinstance(ref, resident_ref) for rs in steps
+               for ref in list(rs.step.src or []) + [rs.step.dest]):
+            raise model_error(f"{tag}: operations on {comp}'s tile slice by slice are not "
+                              f"built yet")
+        if any(r is not None and r.levels for r in repeats):
+            return self.move_nest(sto, tiling, comp, coord, reg, steps, direction, tag,
+                                  memory, dt)
+        ops: list[lsc_operation] = []
+        for rs in steps:
+            step = rs.step
+            sigs = rs.sg or self.step_sigs(step, dt)
+            lanes = [lane]
+            if step.repeat is not None:
+                lanes = list(range(self.gen.simd_size // adt_size(dt)))
+            for lane in lanes:
+                elements = self.elements(tiling, comp, coord)
+                if lane is not None:
+                    vidx = self.vector_index(tiling, comp)
+                    elements[vidx] = elements.get(vidx, offpoly()) + lane
+                if step.op in ("load", "store"):
+                    data = self.ref_reg(step.dest, step.dest_rtype, reg) if "load" == step.op \
+                        else self.ref_reg(step.src[0], step.src_rtypes[0], reg)
+                    addr = self.address(sto, memory, direction, coord, elements)
+                    mods = set()
+                    if lane is not None:
+                        mods.add(ldst_modifier.lane)
+                    if "bc_load" == tag:
+                        mods.add(ldst_modifier.bcast1)
+                    cls = lsc_load if "load" == step.op else lsc_store
+                    op = cls(memory, data.index, addr.reg,
+                             self.reg_tile(tiling, data), mods,
+                             data=_index(data, lane), rsln=tag, step=step, sigs=sigs,
+                             offset=addr.offset, rtypes=[None, data.rtype])
+                    if lane is None and any("ILANE" == m.name
+                                            for mods in (step.opd_mod_reqs or {}).values()
+                                            for m in mods):
+                        # one element into one lane (bc_lane): lane 0
+                        lane = 0
+                    if lane is not None:
+                        op.add_property("lane", lane)
+                        op.add_property("stride_index", self.vector_index(tiling, comp))
+                    if {"GSTRIDE", "VINDEX"} & {m.name for m in (step.op_mod_reqs or set())} \
+                            or "shuffle" == tag:
+                        # a strided access or a gather - or a row of a
+                        # transpose in registers: its stride is the
+                        # component's along the register's index
+                        op.add_property("stride_index", self.vector_index(tiling, comp))
+                    ops.append(op)
+                else:
+                    src = self.ref_reg(step.src[0], step.src_rtypes[0], reg)
+                    dest = self.ref_reg(step.dest, step.dest_rtype, reg)
+                    op = lsc_move(_index(src), _index(dest),
+                                  [self.reg_tile(tiling, src), self.reg_tile(tiling, dest)],
+                                  rsln=tag, step=step, sigs=sigs,
+                                  rtypes=[src.rtype, dest.rtype])
+                    if any("ILANE" == m.name for mods in (step.opd_mod_reqs or {}).values()
+                           for m in mods):
+                        # a move from or into one lane: the lane the element is in
+                        op.add_property("lane", 0 if lane is None else lane)
+                    ops.append(op)
+        return ops
+
+    @staticmethod
+    def virtual(anchor, loop):
+        """
+        A vector filled or drained element by element, as one operation of the
+        IR until specialization: its loop's anchor - the vector accessed from
+        its first element - the loop kept with it (properties["loop"], its
+        walk's anchor this operation) for the pre-specialize stage to put in
+        its place (ADDRESSING_PLAN 6.1) unless a pass makes it a vector access
+        (vectorize_loops). What the loop writes it writes: a drain's vector,
+        shifted out (vslidedown). Copies of it - a later iteration's, the last
+        iteration's - get copies of the loop (shifted, _clone)
+        """
+        anchor.add_property("loop", loop)
+        written = {str(loop.indices[p]) for p in loop.writes}
+        for p, idx in enumerate(anchor.indices):
+            if str(idx) in written and p not in anchor.writes:
+                anchor.writes.append(p)
+        return anchor
+
+    def element_loop(self, block, anchor, memory, vidx, order, info) -> lsc_loop:
+        """
+        A loop over a vector's elements, as many as it has at run time: its
+        subtiling one element at a time (1v / 1), its walk from the vector's
+        first element by the element stride
+        """
+        one = dimp(dt=dimt.fixed, size=1)
+        element = tile(one, one)
+        vector = tile(dimp(dt=dimt.vla, size=1), one)
+        stride = self.strides.get(memory, {}).get(vidx)
+        count = element.count_in(vector)[0]
+        # the user's settings for this component's loops, this resolution's last
+        settings = {}
+        for tag, kv in self.subtilings.get(memory, []):
+            if tag in (None, anchor.rsln):
+                settings.update(kv)
+        unrolls = count.count_unrolls(16 // adt_size(self.ctx.component_dts[memory]))
+        unroll = settings.get("unroll", 1)
+        if unroll not in unrolls:
+            raise model_error(f"{memory}: {anchor.rsln}'s loop over {count} elements unrolls "
+                              f"by {', '.join(map(str, unrolls))}, not {unroll}")
+        if settings.get("order", order) != order:
+            raise model_error(f"{memory}: {anchor.rsln}'s steps run its loop "
+                              f"{'forwards' if order > 0 else 'from the last element'} only")
+        registers = max(1, min(settings.get("registers", 1), unroll))
+        return lsc_loop(block=block,
+                        subtiling=subtiling(shape=element, count=count, order=order,
+                                            unroll=unroll, registers=registers),
+                        walks=[loop_walk(anchor=anchor, step=stride)],
+                        info=dict(info, component=memory, index=vidx, stride=stride,
+                                  explicit=bool(settings)))
+
+    def slice_loop(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
+        """
+        A tile moved slice by slice (slices_col, slices_row): one lsc_loop, its
+        block the access of one slice - the slice index the emitter's register
+        - walking the index across slices: a column spans the tile's first
+        index, so a loop over columns walks its second; rows the other way
+        """
+        step = steps[0].step
+        sigs = steps[0].sg or self.step_sigs(step, dt)
+        col = any("COL" == m.name for mods in (step.opd_mod_reqs or {}).values() for m in mods)
+        first, second = tiling.generate_args["operands"][comp][:2]
+        elements = self.elements(tiling, comp, coord)
+        addr = self.address(sto, memory, direction, coord, elements)
+        if "load" == step.op:
+            data, cls = self.ref_reg(step.dest, step.dest_rtype, reg), lsc_load
+        else:
+            data, cls = self.ref_reg(step.src[0], step.src_rtypes[0], reg), lsc_store
+        access = lambda: cls(memory, data.index, addr.reg,
+                             self.reg_tile(tiling, data), set(), data=_index(data), rsln=tag,
+                             step=step, sigs=sigs, offset=addr.offset, rtypes=[None, data.rtype])
+        # the tile's access stands for the loop until the loop stage makes it
+        loop = self.element_loop([access()], access(), memory, second if col else first, 1,
+                                 {"direction": step.op, "kind": "slices", "axis": "col" if col else "row"})
+        return [self.virtual(loop.walks[0].anchor, loop)]
+
+    def move_vla(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
+        """
+        A vector filled element by element (vla_lanes): one lsc_loop, its block
+        one element's steps - a scalar load, the scalar filled into the vector
+        shifted in place - its walk from the vector's first element; backwards
+        where the fill shifts up (SVE insr: into lane 0)
+        """
+        if "load" != steps[0].step.op:
+            return self.drain_vla(sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt)
+        load, fill = steps[0], steps[1]
+        elements = self.elements(tiling, comp, coord)
+        addr = self.address(sto, memory, direction, coord, elements)
+        scalar = self.ref_reg(load.step.dest, load.step.dest_rtype, reg)
+        vector = self.ref_reg(fill.step.dest, fill.step.dest_rtype, reg)
+        load_sigs = load.sg or self.step_sigs(load.step, dt)
+        fill_sigs = fill.sg or self.step_sigs(fill.step, dt)
+        block = [lsc_load(memory, scalar.index, addr.reg, 
+                          self.reg_tile(tiling, scalar), set(), data=_index(scalar), rsln=tag,
+                          step=load.step, sigs=load_sigs, offset=addr.offset,
+                          rtypes=[None, scalar.rtype]),
+                 lsc_move(_index(scalar), _index(vector),
+                          [self.reg_tile(tiling, scalar), self.reg_tile(tiling, vector)],
+                          rsln=tag, step=fill.step, sigs=fill_sigs,
+                          rtypes=[scalar.rtype, vector.rtype])]
+        up = any((operand_values(s, n).single() or 0) > 0 for s in _flat_sigs(fill_sigs)
+                 for n in s.operands if n.endswith("_irot"))
+        anchor = lsc_load(memory, vector.index, addr.reg, 
+                          self.reg_tile(tiling, vector), set(), data=_index(vector), rsln=tag,
+                          step=load.step, sigs=load_sigs, offset=addr.offset,
+                          rtypes=[None, vector.rtype])
+        return [self.virtual(anchor, self.element_loop(block, anchor, memory, self.vector_index(tiling, comp),
+                                  -1 if up else 1, {"direction": "load"}))]
+
+    def drain_vla(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
+        """
+        A vector stored element by element (vla_lanes): one lsc_loop, its block
+        lane 0 extracted, stored, and the vector shifted down in place - the
+        loop's own step, by one lane, whatever the vacated lane holds
+        """
+        extract, store = steps[0], steps[1]
+        elements = self.elements(tiling, comp, coord)
+        addr = self.address(sto, memory, direction, coord, elements)
+        vector = self.ref_reg(extract.step.src[0], extract.step.src_rtypes[0], reg)
+        scalar = self.ref_reg(extract.step.dest, extract.step.dest_rtype, reg)
+        extract_sigs = extract.sg or self.step_sigs(extract.step, dt)
+        store_sigs = store.sg or self.step_sigs(store.step, dt)
+        shift_sigs = [s for s in self.gen.move.get_signatures()
+                      if {"ILANESHIFT", "INVALIDOTHERS"} == {m.name for m in s.operands["adreg"].modifiers}
+                      and dt == s.operands["adreg"].dt
+                      and "adreg_irot" in s.operands
+                      and -1 in operand_values(s, "adreg_irot")]
+        if not shift_sigs:
+            raise model_error(f"{tag}: no move shifts a {dt.name} vector down by a lane")
+        first = lsc_move(_index(vector), _index(scalar),
+                         [self.reg_tile(tiling, vector), self.reg_tile(tiling, scalar)],
+                         rsln=tag, step=extract.step, sigs=extract_sigs,
+                         rtypes=[vector.rtype, scalar.rtype])
+        first.add_property("lane", 0)
+        shift = lsc_move(_index(vector), _index(vector),
+                         [self.reg_tile(tiling, vector)] * 2, rsln=tag, step=extract.step,
+                         sigs=shift_sigs, rtypes=[vector.rtype, vector.rtype])
+        shift.add_property("irot", -1)
+        block = [first,
+                 lsc_store(memory, scalar.index, addr.reg, 
+                           self.reg_tile(tiling, scalar), set(), data=_index(scalar), rsln=tag,
+                           step=store.step, sigs=store_sigs, offset=addr.offset,
+                           rtypes=[None, scalar.rtype]),
+                 shift]
+        anchor = lsc_store(memory, vector.index, addr.reg, 
+                           self.reg_tile(tiling, vector), set(), data=_index(vector), rsln=tag,
+                           step=store.step, sigs=store_sigs, offset=addr.offset,
+                           rtypes=[None, vector.rtype])
+        return [self.virtual(anchor, self.element_loop(block, anchor, memory, self.vector_index(tiling, comp), 1,
+                                  {"direction": "store"}))]
+
+    def move_lane_group(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
+        """
+        An element of a group sharing a register (bc_lanes): consecutive
+        elements along the component's contiguous index, as many as a register
+        has lanes. The group's register is loaded where an element of another
+        group was loaded last, the element then moved out of its lane
+        """
+        ops: list[lsc_operation] = []
+        lanes = self.gen.simd_size // adt_size(dt)
+        elements = self.elements(tiling, comp, coord)
+        strides = self.strides.get(memory, {})
+        along = next((i for i in elements if dict(strides.get(i, offpoly()).terms) == {(): 1}), None)
+        if along is None:
+            raise model_error(f"{tag}: {memory} has no contiguous index to group its elements along")
+        at = dict(elements[along].terms).get((), 0)
+        position = at % lanes
+        start = dict(elements)
+        start[along] = elements[along] + offpoly.const(-position)
+        key = (memory, tuple(sorted((i, str(e)) for i, e in start.items())))
+        load, move = steps[0], steps[1]
+        if self.lane_groups.get(memory) != key:
+            data = self.ref_reg(load.step.dest, load.step.dest_rtype, reg)
+            addr = self.address(sto, memory, direction, coord, start)
+            ops.append(lsc_load(memory, data.index, addr.reg, 
+                                self.reg_tile(tiling, data), set(), data=_index(data), rsln=tag,
+                                step=load.step, sigs=load.sg or
+                                self.step_sigs(load.step, dt),
+                                offset=addr.offset, rtypes=[None, data.rtype]))
+            self.lane_groups[memory] = key
+        src = self.ref_reg(move.step.src[0], move.step.src_rtypes[0], reg)
+        dest = self.ref_reg(move.step.dest, move.step.dest_rtype, reg)
+        op = lsc_move(_index(src), _index(dest),
+                      [self.reg_tile(tiling, src), self.reg_tile(tiling, dest)],
+                      rsln=tag, step=move.step,
+                      sigs=move.sg or self.step_sigs(move.step, dt),
+                      rtypes=[src.rtype, dest.rtype])
+        op.add_property("lane", position)
+        ops.append(op)
+        return ops
+
+    def subtile_path(self, step, dt) -> list[tuple]:
+        """
+        The subtile levels a step repeats over, outermost first, each (level,
+        count, elements a subtile has): blocks by their size in bits, each
+        level's count the level above's size over its own; lanes every element
+        of the level above; elements as many as the vector has at run time
+        (count None: a loop)
+        """
+        size, parent = adt_size(dt), None
+        path = []
+        for level in step.repeat.levels:
+            if level in ("element", "slice"):
+                path.append((level, None, 1))
+                continue
+            if parent is None:
+                # lanes and blocks: a vector of a size known at compile time
+                # (asmgen's simd_size raises on vector-length-agnostic ISAs)
+                parent = self.gen.simd_size * 8
+            if "lane" == level:
+                path.append(("lane", parent // (8 * size), 1))
+            else:
+                path.append((level, parent // level, level // (8 * size)))
+                parent = level
+        return path
+
+    def move_nest(self, sto, tiling, comp, coord, reg, steps, direction, tag, memory, dt):
+        """
+        A step chain repeating over a register's subtiles - lanes, blocks,
+        chunks, elements - as a loop nest: within a subtile the steps in their
+        order, a run of consecutive steps going a level deeper iterating that
+        level once together - unrolled where its count is fixed, a loop
+        (lsc_loop) where it is known at run time only. block_lanes_256 so loads per chunk, per block its lanes
+        then its 128-bit insert, then the chunk's 256-bit insert; a block store
+        per block its extract, then its lanes' stores; lanes per lane
+        """
+        items = [(rs, self.subtile_path(rs.step, dt)) for rs in steps]
+        vidx = self.vector_index(tiling, comp)
+
+        def emit(rs, path, idxs):
+            step = rs.step
+            sigs = rs.sg or self.step_sigs(step, dt)
+            if "lane" == path[-1][0]:
+                position = sum(i * level[2] for i, level in zip(idxs, path))
+                elements = self.elements(tiling, comp, coord)
+                elements[vidx] = elements.get(vidx, offpoly()) + position
+                addr = self.address(sto, memory, direction, coord, elements)
+                if "load" == step.op:
+                    data, cls = self.ref_reg(step.dest, step.dest_rtype, reg), lsc_load
+                else:
+                    data, cls = self.ref_reg(step.src[0], step.src_rtypes[0], reg), lsc_store
+                op = cls(memory, data.index, addr.reg, self.reg_tile(tiling, data),
+                         {ldst_modifier.lane}, data=_index(data, idxs[-1]), rsln=tag, step=step,
+                         sigs=sigs, offset=addr.offset, rtypes=[None, data.rtype])
+                op.add_property("lane", idxs[-1])
+                op.add_property("stride_index", vidx)
+                if step.repeat.side:
+                    op.add_property("side", step.repeat.side)
+                return [op]
+            src = self.ref_reg(step.src[0], step.src_rtypes[0], reg)
+            dest = self.ref_reg(step.dest, step.dest_rtype, reg)
+            op = lsc_move(_index(src), _index(dest),
+                          [self.reg_tile(tiling, src), self.reg_tile(tiling, dest)],
+                          rsln=tag, step=step, sigs=sigs, rtypes=[src.rtype, dest.rtype])
+            # a block's number within the level above
+            op.add_property("block", idxs[-1])
+            if step.repeat.side:
+                op.add_property("side", step.repeat.side)
+            return [op]
+
+        def nest(run, depth, idxs):
+            ops, i = [], 0
+            while i < len(run):
+                rs, path = run[i]
+                if len(path) == depth:
+                    ops += emit(rs, path, idxs)
+                    i += 1
+                    continue
+                j = i
+                while j < len(run) and len(run[j][1]) > depth:
+                    j += 1
+                if "slice" == run[i][1][depth][0]:
+                    ops += self.slice_loop(sto, tiling, comp, coord, reg,
+                                           [rs for rs, _ in run[i:j]], direction, tag, memory, dt)
+                    i = j
+                    continue
+                if run[i][1][depth][1] is None:
+                    # a count known at run time only: the run's steps for one
+                    # element, in a loop over them (lsc_loop)
+                    ops += self.move_vla(sto, tiling, comp, coord, reg,
+                                         [rs for rs, _ in run[i:j]], direction, tag, memory, dt)
+                else:
+                    for k in range(run[i][1][depth][1]):
+                        ops += nest(run[i:j], depth + 1, idxs + [k])
+                i = j
+            return ops
+
+        return nest(items, 0, [])
+
+    def emit_compute(self, sto: str, tiling, op, impl=None, slices=None) -> list:
+        """
+        One STO operation: each step of the chosen implementation, with the
+        data its operands need loaded first unless a register holds it
+        """
+        impl = impl or self.part[sto].impl
+        last = impl.math_chain[-1]
+        result = last.name_mapping.get(last.hw_ast.left.name)
+        result_tile = tiling.registers.get(result, scalar_tile)
+
+        items: list = []
+        temps: dict[str, vreg] = {}
+        for res, step in zip(impl.resolved_chain, impl.math_chain):
+            sig = res.compute_sg.representative
+            loads: list[access_group] = []
+            hws, indices, tiles, reads, writes, read_regs = [], [], [], [], [], []
+            written = []
+            outward = []
+            # a copy's source loaded straight into its destination's register:
+            # no move (structfuse's groups and rotating source registers kept
+            # copyprop from renaming one away)
+            into = self.copy_into(tiling, op, step, res, sig, slices) \
+                if "move" == self.ctx.osb.ast_op_map[step.hw_ast] else None
+            for pos, (hw, math) in enumerate(step.name_mapping.items()):
+                is_read, is_written = get_operand_io(step.hw_ast, hw)
+                rtype = sig.operands[hw].rtype
+                lane = None
+                if math not in self.components:
+                    reg = temps.setdefault(math, vreg(math, rtype, 0))
+                    self._use(reg)
+                    tile = result_tile
+                else:
+                    coord = self.gcoord(tiling, math, op.coord(math))
+                    reg = into if into is not None else self.reg_of(math, rtype, coord)
+                    tile = tiling.registers[math]
+                    strat = res.operand_strategies.get((hw, dmd.IN))
+                    by_lane = [l for l in op.lane(math) if l is not None]
+                    if is_read and strat is not None and strat.rsln.steps and by_lane \
+                            and _lane_steps(strat.rsln.steps):
+                        # loaded lane by lane: each element into the lane the
+                        # operation uses it from
+                        if self.lane_holder.get((reg, by_lane[0])) != (math, coord):
+                            access = read_access.STREAM == self.flow[(sto, math)].read
+                            loads.append(access_group(
+                                math, reg,
+                                self.move_data(sto, tiling, math, coord, reg,
+                                               strat.resolved_steps, "load",
+                                               strat.rsln.unique_tag, lane=by_lane[0]),
+                                access, coord))
+                            self.lane_holder[(reg, by_lane[0])] = (math, coord)
+                        self.holder[reg] = (math, coord)
+                    elif slices and is_read and strat is not None and \
+                            strat.rsln.resident_rtype is not None:
+                        # the slice moved from the tile into the operation's
+                        # vector (slice_vec)
+                        loads.append(access_group(math, reg, [self.slice_move(
+                            strat, math, coord, reg, rtype, slices, inward=True)], False, coord))
+                    elif is_read and strat is not None and strat.rsln.steps:
+                        if self.holder.get(reg) != (math, coord):
+                            access = read_access.STREAM == self.flow[(sto, math)].read
+                            loads.append(access_group(
+                                math, reg,
+                                self.move_data(sto, tiling, math, coord, reg,
+                                               strat.resolved_steps, "load",
+                                               strat.rsln.unique_tag),
+                                access, coord))
+                            self.holder[reg] = (math, coord)
+                    elif is_read and self.holder.get(reg) != (math, coord):
+                        raise model_error(
+                            f"{sto} reads {math}{list(coord)}, which is no longer in "
+                            f"{reg}: give {math} more data registers")
+                    lanes = [l for l in op.lane(math) if l is not None]
+                    if lanes and {omod.ILANE, omod.BLOCKLANE} & sig.operands[hw].modifiers:
+                        lane = lanes[0]
+                    if is_written:
+                        written.append((reg, math, coord))
+                        out = res.operand_strategies.get((hw, dmd.OUT))
+                        if slices and out is not None and \
+                                out.rsln.resident_rtype is not None:
+                            outward.append(self.slice_move(out, math, coord, reg, rtype, slices,
+                                                           inward=False))
+                hws.append(hw)
+                indices.append(_index(reg, lane))
+                tiles.append(tile)
+                if is_read:
+                    reads.append(pos)
+                    read_regs.append(reg)
+                if is_written:
+                    writes.append(pos)
+            rank = {c: i for i, c in enumerate(self.resolve_order)}
+            items += sorted(loads, key=lambda g: rank.get(g.component, len(rank)))
+            opname = self.ctx.osb.ast_op_map[step.hw_ast]
+            rtypes = [sig.operands[hw].rtype for hw in hws]
+            if into is not None:
+                pass                # loaded where it's copied to: nothing to move
+            elif "move" == opname:
+                items.append(compute_item(
+                    self.copy_move(sto, res, hws, indices, tiles, rtypes), read_regs))
+            else:
+                items.append(compute_item(
+                    lsc_transformation(opname, indices, tiles, reads, writes,
+                                       resolution=res, hw_operands=hws, rtypes=rtypes),
+                    read_regs))
+            items += outward
+            for reg, math, coord in written:
+                self.holder[reg] = (math, coord)
+                for key in [k for k in self.lane_holder if k[0] == reg]:
+                    del self.lane_holder[key]
+        return items
+
+    def copy_into(self, tiling, op, step, res, sig, slices) -> vreg | None:
+        """
+        The register a copy's source is loaded into for the copy alone - its
+        destination's, the copy then elided - or None: a source held already,
+        read again, loaded lane by lane or moved from a tile, a tile's copy
+        (copyprop_tiles), or of another register type, copied by a move
+        """
+        src, dst = step.name_mapping.get("adreg"), step.name_mapping.get("bdreg")
+        if src not in self.components or dst not in self.components or slices:
+            return None
+        rtype = sig.operands["adreg"].rtype
+        if rtype != sig.operands["bdreg"].rtype or rtype not in (rgt.VEC, rgt.FP):
+            return None
+        strat = res.operand_strategies.get(("adreg", dmd.IN))
+        if strat is None or not strat.rsln.steps or _lane_steps(strat.rsln.steps) \
+                or strat.rsln.resident_rtype is not None:
+            return None
+        coord = self.gcoord(tiling, src, op.coord(src))
+        if any(held == (src, coord) for held in self.holder.values()) or \
+                self.next_use(src, coord) is not None:
+            return None
+        into = self.reg_of(dst, rtype, self.gcoord(tiling, dst, op.coord(dst)))
+        # held as the destination's from here: its own operand finds it
+        self.holder[into] = (dst, self.gcoord(tiling, dst, op.coord(dst)))
+        return into
+
+    @staticmethod
+    def copy_move(sto: str, res, hws: list, indices: list, tiles: list,
+                  rtypes: list) -> lsc_move:
+        """
+        A copy's step (a plain move shape): its source's register moved into
+        its destination's, through the move's plain copies - tagged copy, for
+        copy propagation (irmod copyprop) to rename away. A tile's copy has no
+        instruction (SME has none from a tile to another): renamed away, or
+        refused
+        """
+        src, dst = hws.index("adreg"), hws.index("bdreg")
+        move = lsc_move(indices[src], indices[dst], [tiles[src], tiles[dst]],
+                        sigs=res.compute_sg, rtypes=[rtypes[src], rtypes[dst]])
+        move.add_property("copy_sto", sto)
+        return move
+
+    def emit_store(self, sto: str, tiling, op) -> list:
+        choice = self.part[sto].impl
+        items = []
+        for cand in choice.stores:
+            comp = cand.component
+            coord = self.gcoord(tiling, comp, op.coord(comp))
+            reg = self.reg_of(comp, cand.rtype, coord)
+            if self.holder.get(reg) != (comp, coord):
+                raise model_error(f"{sto} stores {comp}{list(coord)}, which is no longer "
+                                  f"in {reg}: give {comp} more data registers")
+            steps = [_step(s) for s in cand.rsln.steps]
+            memory = self.comp.get_sto(sto).memory_of(comp)
+            items.append(access_group(comp, reg,
+                                      self.move_data(sto, tiling, comp, coord, reg, steps,
+                                                     "store", cand.rsln.unique_tag, memory),
+                                      False))
+        return items
+
+    def emit_sto(self, sto: str, ops, tiling=None, impl=None) -> list:
+        tiling = tiling or self.stos[sto]
+        kind = self.comp.get_sto(sto).kind
+        items = []
+        slice_loop = tiling.slice_loop
+        for op in ops:
+            if sto_kind.COMPUTE == kind and slice_loop is not None:
+                items += self.slice_compute(sto, tiling, op, impl, slice_loop)
+            else:
+                items += self.emit_compute(sto, tiling, op, impl) if sto_kind.COMPUTE == kind \
+                    else self.emit_store(sto, tiling, op)
+            self.pos += 1
+        return items
+
+    def slice_move(self, strat, math, coord, reg, rtype, axis, inward) -> lsc_move:
+        """
+        A slice of the tile a component is resident in moved into the
+        operation's vector register, or back: its slice index the loop's
+        """
+        resident = strat.rsln.resident_rtype
+        tile_reg = self.reg_of(math, resident, coord)
+        step = strat.resolved_steps[0]
+        dt = self.ctx.component_dts.get(math)
+        sigs = step.sg or self.step_sigs(step.step, dt)
+        src, dst = (tile_reg, reg) if inward else (reg, tile_reg)
+        move = lsc_move(_index(src), _index(dst), [scalar_tile, scalar_tile], rsln=strat.rsln.unique_tag,
+                        step=step.step, sigs=sigs, rtypes=[src.rtype, dst.rtype])
+        move.add_property("slice", axis)
+        if not inward:
+            # the tile holds the component again, slice by slice
+            self.holder[tile_reg] = (math, coord)
+        return move
+
+    def slice_compute(self, sto, tiling, op, impl, slice_loop) -> list:
+        """
+        An STO operating on a tile resident in registers slice by slice: its
+        operation for one slice - the tile's slices moved into the operation's
+        vectors and back, memory operands accessed at the slice's position -
+        in a loop over the tile's slices (an lsc_loop: the tile one register
+        throughout, covered completely), memory walking along the index the
+        slices iterate
+        """
+        index, axis, comp = slice_loop
+        items = self.emit_compute(sto, tiling, op, impl, slices=axis)
+        block = []
+        for item in items:
+            block += list(item.ops) if isinstance(item, access_group) else \
+                [item.op] if isinstance(item, compute_item) else [item]
+        walks = []
+        for b in block:
+            if isinstance(b, (lsc_load, lsc_store)):
+                memory = b.indices[0].component
+                b.add_property("walk", len(walks))
+                walks.append(loop_walk(anchor=_clone(b),
+                                       step=self.strides.get(memory, {}).get(index, offpoly.const(0))))
+        one = dimp(dt=dimt.fixed, size=1)
+        element = tile(one, one)
+        vector = tile(dimp(dt=dimt.vla, size=1), one)
+        loop = lsc_loop(block=block,
+                        subtiling=subtiling(shape=element, count=element.count_in(vector)[0]),
+                        walks=walks,
+                        info={"kind": "slices", "axis": axis, "index": index, "component": comp,
+                              "direction": "compute"})
+        return [compute_item(loop, [])]
+
+    def emit_section(self, parts: list[tuple]) -> list:
+        """
+        Emit STOs' operations as one section: (sto, ops, tiling, impl) each
+        """
+        # which group's register a section loaded last starts afresh
+        self.lane_groups = {}
+        self.begin_section([(sto, ops, tiling) for sto, ops, tiling, *_ in parts])
+        items = []
+        for sto, ops, tiling, impl, *which in parts:
+            if which:
+                self.part, self.stos = self.parts[which[0]]
+                self._phase_counts = {}
+            items += self.emit_sto(sto, ops, tiling, impl)
+        self.part, self.stos = self.parts[0]
+        return items
+
+    def items(self, names, ops_of=lambda tiling: tiling.ops) -> list[tuple]:
+        """
+        A section's STOs for every part: (sto, operations, tiling, None, part)
+        """
+        return [(sto, ops_of(stos[sto]), stos[sto], None, n)
+                for sto in names for n, (_, stos) in enumerate(self.parts) if sto in stos]
+
+    def forget(self, components):
+        """
+        Registers of these components hold nothing usable any more: what a loop
+        streamed through them belongs to another iteration
+        """
+        for reg in [r for r, (c, _) in self.holder.items() if c in components]:
+            del self.holder[reg]
+        for key in [k for k, (c, _) in self.lane_holder.items() if c in components]:
+            del self.lane_holder[key]
+
+    # --- blocks ----------------------------------------------------------------
+
+    def zero_accumulators(self, block: block_description) -> list[lsc_operation]:
+        from ...flow.stages.solve import produced_rtype
+        ops = []
+        for sto in block.stos:
+            for acc in sorted(self.comp.accumulators(sto)):
+                if read_access.ZERO != self.flow[(sto, acc)].read:
+                    continue
+                # each part's tiles in its register type: a split
+                # microtile's accumulator in tiles and in vectors
+                for part, stos in self.parts:
+                    if sto not in stos:
+                        continue
+                    rtype = produced_rtype(part[sto].impl, acc)
+                    tiling = stos[sto]
+                    mine = []
+                    for op in tiling.ops:
+                        g = self.gcoord(tiling, acc, op.coord(acc))
+                        if g not in mine:
+                            mine.append(g)
+                    for coord in mine:
+                        reg = self.reg_of(acc, rtype, coord)
+                        if self.holder.get(reg) != (acc, coord):
+                            ops.append(lsc_zero(reg.owner, reg.index, tiling.registers[acc],
+                                                rtypes=[reg.rtype]))
+                            self.holder[reg] = (acc, coord)
+        if any(self.data_regs.get(a, len(self.coords[a])) < len(self.coords[a])
+               for sto in block.stos for a in self.comp.accumulators(sto)):
+            raise model_error("an accumulator needs a register for every tile it "
+                              "accumulates: it has fewer data registers than tiles")
+        return ops
+
+    def build_loop(self, block: block_description) -> ir_block:
+        k = block.loop_index
+        # The size given for the loop index (--k for gemm) counts operations
+        # along it per iteration: the unroll. An iteration covers that many
+        # times one operation's extent along the loop index.
+        extent = offpoly.extent(self.stos[block.stos[0]].extents[k])
+        iteration = extent * self.ctx.dims[k]
+        out = ir_block(name="+".join(block.stos), loop_index=k, step=iteration,
+                       unroll=self.ctx.dims[k])
+        out.prologue = self.zero_accumulators(block)
+
+        streamed = {c for sto in block.stos for c in self.comp.get_sto(sto).operands
+                    if read_access.STREAM == self.flow[(sto, c)].read}
+        items = self.emit_section(self.items(block.stos))
+
+        # what the loop stores along its index moves with it too (a packing
+        # kernel's buffer); only what it reads did
+        stored = {c for sto in block.stos
+                  for c in (self.comp.get_sto(sto).store_components or ())
+                  if k in self.strides.get(c, {})}
+        for comp in sorted(streamed | stored):
+            out.advance[comp] = self.db.add(comp, {k: iteration})
+
+        if not (self.preload and block.preload):
+            out.body = _flatten(items)
+        else:
+            # Preloads as ukrgen v1 placed them, correct by construction: per
+            # component its first n streamed loads - the first iteration's -
+            # move into the prologue; the body keeps every other load where
+            # it is and ends with the next iteration's first n loads, a
+            # pointer only advancing (the schedulers move them up to their
+            # registers' last reads); the last iteration is the body
+            # without them. The first n loads must go to distinct registers
+            # (two ahead into one would overwrite each other): n stops
+            # before a register's second occupancy, counts a register's
+            # lanes whole, and is at most --COMP-max-preload loads (a step
+            # of k's without it), as far as that allows.
+            streams: dict[str, list[int]] = {}
+            for pos, item in enumerate(items):
+                if isinstance(item, access_group) and item.streamed:
+                    streams.setdefault(item.component, []).append(pos)
+            shift: dict[str, int] = {}
+            for comp, stream in streams.items():
+                # occupancies: a register's loads with no read of it between
+                # them fill one value (its lanes); a load after the register
+                # was read is its next occupancy
+                def whole(r):
+                    # a register's lanes are elements of it (B0.el1): the
+                    # register itself
+                    return str(r).split(".el")[0]
+                bounds, seen, prev, prev_pos, lanes_in = [], set(), None, None, set()
+                for q, pos in enumerate(stream):
+                    reg = whole(items[pos].reg)
+                    # a load into one lane (ld1 {v.d}[1]) - not a dup from a
+                    # lane, which writes the whole register
+                    from .operations import ldst_modifier
+                    lane = next((op.properties.get("lane") for op in items[pos].ops
+                                 if isinstance(op, lsc_load)
+                                 and ldst_modifier.lane in op.mods), None)
+                    full = (reg, lane)
+                    if lane is not None:
+                        # a lane: disjoint from the register's other lanes - a
+                        # new occupancy only where a lane repeats
+                        new = reg != prev or full in lanes_in
+                    else:
+                        new = reg != prev or any(
+                            whole(r) == reg for p in range(prev_pos + 1, pos)
+                            for r in items[p].reads)
+                    if new:
+                        if reg in seen:
+                            break
+                        seen.add(reg)
+                        bounds.append(q)
+                        lanes_in = set()
+                    lanes_in.add(full)
+                    prev, prev_pos = reg, pos
+                else:
+                    q = len(stream)
+                limit = q if bounds else 0
+                # --COMP-max-preload registers' loads at most; without it a step
+                # of k's (tiles_per_step counts the unrolled iteration's)
+                steps = max(1, int(self.ctx.dims.get(block.loop_index, 1) or 1))
+                per_step = max(1, -(-self.tiles_per_step(comp) // steps))
+                want = int(self.max_preload[comp]) if comp in self.max_preload else per_step
+                # whole occupancies - a register's lanes one - --COMP-max-preload
+                # of them at most (0: none ahead), as many as are distinct
+                ends = [b for b in bounds[1:]] + [limit]
+                taken = min(want, len(ends)) if bounds else 0
+                shift[comp] = ends[taken - 1] if taken > 0 else 0
+            out.preload_shift = dict(shift)
+            ahead_pos = {pos for comp, stream in streams.items() for pos in stream[:shift[comp]]}
+            for comp, stream in streams.items():
+                for pos in stream[:shift[comp]]:
+                    out.prologue += items[pos].ops
+            for pos, item in enumerate(items):
+                if pos in ahead_pos:
+                    continue
+                ops = _flatten([item])
+                out.body += ops
+                # its own copies: the schedulers rename registers in place
+                out.epilogue += [_clone(o) for o in ops]
+            for comp, stream in streams.items():
+                for pos in stream[:shift[comp]]:
+                    out.body += [self.shifted(op, k, iteration) for op in items[pos].ops]
+
+        # The tail runs the main implementation one operation at a time along
+        # the loop index, for what the unrolled loop leaves over. With an
+        # unroll of 1 the loop itself steps by one operation.
+        if block.tail and out.unroll > 1:
+            self.forget(streamed)
+            items = self.emit_section(self.items(block.stos,
+                                                 lambda tiling: tiling.regenerate(counts={k: 1})))
+            out.tail = _flatten(items)
+            out.tail_step = extent
+
+        # What is shorter than one operation needs the subtail: another
+        # implementation covering one element along the loop index. Without
+        # one, the loop count must be a multiple of an operation's extent.
+        if extent != offpoly.const(1):
+            if all(sto in self.subtails for sto in block.stos):
+                self.forget(streamed)
+                items = self.emit_section([
+                    (sto, self.subtails[sto].ops, self.subtails[sto],
+                     self.subtail_impls.get(sto, None) and self.subtail_impls[sto].impl)
+                    for sto in block.stos])
+                out.subtail = _flatten(items)
+                out.subtail_step = offpoly.const(1)
+            else:
+                out.requires_multiple = extent
+        return out
+
+    def shifted(self, op: lsc_operation, index: str, amount: offpoly) -> lsc_operation:
+        """
+        The same operation one loop iteration later: a copy, with a load or
+        store's address moved along the loop index
+        """
+        new = _clone(op)
+        if isinstance(op, (lsc_load, lsc_store)):
+            new.offset = self.db.shifted(op.offset, index, amount)
+            loop = (op.properties or {}).get("loop")
+            if isinstance(loop, lsc_loop):
+                # an operation standing for a loop: the loop a later
+                # iteration's too - its anchor this copy, its block moved along
+                moved = copy.copy(loop)
+                moved.walks = [loop_walk(anchor=new if w.anchor is op else self.shifted(w.anchor, index, amount),
+                                         step=w.step) for w in loop.walks]
+                moved.block = [self.shifted(o, index, amount) for o in loop.block]
+                moved.info = dict(loop.info)
+                moved.refresh()
+                new.properties["loop"] = moved
+        elif isinstance(op, lsc_loop):
+            # a loop over elements a later iteration's: its walks' anchors and
+            # its block's accesses moved along with it
+            new.walks = [loop_walk(anchor=self.shifted(w.anchor, index, amount), step=w.step)
+                         for w in op.walks]
+            new.block = [self.shifted(o, index, amount) for o in op.block]
+            new.info = dict(op.info)
+            new.refresh()
+        return new
+
+    def build_block(self, block: block_description) -> ir_block:
+        if block.is_loop:
+            return self.build_loop(block)
+        # straight-line code: each data movement's scratch its own virtual
+        # register - a C tile's halves loaded and inserted apart from the next
+        # tile's - for the MRU to pull chains together and rename
+        self.unique_scratch = True
+        try:
+            items = self.emit_section(self.items(block.stos))
+        finally:
+            self.unique_scratch = False
+        out = ir_block(name="+".join(block.stos))
+        out.body = _flatten(items)
+        return out
+
+    def build(self) -> ir_program:
+        blocks = [self.build_block(b) for b in self.comp.get_blocks()
+                  if isinstance(b, block_description)]
+
+        # Every case starts from the registers the blocks before the branch
+        # leave, and numbers its address phases afresh: C's loads take the same
+        # address register in every case, and so do its stores.
+        cases = []
+        branch = self.comp.get_branch()
+        if branch is not None:
+            holder, phases = dict(self.holder), {c: list(p) for c, p in self.phases.items()}
+            for case in branch.cases:
+                self.holder = dict(holder)
+                self.phases = {c: list(p) for c, p in phases.items()}
+                # its own phases split the registers (phase+rotate): C's load
+                # and store in the general case, not every case's together
+                self._phase_scope = [s for b in case.blocks for s in b.stos]
+                self._phase_counts = {}
+                cases.append(ir_case(label=case.label, when=dict(case.when),
+                                     blocks=[self.build_block(b) for b in case.blocks]))
+            self._phase_scope = None
+            self._phase_counts = {}
+
+        return ir_program(blocks=blocks, offsets=self.db, strides=self.strides,
+                          addr_setup=self.addr_setup, registers=dict(self.used),
+                          stride_pointers={c: p.stride_pointers for c, p in self.addressing.items()
+                                           if p.stride_pointers is not None},
+                          addr_forms={c: p.addr_forms for c, p in self.addressing.items()
+                                      if "auto" != p.addr_forms},
+                          cases=cases, vector_indices=dict(self.vidx))
+
+@dataclass
+class _step:
+    """
+    A store resolution's step; its signatures are looked up when it is emitted
+    """
+    step : object
+    sg : object = None
+
+
+def _lane_steps(steps) -> bool:
+    """
+    Whether a data movement loads into a single lane of its register
+    """
+    return any(omod.ILANE in mods for step in steps
+               for mods in (step.opd_mod_reqs or {}).values())
+
+
+def _index(reg: vreg, lane: int | None = None) -> lsc_reg_index:
+    """
+    The LSC register index of a virtual register; a lane is a second index
+    """
+    return lsc_reg_index(reg.owner, [reg.index] + ([lane] if lane is not None else []))
+
+
+def _clone(op: lsc_operation) -> lsc_operation:
+    """
+    A copy owning its register indices and lists: the MRU renames registers by
+    rewriting op.indices in place, and widening rewrites the indices
+    themselves, so operations must not share them
+    """
+    new = copy.copy(op)
+    new.indices = [lsc_reg_index(i.component, list(i.indices)) for i in op.indices]
+    new.tiles = list(op.tiles)
+    new.reads = list(op.reads)
+    new.writes = list(op.writes)
+    new.reg_types = list(op.reg_types)
+    new.properties = dict(op.properties)
+    new.mods = copy.copy(op.mods)
+    loop = new.properties.get("loop")
+    if isinstance(loop, lsc_loop) and not isinstance(op, lsc_loop):
+        # an operation standing for a loop (program_builder.virtual): a loop of
+        # its own, its anchor this copy - the anchor is the operation, a cycle
+        own = copy.copy(loop)
+        own.block = [_clone(o) for o in loop.block]
+        own.walks = [loop_walk(anchor=new if w.anchor is op else _clone(w.anchor), step=w.step)
+                     for w in loop.walks]
+        own.info = dict(loop.info)
+        own.refresh()
+        new.properties["loop"] = own
+    if isinstance(op, lsc_loop):
+        # a loop over slices owns what's in it: a copy of a loop (a loop's
+        # last iteration's) shared its block's operations and its walks'
+        # anchors with the loop - passes changing them in place (fusing loops,
+        # hoisting loads, renumbering walks) changed both
+        new.block = [_clone(o) for o in op.block]
+        new.walks = [loop_walk(anchor=_clone(w.anchor), step=w.step) for w in op.walks]
+        new.info = dict(op.info)
+        new.refresh()
+    return new
+
+
+def _flatten(items: list) -> list[lsc_operation]:
+    ops = []
+    for item in items:
+        ops += item.ops if isinstance(item, access_group) else [item.op]
+    return ops
+
+
+#: the key of a global coordinate's shape entry - no index is called so
+_SHAPE = " shape"
+
+
+def _is_gcoord(coord) -> bool:
+    return isinstance(coord, tuple) and bool(coord) and isinstance(coord[-1], tuple) \
+        and 2 == len(coord[-1]) and _SHAPE == coord[-1][0]

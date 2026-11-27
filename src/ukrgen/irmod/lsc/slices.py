@@ -5,7 +5,7 @@ loads hoisted out of them
 
 from asmgen.asmblocks.op import register_type as rgt
 
-from ...models.load_store_operations import lsc_load, lsc_store, lsc_move, lsc_loop
+from ...models.lsc.operations import lsc_load, lsc_store, lsc_move, lsc_loop
 from .base import irmod_param, irmod_placement, lsc_irmod, blocks_and_sections
 from .vectorize import loop_of
 

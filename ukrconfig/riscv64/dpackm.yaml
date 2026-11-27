@@ -1,0 +1,33 @@
+# FP64 packing, riscv64 (rv64imafdc): the reference kernel - one element per
+# operand and per operation, F/D arithmetic on floating-point registers. No
+# case kinds: with one element per operation there is nothing for vec, gather
+# or trans to differ in (the source's layout decides the address form, not the
+# form), no mask (cdim elements are cdim operations) and no lmul or
+# min-inflight (no vectors to keep in flight). P's leading dimension is a
+# parameter, so a case packs any cdim from its own rows up - cgen's dispatch
+# window - and the sizes are the cdim values to build.
+#
+# kind: scalar sorts after vec, gather and trans in cgen's default dispatch,
+# so the same case can be added to a vector configuration as the fallback for
+# the cdim its own cases leave to the reference.
+#
+# Scheduling: a dual-issue core - one memory port, one ALU/FP port ("2:sl,f|i"),
+# loads and stores on the first, moves, multiplies and address arithmetic on
+# the second - and a load's value arriving three instructions later.
+isa: riscv64
+families:
+- family: pk
+  preset: packm_scalar
+  # at least eight elements in flight: the panel loop unrolled ceil(8 / cdim)
+  # columns, so a cdim-1 panel packs eight columns an iteration and a cdim-8
+  # one packs a column's eight rows - eight floating-point registers either way
+  min-inflight: 8
+  schedule: ['RAW:data:freg:::3', 'RAW:address:greg:::2']
+  cases:
+  - kind: scalar
+    m: 1..8      # every cdim a reference mr or nr can be
+    params:
+      X-layout: ['m:c', 'n:s']
+      Y-layout: ['m:c', 'n:s']
+      sched-cycle-slots: "2:sl,f|i"
+  dispatch: [scalar]

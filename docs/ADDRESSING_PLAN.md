@@ -129,7 +129,11 @@ in the IR, in order.
    byte the same: its access columns (0296: which columns, vector lengths as
    immediates, a pointer each within `--loop-gregs`), its walkers for run-time
    counts (0303), its placements (0306: each access's move and immediate, an
-   iteration's step on). The rest - register sets rotated across copies,
+   iteration's step on). The registers a signature names that the model didn't
+   make - a mask, a slice's index, a clobbered operand - come into the IR as
+   slots of the operation (`bind_operands`, after specialization) so that
+   liveness, the renamer and the allocation see them: docs/REGISTER_ALLOCATION.md,
+   *the signatures' operands in the IR*. The rest - register sets rotated across copies,
    temporaries freed after their last read, preloading - goes with the loop
    itself into the IR. `lsc_loop` was an actual loop - its block an IR
    block, loops among its operations - and narrowed into a virtual
@@ -147,8 +151,10 @@ in the IR, in order.
       (0309: the k loop's building treats one as the loop it stands for - its
       copies a loop of their own; `vectorize_loops`, `unroll_loops`,
       `cluster`, `copyprop` see through it), the kernels the same; SME's
-      slices next (`hoist_slices` needless, `forward_slices` forwarding at
-      tile level).
+      slices too (the builder's `slice_loop` is the tile access with the loop
+      beside it) - the loops themselves lowered as 6.6 lowers them, not
+      re-modelled: `hoist_slices` needless there, `forward_slices` forwarding
+      at tile level.
    2. **The specializer split: forms, then addresses.** An access's signature
       depends on its address only through which forms take the immediate:
       every operation's forms first (0310: usable signatures, checks), the
@@ -164,15 +170,172 @@ in the IR, in order.
       register classes (ZA's index registers). Element loops first; the k
       loop later - the model builder emitting one iteration and a loop
       descriptor, every loop built one way.
+      The two unrolls are decided apart today and ask different questions of
+      the ISA: the loop over slices in `unroll_loops` (an irmod, before the
+      forms are trimmed) - `count_unrolls` for the count, then
+      `immediates_take`: every slice operand must have a signature taking the
+      immediates 0..factor-1, SME's 4-bit row/column immediate bounding it at
+      16; the k loop in the model builder from the config's unroll - the
+      count's divisors alone, no immediate in play (its iterations are tiles
+      along k at register offsets). Same emission (`loop_code`, `step` the
+      unroll), different decision: one loop built one way asks the form once,
+      after `isa_specialize` has said which forms an address leaves usable.
    4. **Addresses after the loops**: positions, walks, moves back, advances,
       immediates, offsets over every section, nested or not - each copy its
       own address, its form the one that address allows.
    5. **The scheduler in a loop's sections**: within the registers the
       enclosing section leaves, the copies' tiles renamed into them - no
-      register sets rotated, nothing freed by hand.
+      register sets rotated, nothing freed by hand (the allocation's two
+      passes: docs/REGISTER_ALLOCATION.md, its analysis' live ranges).
    6. **The emitter's `block` for nested blocks**: the count, the index (SME's
       w12-w15 a register class; the slice operand its index and the copy's
-      immediate); `slices` and `loop` gone.
+      immediate); `slices` and `loop` gone. The loops over slices lowered
+      where they stand - the standing operation 6.1 made of them kept, not
+      re-modelled as a whole tile's operations:
+      1. *The copies in the block* - done. A loop over slices unrolled with
+         its copies explicit (expand_slice_copies), each copy's temporaries
+         its own, its walks shifted along the index: the emitter's rotating
+         register sets, its passes over the block and their bookkeeping go.
+      2. *The frame in the IR* - done. Its count (a tile's vector length of
+         slices, or a masked tile's rows at run time) and its index (in the
+         register every slice operand takes) a value operation before it
+         (slice_frame), the loop reading both, scheduled as the operations
+         before the loop.
+      3. *An iteration's address moves in the IR* - done. The moves placing
+         each access at its plan register (slice_placements) and the
+         iteration's step on address computations of the loop's block, the
+         vector lengths an access takes as an immediate recorded with it
+         (voffset). Where a column has a pointer of its own none is needed
+         (4); the emitter emits them (`--loop-gregs` leaving no pointer:
+         the moves, where they were the emitter's). The scheduler places
+         them within the block - test_slice_pointers' unrolled loop through
+         the spelling and the scheduling, right under qemu.
+      4. *Walkers and columns, registers of the loop's own* - done. An access
+         column (--loop-gregs) a register of the IR's own (new_reg), set up
+         before the loop from the register it walks (slice_registers) - one
+         add where the ISA takes three operands, the emitter's copy and add
+         where not - the accesses at it, and one step a register in the body:
+         the emitter allocates and emits, nothing chosen at emission; the
+         plan's own register the home column's, as it was. A walk's pointer
+         too, a loop of a count known at run time (slice_walks): a register a
+         walk, the walks from the same element by the same step one, set up
+         before the loop from the element its access starts at and stepped in
+         the body by the walk's step - the delta register the emitter copied
+         once a loop into, and its extra instruction, gone. The frame goes
+         before the setups (slice_frames, the setups carrying slice_setup):
+         its index among the registers the slice operands allow (w12-w15) is
+         taken first, or a column finds them. The walkers' and columns'
+         registers freed where the loop ends (the emitter's, until address
+         liveness frees them where they die - docs/REGISTER_ALLOCATION.md
+         step 6, the address registers in the allocation's two passes). The
+         SME and SMESVE kernels 98 287 -> 94 939 instructions over their 12
+         configurations, none larger (95 359 after the columns alone).
+      5. *The loop through `block`*: its control - the index's step, the
+         counter's, the branch - as `loop_code` makes it. Done as far as it
+         goes without the loop's body in the IR: the slices loop counted by
+         `loop_code` like every other, its counter down and its branch there,
+         the index's step its advance. No operation of the IR's is a branch,
+         by design: the scheduler places a loop's body and its back edge is
+         the dependencies carried into the next iteration
+         (`list_scheduler.dependencies` with `loop` set - the operations
+         twice, an edge carried where its reader is in the second copy), so a
+         branch in the IR would be a second place to keep the same order. What
+         the emitter's `slices` still holds - the frame's counter and index,
+         the index and immediate every slice operand reads, the registers'
+         release where the loop ends - stays until the loop's body is an
+         `ir_block` (the loop-building stage above) and the allocation frees
+         the registers where they die (docs/REGISTER_ALLOCATION.md step 6).
+      6. *Preloading in the loop's sections* - done on the emitter's side. A
+         pipelined loop over slices is a block counted like every other
+         (`loop_code`): its prologue the first copies' loads, its body the
+         rest with the next iteration's loads at its end, its last iteration
+         the body without them - sections of the same code the mm STO's
+         preload shift feeds, not a control of its own. The counter is the
+         block's step down in the body and the prologue's off it
+         (emitted_block.prologue_step), the frame's index the advance; the
+         steps of an iteration being the IR's (4), the prologue's loads and
+         the body's last ones come with them - test_slice_preload's
+         scheduled run, right under qemu at both vector lengths. What is not
+         the mm STO's yet: the pipelined loads are the same operations run
+         again after the advance, not clones shifted along the index, and
+         which copies may be pipelined is still preload_depth's rule of
+         register sets - exact once the renamer knows the preloaded values'
+         names for values not to reuse - and a loop whose first copies have
+         nothing to move ahead (no memory load, no slice moved out of a tile)
+         is not pipelined at all (unroll_loops' pipelined): its sections would
+         repeat the body for a last iteration that loads nothing.
+         No shipped configuration preloads (unroll_loops-preload is 0), so the
+         golden kernels are unchanged; turning it on for the reference SME and
+         SMESVE families is 6.6's next work, not a config's - the split
+         families' C epilogues came out wrong under qemu (see below).
+      7. *The renamer in its body* - done. The scheduler renames a loop's own
+         temporaries within the registers its section leaves
+         (lsc_model.rename, rename_temporaries: a value keeps its own name
+         while fewer than the limit are in use, else takes the one dead
+         longest of its data type - the reuse a dependency the order it gives
+         keeps), and marks the names bounded (op.info["renamed"]), so no
+         order it gives holds more of them than there are registers; where
+         nothing scheduled the block (the specializer's own stages) the
+         emitter does the same before emitting it, the values live at once
+         checked against the room only there. The temporaries' freeing after
+         a last use within the body is gone: a name keeps its register the
+         iteration long, and the loop's end frees them - the hand frees the
+         allocation's liveness deletes (docs/REGISTER_ALLOCATION.md step 6).
+
+      *Preloading the references, a note.* unroll_loops-preload 1 with
+      registers = the unroll across the six gemm configurations: the simple
+      kernels right under qemu (test_slice_preload, unscheduled and scheduled),
+      the split families' C epilogues wrong - sf_2vx4v_4x4v 54 of 81 runs, the
+      mismatches at rows 6 and 7 of a 16-row tile, fopa_fma_split_n the same -
+      and 94 939 -> 108 763 instructions over the 12 configurations (+14.6%: a
+      pipelined loop repeats its body for the last iteration, and the reference
+      store loops are short, so the repetition is most of them). Reverted: a
+      reference must not be wrong. Open: which of the two sections' boundaries
+      is at fault - the trailing group, whose placement (`placed[id(b)]`) was
+      computed once over prologue-then-rest and is used again after the
+      advance, or the epilogue's addresses, which follow the loop's last body
+      having already stepped the pointers. Worth settling before the configs
+      turn it on; an `ir_block` body (the loop-building stage) makes both a
+      property of the block rather than of the emitter.
+
+      *The sections, tried.* With `lsc_loop.sections` in place the preload was
+      built by the pass - prologue clones (marked ahead), the same loads again
+      at the end of the body (marked preload), `slice_moves` placing prologue
+      and body in one chain (an iteration is a cycle, so an access is placed
+      alike wherever it is emitted) and the iteration's steps before the
+      trailing group, `slice_walks`/`slice_registers` rewriting the prologue's
+      accesses and stepping before the group too, the emitter emitting the
+      three sections, the renamer over `op.ops()` because the prologue writes
+      what the body reads. The simple kernels: right, under qemu, scheduled and
+      unscheduled. The references: the split families stop *building* - the
+      AB loop 27 local values plus 9 held across it, 36 names for 32 registers,
+      `rename_temporaries` able to rename the local ones alone - and the
+      earlier wrongness never got a chance to show. A name holding a register
+      the iteration long makes the loop need its names to fit the room, and
+      `room`, `bounded` and `peak` count three different things there: it is
+      the allocation (docs/REGISTER_ALLOCATION.md step 6) that decides this,
+      per section, with what is live across each boundary known. Reverted
+      until then; the step is blocked on the allocation, not on the sections.
+      *Epilogue cases, a note.* With the sections in the IR the last iteration
+      is a section as the prologue is. The alternative weighed before the
+      loops were fused: each case its own kernel - kernels inside kernels -
+      the virtual operations fused rather than the loops, every expansion its
+      own code for its epilogue case. Merging the loops worked well
+      (`fuse_slices`) and made it less pressing; to be revalued when the
+      sections are built, for (no predication of the last iteration, each case
+      scheduled and allocated for itself, nothing carried across the loop's
+      edge) and against (a copy of the body a case in the code, a frame and a
+      register allocation a case, the dispatch between them).
+
+      The SME and SMESVE kernels are recorded before the lowering starts
+      (tests/flow/golden_kernels: each configuration's families at their first
+      sizes, their microtiles, the split ones, the packing transposes - no
+      kernel with a loop over slices among the records before), so every
+      step's reordering shows; the runs under qemu
+      (tests/specializers/test_sme_run.py) say it right. The tests' stages
+      are the specializer's to the emitter's, the spelling and the scheduling
+      left out: a test that needs them asks for them
+      (test_unroll4_scheduled does).
    7. **General first**: the VLA element loops (RVV's `vla_lanes`,
       tests/specializers/test_vla_repeat.py under qemu at two VLENs; SVE's
       insr) before SME's slices (tests/stages/test_sme.py, the SME and SMESVE

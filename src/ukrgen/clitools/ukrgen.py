@@ -11,6 +11,7 @@ from argparse import ArgumentParser
 
 from ukrgen.flow.stages.stage import stage, stage_error
 from ukrgen.flow.stages.setup import setup_stage
+from ukrgen.flow.stages.storage import storage_stage
 from ukrgen.flow.stages.datatype import datatype_stage
 from ukrgen.flow.stages.layout import layout_stage
 from ukrgen.flow.stages.solve import solve_stage
@@ -131,6 +132,7 @@ def main():
     # run on the old asmgen API and are reconnected as they are ported.
     stages = [
         setup_stage,
+        storage_stage,
         datatype_stage,
         layout_stage,
         solve_stage,
@@ -184,10 +186,6 @@ def main():
     if unrecognized():
         print(f"error: unrecognized arguments: {' '.join(unrecognized())}", file=sys.stderr)
         sys.exit(2)
-
-    if "full_function" in ukr_ctx.asmblocks:
-        print(ukr_ctx.asmblocks["full_function"])
-        return
 
     for sto in ukr_ctx.to_parts[0]:
         encodings = [part[sto].encoding for part in ukr_ctx.to_parts]

@@ -269,7 +269,14 @@ def deduce_operand_rtype(
     Find out what register type is required for an operand in the AST by investigating
     it's dimensions
 
-    :param ast: AST that uses this operand
+    This is the shape of the hardware operand - VEC for one index, TILE for two,
+    a scalar's type for none - and not what register the instruction takes the
+    value in: a scalar-reduced operand is one element which a floating-point
+    register or one lane of a vector register holds, which each resolution says
+    (dm_solver.get_opd_candidates looks up every type such an element arrives
+    in).
+
+    :param ast: the untransformed hardware AST that uses this operand
     :param opd_name: Name of the operand as it is used in the AST
     :param dt: Data type (to distinguish between FP and GP)
     :return: Required register type
@@ -303,10 +310,33 @@ def deduce_operand_rtype(
 # transformation) is every lane of its register
 LANE_MODS = frozenset({omod.ILANE, omod.GLANE, omod.BLOCKLANE})
 
+#: The register types a single element arrives in: a floating-point register of
+#: its own (a scalar instruction's operand, a vector-scalar form's) or one lane
+#: of a vector register (use_lane, or a broadcast an instruction reads a lane
+#: of). SCALAR_REDUCE says the requirement's operand is one element - which
+#: register holds it is what each resolution decides - so both keys are looked
+#: up and their resolutions pooled.
+ELEMENT_RTYPES = (rgt.VEC, rgt.FP)
+
+
+def key_rtypes(hw_rtype : rgt, tfs : set[tf]) -> tuple[rgt, ...]:
+    """
+    The register types an operand's resolutions are looked up under: its
+    hardware operand's own, and where its transformations leave it one element,
+    every register type such an element arrives in
+
+    :param hw_rtype: the register type its hardware operand has
+    :param tfs: its transformations
+    :return: one tfr_key per entry
+    """
+    if tf.SCALAR_REDUCE in tfs:
+        return tuple(dict.fromkeys((hw_rtype, *ELEMENT_RTYPES)))
+    return (hw_rtype,)
+
 
 def get_opd_candidates(*,
         gen : asmgen,
-        tfs : dict[str,tf],
+        tfs : dict[str,list[tf]],
         dir_reqs : dict[str,set[dmd]],
         hw_dts : dict[str,adt],
         hw_rtypes : dict[str,rgt],
@@ -343,18 +373,29 @@ def get_opd_candidates(*,
 
         for ddir in dir_reqs.get(opd_name,set()):
             loc = (hw_locs or {}).get((opd_name, ddir), dml.MEMORY)
-            key = tfr_key(tfs=frozenset(opd_tfs), rtype=hw_rtypes[opd_name],
-                          ddir=ddir, loc=loc)
+            candidates : list[resolved_operand_strategy] = []
+            seen : set[str] = set()
+            for rtype in key_rtypes(hw_rtypes[opd_name], set(opd_tfs)):
+                key = tfr_key(tfs=frozenset(opd_tfs), rtype=rtype,
+                              ddir=ddir, loc=loc)
 
-            rslns = registry.tfr_map.get(key, [])
-
-            candidates = generate_operand_resolution_candidates(
-                    gen=gen,
-                    rslns=rslns,
-                    target_opd_name=opd_name,
-                    target_dt=hw_dts[opd_name],
-                    compute_sg=opd_sg,
-                    target_rtype=hw_rtypes[opd_name])
+                for candidate in generate_operand_resolution_candidates(
+                        gen=gen,
+                        rslns=registry.tfr_map.get(key, []),
+                        target_opd_name=opd_name,
+                        target_dt=hw_dts[opd_name],
+                        compute_sg=opd_sg,
+                        target_rtype=rtype):
+                    # a resolution whose steps name the operand's register is
+                    # the same one wherever it is filed; one without steps (a
+                    # resident operand) takes the register type of its key, so
+                    # the two keys mean two different things
+                    identity = candidate.rsln.unique_tag if candidate.rsln.steps \
+                        else f"{rtype.name}:{candidate.rsln.unique_tag}"
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    candidates.append(candidate)
 
             if not candidates:
                 return {}
@@ -367,7 +408,7 @@ def get_opd_candidates(*,
 
 def enumerate_resolutions(*,
         gen : asmgen,
-        tfs : dict[str,tf],
+        tfs : dict[str,list[tf]],
         dir_reqs : dict[str,set[dmd]],
         hw_dts : dict[str,adt],
         hw_rtypes : dict[str,rgt],
@@ -539,6 +580,10 @@ def resolve_ast_solution(
 
     hw_rtypes : dict[str,rgt] = {}
     for opd_name in opd_tfs.keys():
+        # the register type the operand's hardware operand has - what shape it
+        # is, not what register the instruction takes it in: a scalar-reduced
+        # operand is one element, which an FP register or one lane of a vector
+        # register holds, so get_opd_candidates looks up every such key
         hw_rtypes[opd_name] = deduce_operand_rtype(hw_ast, opd_name, hw_dts[opd_name])
 
     dir_reqs : dict[str, set[dmd]] = get_dir_reqs(hw_ast, opd_tfs.keys())
@@ -596,3 +641,45 @@ class resolved_operation_chain:
         """
         constructs the chain from its string representation
         """
+
+
+
+@dataclass(frozen=True)
+class store_candidate:
+    """
+    One way to write a component to memory
+
+    :param component: component stored
+    :param rtype: register type it is stored from
+    :param rsln: data movement resolution doing it
+    """
+    component : str
+    rtype : rgt
+    rsln : tr
+    loc : dml = dml.MEMORY
+
+    def encode(self) -> str:
+        return f"{self.component}.{self.rtype.name}:{self.rsln.unique_tag}"
+
+
+@dataclass(frozen=True)
+class store_choice:
+    """
+    One way to store every component of a store STO
+    """
+    stores : tuple[store_candidate, ...]
+
+    def encode(self) -> str:
+        return " ; ".join(s.encode() for s in self.stores)
+
+
+@dataclass(frozen=True)
+class chosen_to:
+    """
+    The implementation chosen for one STO in one part
+
+    :param encoding: its selection string
+    :param impl: the implementation - an operation chain or a store choice
+    """
+    encoding : str
+    impl : resolved_operation_chain | store_choice

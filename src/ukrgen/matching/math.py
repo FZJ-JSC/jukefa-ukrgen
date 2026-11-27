@@ -3,6 +3,8 @@ Matching of mathematical operations
 """
 from __future__ import annotations
 
+from typing import Any,Callable
+
 import logging
 import functools
 import itertools
@@ -119,10 +121,6 @@ class expression_node:
             right_shape = self.right.get_shape()
             if any(i not in left_shape for i in right_shape):
                 return False
-                # index mismatch
-                if i_out is not None and i_in is not None:
-                    if i_out != i_in:
-                        return False
         return True
 
     def __str__(self):

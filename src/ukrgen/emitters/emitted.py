@@ -46,6 +46,9 @@ class emitted_block:
     tail_advance : list[str] = field(default_factory=list)
     #: what an iteration takes off its counter (an element loop's: its unroll)
     step : int = 1
+    #: what the prologue takes off it first (a loop over slices': an
+    #: iteration's slices, its copies)
+    prologue_step : int = 1
     #: whether the count may be 0 - a branch past the loop first (a vector's
     #: elements never are)
     guarded : bool = True

@@ -10,12 +10,14 @@ emitters/signature.py)
 
 from . import asmops
 from asmgen.asmblocks.op.opset import opset_modifier
+from asmgen.asmblocks.op import register_type as rgt
 from asmgen.registers import adt_size
 
-from ..lsc_model.addressing import sym
+from ..models.lsc.addressing import offpoly
 
 
 from ..specializers.signature import specialization_error
+from ..models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 class offset_planner:
@@ -159,7 +161,7 @@ class offset_planner:
             return [asmops.arith(self.e.gen, op, dst=areg, reg1=areg, reg2=source)]
         return [asmops.shifted(self.e.gen, op, dst=areg, reg1=areg, reg2=source, shift=bit)]
 
-    def add_bytes(self, areg, amount: sym, comp: str) -> list[str]:
+    def add_bytes(self, areg, amount: offpoly, comp: str) -> list[str]:
         """
         Move an address register on by a number of bytes: its steps
         (move_steps), each emitted (emit_step)
@@ -176,6 +178,10 @@ class offset_planner:
         if self.e.vector_length_kept:
             return self.e.gen.isa_setup().vector_length_register(rt=self.e.rt)
         key = f"VL in {adt_size(dt)}-byte elements"
+        if key in self.e.values:
+            # the IR's value (models/lsc/operations.set_vl_elements): its
+            # register read once, named here
+            return self.e.values[key]
         if key not in self.e.strides_in:
             self.e.recipes.append(("vl_elements", (dt,), self.e.regions_started))
             reg = self.e.greg()
@@ -185,9 +191,18 @@ class offset_planner:
                 raise specialization_error(f"reading the vector length: {why}")
             self.e.late_setup.append(self.e.gen.set(**call))
             self.e.strides_in[key] = reg
+            if key in self.e.value_names:
+                # the set op's value: the operations that compute a product
+                # from it read it (value_setup), so the register is the
+                # value's - recorded both ways the allocator keeps them
+                # (allocation.free pops the pair)
+                self.e.values[key] = reg
+                self.e.phys[(key, 0, rgt.GP)] = reg
+                self.e.numbers[(key, 0, rgt.GP)] = ("greg", reg.idx)
+                self.e.kept.add((key, 0, rgt.GP))
         return self.e.strides_in[key]
 
-    def offset_value(self, amount: sym, comp: str):
+    def offset_value(self, amount: offpoly, comp: str):
         """
         A register holding an offset polynomial in bytes - constants and
         strides: a strided walk's row change, rs - (n - R) cs - computed once
@@ -230,7 +245,7 @@ class offset_planner:
             # of their own (vl_bytes, vl_multiple, vl_stride), incb on SVE
             others = {f: c for f, c in amount.terms if f and not (1 == len(f) and f[0].startswith("stride("))}
             if others:
-                sink += self.add_bytes(reg, sym._make(others), comp)
+                sink += self.add_bytes(reg, offpoly._make(others), comp)
             if seed is not None and const:
                 sink.append(asmops.add_imm(self.e.gen, reg=reg, imm=const))
         return self.e.strides_in[key]

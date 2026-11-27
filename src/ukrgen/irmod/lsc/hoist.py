@@ -2,7 +2,7 @@
 Loads a loop doesn't change, once before it
 """
 
-from ...models.load_store_operations import lsc_load, lsc_store, lsc_transformation, lsc_move, lsc_loop, lsc_permute
+from ...models.lsc.operations import lsc_load, lsc_store, lsc_transformation, lsc_move, lsc_loop, lsc_permute
 from .base import irmod_placement, lsc_irmod
 
 

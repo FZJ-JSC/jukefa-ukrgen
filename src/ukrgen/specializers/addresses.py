@@ -19,16 +19,20 @@ resolved as a setup value (by name and element size).
 from __future__ import annotations
 
 from asmgen.asmblocks.op import operand_modifier as opd_mod
+from asmgen.asmblocks.op import register_type as rgt
 from asmgen.registers import adt_size, asm_data_type as adt
 
 from ..components.tile import scalar_tile
 from ..emitters import asmops
-from ..lsc_model.addressing import sym
-from ..lsc_model.ir import ir_program
+from ..models.lsc import allocator_decisions
+from ..models.lsc.decision import decision
+from ..models.lsc.addressing import offpoly
+from ..models.lsc.ir import ir_program
 from ..models.lsc.index import lsc_reg_index
 from ..models.lsc.reg import lsc_reg_type
-from ..models.load_store_operations import lsc_addr_compute, lsc_loop
+from ..models.lsc.operations import (lsc_addr_compute, lsc_loop, lsc_set, set_vl_elements)
 from .signature import specialization_error
+from ..models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 #: address moves spelled as steps before emitting - the kernels byte for byte
 #: the same either way; off for comparing
@@ -65,6 +69,8 @@ class address_speller:
         self._shifted: dict[tuple[str, int], bool] = {}
         #: the offsets planned for the program being spelled
         self.planned: set = set()
+        #: the program being spelled: its offsets' names (spell sets it)
+        self.program = None
         #: a scratch multiply's three steps' group, numbered
         self.next_scratch = 0
         reg = self.gen.greg(0)
@@ -78,7 +84,7 @@ class address_speller:
     def esize(self, comp: str) -> int:
         return adt_size(self.ctx.component_dts[comp])
 
-    def bytes_of(self, comp: str, elements: sym) -> sym:
+    def bytes_of(self, comp: str, elements: offpoly) -> offpoly:
         return elements * self.esize(comp)
 
     def shifted_available(self, op: str, shift: int) -> bool:
@@ -93,7 +99,7 @@ class address_speller:
                 operand_modifiers={"bdreg": {opd_mod.ISHIFT}}, bdreg_shift=shift) is not None
         return self._shifted[(op, shift)]
 
-    def vector_multiple(self, amount: sym, comp: str) -> int | None:
+    def vector_multiple(self, amount: offpoly, comp: str) -> int | None:
         """
         k where an amount of bytes is k whole vector lengths (k > 0) and the
         ISA keeps the vector length in a register; else None
@@ -134,7 +140,7 @@ class address_speller:
             return [("mul", value, op, abs(n), tuple(out))]
         return out
 
-    def move_steps(self, amount: sym, comp: str, split: bool = False) -> list[tuple]:
+    def move_steps(self, amount: offpoly, comp: str, split: bool = False) -> list[tuple]:
         """
         The steps moving an address register by a number of bytes: constants
         as an immediate; whole vectors with incb/decb where the ISA counts them
@@ -173,7 +179,7 @@ class address_speller:
             steps += self.scaled_steps(value, n, split)
         return steps
 
-    def offset_cost(self, amount: sym, comp: str) -> int:
+    def offset_cost(self, amount: offpoly, comp: str) -> int:
         """
         The instructions moving an address by amount takes spelled out: an
         immediate's add, a vector length's one, a stride's per set bit (where
@@ -198,16 +204,20 @@ class address_speller:
             cost += min(term, 3)
         return cost
 
-    def plan(self, program: ir_program) -> dict:
+    def ranked(self, program: ir_program) -> dict:
         """
-        The offsets that get a register of their own (max-offset-registers):
-        every move of strides and vector lengths taking more than one
-        instruction spelled out, its uses weighted - a loop's body tenfold -
-        times the instructions a register saves; the most first. Stride
-        parameters on the stack too: the emitter computes an offset where its
-        inputs are (after the dispatch's loads)
+        The offsets that could take a register of their own, best first: every
+        move of strides and vector lengths taking more than one instruction
+        spelled out, its uses weighted - a loop's body tenfold - times the
+        instructions a register saves. Stride parameters on the stack too: the
+        emitter computes an offset where its inputs are (after the dispatch's
+        loads)
 
-        :return: (polynomial's text, component) -> (polynomial, rank)
+        Every candidate is generated for both paths; which of them a kernel
+        takes is the allocator's decision (docs/REGISTER_ALLOCATION.md)
+
+        :return: (polynomial's text, component) -> (polynomial, score), the
+            best first
         """
         budget = program.offset_registers or 0
         if budget <= 0:
@@ -232,31 +242,45 @@ class address_speller:
             for section in SECTIONS:
                 visit(getattr(block, section) or [], 10 if "body" == section else 1)
         ranked = sorted(found.items(), key=lambda kv: -kv[1][0] * (kv[1][1] - 1))
-        return {key: (amount, uses * (cost - 1)) for key, (uses, cost, amount) in ranked[:budget]}
+        if budget <= 0:
+            return {}
+        return {key: (amount, uses * (cost - 1)) for key, (uses, cost, amount) in ranked}
 
-    def step_delta(self, step: tuple, comp: str) -> sym:
+    def plan(self, program: ir_program) -> dict:
+        """
+        The offsets that get a register of their own (max-offset-registers):
+        the best of the candidates (ranked) the budget reaches
+
+        :return: (polynomial's text, component) -> (polynomial, rank)
+        """
+        budget = program.offset_registers or 0
+        if budget <= 0:
+            return {}
+        return dict(list(self.ranked(program).items())[:budget])
+
+    def step_delta(self, step: tuple, comp: str) -> offpoly:
         """
         A step's move in the component's elements: a move's steps add up to it
         """
         kind = step[0]
         if "copy" == kind:
-            return sym.const(0)
+            return offpoly.const(0)
         if "imm" == kind:
-            return sym.const(step[1] // self.esize(comp))
+            return offpoly.const(step[1] // self.esize(comp))
         if "vectors" == kind:
-            return sym._make({("VL",): step[1]})
+            return offpoly._make({("VL",): step[1]})
         if "from_vectors" == kind:
-            return sym._make({("VL",): step[2]})
+            return offpoly._make({("VL",): step[2]})
         if "from_stride" == kind:
-            return sym._make({(step[1],): 1})
+            return offpoly._make({(step[1],): 1})
         if "offset" == kind:
             return self.elements_of(step[1], step[2])
         if "from" == kind:
             return self.step_delta(step[1], comp)
         if "from_imm" == kind:
-            return sym.const(step[1] // self.esize(comp))
+            return offpoly.const(step[1] // self.esize(comp))
         if kind in ("scratch_set", "scratch_mul"):
-            return sym.const(0)
+            return offpoly.const(0)
         if "scratch_add" == kind:
             return self.step_delta(("mul", step[3], step[2], step[4], ()), comp)
         value, sign = step[1], -1 if "sub" == step[2] else 1
@@ -271,21 +295,59 @@ class address_speller:
             factors = ("VL",)
             if "vl_multiple" == value[0]:
                 times *= value[2]
-        return sym._make({factors: sign * times})
+        return offpoly._make({factors: sign * times})
 
-    def elements_of(self, comp: str, amount: sym) -> sym:
+    def elements_of(self, comp: str, amount: offpoly) -> offpoly:
         """
         A polynomial in bytes back in the component's elements
         """
         esize = self.esize(comp)
-        return sym._make({f: c // esize for f, c in amount.terms})
+        return offpoly._make({f: c // esize for f, c in amount.terms})
 
-    def spelled(self, op: lsc_addr_compute) -> list:
+    def decision(self, key: tuple) -> decision:
+        """
+        The decision an offset's register is: its component and the index the
+        value goes by, not the polynomial it computes
+        :param key: (the polynomial's text, the component)
+        :return: the branch its operations carry
+        """
+        poly, comp = key
+        return decision("offset", (comp, self.offset_indices.get((comp, poly), 0)))
+
+    def both(self, op: lsc_addr_compute) -> list:
+        """
+        A move spelled both ways where it has two: without the offset's
+        register first, tagged with the decision's alternative, with it second
+        and tagged with the decision - exactly one of the two branches is
+        taken, so exactly one of the pair survives `decide`
+        :param op: the address move
+        :return: its operations, both paths'
+        """
+        comp = op.indices[0].component
+        key = (str(self.bytes_of(comp, op.delta)), comp)
+        plain = self.spelled(op, planned=False)
+        if key not in self.planned:
+            return plain
+        branch = self.decision(key)
+        for o in plain:
+            o.decision = branch.alternative
+        registered = self.spelled(op, planned=True)
+        for o in registered:
+            o.decision = branch
+        return plain + registered
+
+    def spelled(self, op: lsc_addr_compute, planned: bool | None = None) -> list:
         """
         An address move as its steps: from another register one add where it
         can (k vector lengths, one stride - where an add takes three
         registers), else a copy and the move's steps; a loop's advance on the
         last; a move of nothing as it was
+
+        :param op: the move
+        :param planned: whether the move takes an offset's register - the
+            specializer's plan where not given, the allocator's decision where
+            (docs/REGISTER_ALLOCATION.md: decisions) - so the same move can be
+            spelled both ways from one operation
         """
         comp = op.indices[0].component
         src, dst = op.indices[0].indices[0], op.indices[1].indices[0]
@@ -300,7 +362,8 @@ class address_speller:
         elif src != dst and one is not None and 1 == len(one) and one[0].startswith("stride(") \
                 and terms[one] == adt_size(dt) and self.three_operands:
             whole = [(src, ("from_stride", one[0]))]
-        if (str(amount), comp) in self.planned and not whole:
+        registered = (str(amount), comp) in self.planned if planned is None else planned
+        if registered and not whole:
             # one add of the offset's register, its spelling carried for where
             # the register was given up (the emitter's choice, per region)
             fallback = ((("copy",),) if src != dst else ()) + tuple(self.move_steps(amount, comp))
@@ -324,7 +387,7 @@ class address_speller:
             if advance is not None and len(steps) - 1 == n:
                 o.properties["advance"] = advance
             out.append(o)
-        total = sym.const(0)
+        total = offpoly.const(0)
         for o in out:
             total = total + o.delta
         if dict(total.terms) != dict(op.delta.terms):
@@ -351,7 +414,13 @@ class address_speller:
         a run of identical adds into shifted ones, immediates into one,
         cancelling pairs gone, a copy and a step on it into one step from the
         source (three operands)
+
+        A decision's operations and the other path's are never merged: they are
+        two answers to one question, only one of which is emitted
         """
+        def apart(a, b) -> bool:
+            """whether two operations are two paths' - never merged"""
+            return a is not None and b is not None and a.decision != b.decision
         out = []
         i = 0
         while i < len(ops):
@@ -366,6 +435,7 @@ class address_speller:
             if "reg" == st[0] and 0 == st[3] and src == dst:
                 j = i + 1
                 while j < len(ops) and _step(ops[j]) == st and _regs(ops[j]) == (comp, dst, dst) \
+                        and not apart(ops[j], ops[j - 1]) \
                         and "advance" not in (ops[j - 1].properties or {}):
                     j += 1
                 merged = self.merged_run([st] * (j - i)) if j - i > 1 else None
@@ -375,7 +445,8 @@ class address_speller:
                     continue
             nxt = ops[i + 1] if i + 1 < len(ops) else None
             ns = _step(nxt) if nxt is not None else None
-            if ns is not None and "advance" not in (op.properties or {}) and _regs(nxt) == (comp, dst, dst):
+            if ns is not None and not apart(op, nxt) and "advance" not in (op.properties or {}) \
+                    and _regs(nxt) == (comp, dst, dst):
                 # immediates into one; cancelling pairs gone
                 if "imm" == st[0] == ns[0] and src == dst and abs(st[1] + ns[1]) <= MERGED_IMMEDIATE:
                     total = st[1] + ns[1]
@@ -419,17 +490,17 @@ class address_speller:
             # the values it adds read by name: what orders it after their
             # setup's operations (docs/ADDRESSING_PLAN.md setup values, 1)
             for value in step_values(st):
-                o.indices.append(lsc_reg_index(value_name(value), [0]))
+                o.indices.append(lsc_reg_index(value_name(value, self.program), [0]))
                 o.tiles.append(scalar_tile)
                 o.reg_types.append(lsc_reg_type.value)
                 o.reads.append(len(o.indices) - 1)
             if advance is not None and len(steps) - 1 == n:
                 o.properties["advance"] = advance
             out.append(o)
-        before = sym.const(0)
+        before = offpoly.const(0)
         for o in ops:
             before = before + o.delta
-        after = sym.const(0)
+        after = offpoly.const(0)
         for o in out:
             after = after + o.delta
         if dict(before.terms) != dict(after.terms):
@@ -459,9 +530,13 @@ class address_speller:
         loops' blocks, its cases' - the offsets planned first (plan), a move
         one covers one step adding it. Done once: a step isn't spelled again
         """
-        chosen = self.plan(program)
-        self.planned = set(chosen)
-        program.offset_plan = {key: rank for key, (_, rank) in chosen.items()}
+        self.program = program
+        candidates = self.ranked(program)
+        self.planned = set(candidates)
+        # the offsets' names, in rank order: `Coff[0]` the best, and so on
+        program.offset_values = {(key[1], key[0]): n for n, key in enumerate(candidates)}
+        self.offset_indices = dict(program.offset_values)
+        program.offset_candidates = {self.decision(key): n for n, key in enumerate(candidates)}
         def rewrite(ops):
             out = []
             for op in ops:
@@ -469,7 +544,7 @@ class address_speller:
                     op.block = rewrite(list(op.block))
                     op.refresh()
                 elif isinstance(op, lsc_addr_compute) and "step" not in (op.properties or {}):
-                    out += self.spelled(op)
+                    out += self.both(op)
                     continue
                 out.append(op)
             return out
@@ -480,8 +555,18 @@ class address_speller:
                     setattr(block, section, rewrite(list(ops)))
 
 
-def value_name(value: tuple) -> str:
-    """A setup value's name as an operand: value: and its tuple"""
+def value_name(value: tuple, program=None) -> str:
+    """
+    A setup value's name: an offset's its component's `off` and an index
+    (`Coff0`, `Coff1`), the polynomial it computes its payload rather than its
+    name; any other value's its tuple as text
+    :param value: the value, a payload tuple
+    :param program: the IR, its offsets' names (value_setup's caller has one)
+    :return: the name
+    """
+    if "offset_value" == value[0] and program is not None:
+        index = (program.offset_values or {}).get((value[2], str(value[1])), 0)
+        return f"{value[2]}off{index}"
     return f"value:{value}"
 
 
@@ -512,6 +597,41 @@ def step_values(step: tuple) -> list:
     return []
 
 
+#: the setup values whose arithmetic reads the vector length: a multiple of it,
+#: a stride times one, its square, and its bytes
+COUNTED = ("vl_multiple", "vl_stride", "vl_squared", "vl_bytes")
+
+
+def _count_dt(value : tuple):
+    """
+    The element type a value's arithmetic reads the vector length in
+    :param value: a setup value's payload tuple
+    :return: the type, None for a value that reads no count
+    """
+    if value[0] not in COUNTED:
+        return None
+    return value[1] if "vl_multiple" == value[0] else value[-1]
+
+
+def _count_name(dt) -> str:
+    """
+    The vector length's name, as the set that defines it names it
+    :param dt: the element type its count is in
+    :return: the name
+    """
+    return f"VL in {adt_size(dt)}-byte elements"
+
+
+def _count_reads(value : tuple) -> list[str]:
+    """
+    The counts a value reads, as names - the value operation's operands
+    :param value: a setup value's payload tuple
+    :return: the names, empty for a value that reads none
+    """
+    dt = _count_dt(value)
+    return [] if dt is None else [_count_name(dt)]
+
+
 def value_setup(program) -> int:
     """
     The setup values spelled steps add (step_values) computed in the IR: a
@@ -520,8 +640,8 @@ def value_setup(program) -> int:
     (docs/ADDRESSING_PLAN.md setup values, 2). A value of a stride deferred to
     the dispatch the emitter leaves there. :return: the values
     """
-    from ..lsc_model.ir import ir_block, START_BLOCK
-    from ..models.load_store_operations import lsc_value_op
+    from ..models.lsc.ir import ir_block, START_BLOCK
+    from ..models.lsc.operations import lsc_value_op
     values = {}
 
     def visit(ops):
@@ -532,7 +652,7 @@ def value_setup(program) -> int:
                 step = (op.properties or {}).get(prop)
                 if step is not None:
                     for value in step_values(step):
-                        values.setdefault(value_name(value), value)
+                        values.setdefault(value_name(value, program), value)
     for block in program.blocks + [b for case in program.cases for b in case.blocks]:
         for section in SECTIONS:
             visit(getattr(block, section))
@@ -541,23 +661,38 @@ def value_setup(program) -> int:
         # rank): registers to them in that order while registers last
         rank = dict(program.offset_plan or {})
         is_offset = lambda name: "offset_value" == values[name][0]
+        # ties by the polynomial they compute, not by the name the value goes
+        # by: the order the setup's registers are taken in is the kernels'
         order = sorted(n for n in values if not is_offset(n)) + sorted(
             (n for n in values if is_offset(n)),
-            key=lambda n: (-rank.get((str(values[n][1]), values[n][2]), 0), n))
-        ops = [lsc_value_op("value", writes=[name], reads=[], value=values[name]) for name in order]
-        program.blocks = [ir_block(name=f"{START_BLOCK}values", body=ops)] + list(program.blocks)
-    return len(values)
+            key=lambda n: (-rank.get((str(values[n][1]), values[n][2]), 0),
+                           str(values[n][1]), values[n][2]))
+        ops = [lsc_value_op("value", writes=[name], reads=_count_reads(values[name]), value=values[name])
+               for name in order]
+        setup = ir_block(name=f"{START_BLOCK}values")
+        # the counts the products read, set before them - one per element size
+        # their arithmetic is in (docs/REGISTER_ALLOCATION.md: what reads the
+        # count, and why the products are the readers)
+        counts = sorted({_count_dt(values[name]) for name in order if _count_dt(values[name]) is not None},
+                        key=adt_size)
+        setup.body = [lsc_set(_count_name(dt), 0, rgt.GP, set_vl_elements(dt)) for dt in counts] + ops
+        program.blocks = [setup] + list(program.blocks)
+        return len(setup.body)
+    return 0
 
 
-def slice_frames(program) -> int:
+def slice_frames(program : ir_program) -> int:
     """
     Each loop over slices' frame in the IR: a value operation before it, in its
     section - its count (its tile's slices, or a masked tile's run-time rows)
     and its index (from 0, in a register its slice operands take) - the loop
-    reading both (info frame) (docs/ADDRESSING_PLAN.md: lowering the loops
-    over slices, 2). :return: the loops
+    reading both (info frame), their two registers minted as the program's
+    general ones (docs/ADDRESSING_PLAN.md: lowering the loops over slices, 2;
+    docs/REGISTER_ALLOCATION.md, A')
+    :param program: the IR
+    :return: the loops
     """
-    from ..models.load_store_operations import lsc_value_op
+    from ..models.lsc.operations import lsc_value_op
     loops = 0
     for block in program.blocks + [b for case in program.cases for b in case.blocks]:
         for section in SECTIONS:
@@ -565,8 +700,29 @@ def slice_frames(program) -> int:
             out = []
             for op in ops:
                 if isinstance(op, lsc_loop) and "slices" == op.info.get("kind") and not op.info.get("frame"):
-                    names = [f"slices({id(op)}):count", f"slices({id(op)}):index"]
-                    out.append(lsc_value_op("slice_frame", writes=names, reads=[], loop=op))
+                    # the frame's name: its loop's number in the program, not
+                    # the object's address - a name the IR can keep between
+                    # runs (the value's identity, its loop the payload)
+                    names = [f"slices({loops}):count", f"slices({loops}):index"]
+                    # its two registers, minted here like any other general
+                    # register: the counter, and the index (which the ISA
+                    # restricts - SME's w12-w15 - the emitter resolving)
+                    comp = op.info.get("component") or op.walks[0].anchor.indices[0].component
+                    registers = (program.new_address_register(comp, "frame counter"),
+                                 program.new_address_register(comp, "slice index"))
+                    # before the loop's own setup (its columns' registers): the
+                    # frame's registers first, the slice index among those the
+                    # slice operands allow (SME's w12-w15) taken before any
+                    # column finds them
+                    at = len(out)
+                    while at and "slice_setup" in (out[at - 1].properties or {}):
+                        at -= 1
+                    run = out[at:]
+                    out.insert(at, lsc_value_op("slice_frame", writes=names, reads=[], loop=op,
+                                                registers=registers))
+                    for setup in run:
+                        if "slice_setup" in (setup.properties or {}):
+                            del setup.properties["slice_setup"]
                     op.info["frame"] = names
                     op.refresh()
                     loops += 1

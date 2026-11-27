@@ -4,7 +4,7 @@
 # Copyright (C) 2021 Stepan Nassyr <s.nassyr@xcpp.org>
 # ------------------------------------------------------------------------------
 
-from ..models.load_store_operations import lsc_operation
+from ..models.lsc.operations import lsc_operation
 from .reg_compare import reg_compare
 from ..models.lsc.reg import lsc_reg_type
 from ..models.lsc.index import lsc_reg_index

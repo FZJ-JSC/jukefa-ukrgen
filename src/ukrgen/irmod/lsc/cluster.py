@@ -4,7 +4,7 @@ addresses are fixed
 """
 
 from ...schedulers.list_scheduler import cluster as cluster_order
-from ...models.load_store_operations import lsc_loop
+from ...models.lsc.operations import lsc_loop
 from .vectorize import loop_of
 from .base import irmod_placement, lsc_irmod
 

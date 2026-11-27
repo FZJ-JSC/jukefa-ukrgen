@@ -17,11 +17,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 class test_golden_kernels(unittest.TestCase):
     @parameterized.expand([(k[0], *k[1:]) for k in kernels()])
-    def test_unchanged(self, label, path, family, m, n):
+    def test_unchanged(self, label, path, family, m, n, cases):
         if not os.path.exists(path_of(label)):
             self.skipTest(f"{label}: not recorded")
         old = open(path_of(label)).read()
-        new = build(path, family, m, n)
+        new = build(path, family, m, n, cases)
         if old != new:
             diff = list(difflib.unified_diff(old.splitlines(), new.splitlines(), "recorded", "now",
                                              lineterm="", n=1))
@@ -73,14 +73,14 @@ class test_spelled_addresses(unittest.TestCase):
     def test_same_kernels(self):
         from ukrgen.specializers import addresses as sg
         from tests.flow.golden_kernels import kernels, build
-        for label, path, family, m, n in kernels():
+        for label, path, family, m, n, cases in kernels():
             with self.subTest(kernel=label):
                 saved = sg.SPELL_ADDRESSES
                 try:
                     sg.SPELL_ADDRESSES = False
-                    whole = build(path, family, m, n)
+                    whole = build(path, family, m, n, cases)
                     sg.SPELL_ADDRESSES = True
-                    spelled = build(path, family, m, n)
+                    spelled = build(path, family, m, n, cases)
                 finally:
                     sg.SPELL_ADDRESSES = saved
                 count = lambda t: sum(1 for l in t.splitlines() if l.strip() and not l.strip().endswith(":")
@@ -92,7 +92,7 @@ class test_spelled_addresses(unittest.TestCase):
         from tests.specializers.gemm_helper import gemm
         import tests.specializers.test_signature as t
         from ukrgen.flow.stages.irmods import post_specialize_irmod_stage
-        from ukrgen.models.load_store_operations import lsc_addr_compute, lsc_loop
+        from ukrgen.models.lsc.operations import lsc_addr_compute, lsc_loop
         # the spelling is the post-specialize stage's (before scheduling): the
         # helper's pipeline with it, after the specialization
         stages = list(t.STAGES)

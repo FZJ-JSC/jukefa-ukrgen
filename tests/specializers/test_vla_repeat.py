@@ -12,7 +12,7 @@ import unittest
 
 import tests.specializers.test_signature as t
 from ukrgen.flow.stages.irmods import pre_specialize_irmod_stage
-from ukrgen.models.load_store_operations import lsc_loop
+from ukrgen.models.lsc.operations import lsc_loop
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PARAMS = {"rvv-LMUL": "1", "A-layout": ["m:s", "k:c"],

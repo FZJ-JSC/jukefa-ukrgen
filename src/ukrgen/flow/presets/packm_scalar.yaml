@@ -1,0 +1,12 @@
+# packm_scalar: Y = X or Y = kappa*X, one element at a time - the scalar
+# reference packing kernel, RISC-V's F and D
+description: packing - Y = X, or Y = kappa*X, one element per operand and per operation (the reference kernel)
+ukr: pack
+variants:
+  # no index for vectors to run along: every operand is one element
+  mn:
+    K: m=1, n=1
+tileops:
+  copy: move(X.FP:scalar_direct, Y.FP){$K}
+  pack: mul(X.FP:scalar_direct, kappa.FP:scalar_direct, Y.FP){$K}
+  store: Y.FP:direct

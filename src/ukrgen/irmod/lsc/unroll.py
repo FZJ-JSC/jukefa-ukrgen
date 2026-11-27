@@ -8,15 +8,16 @@ from dataclasses import replace
 from asmgen.registers import adt_size
 
 from ...support.sig_group import sig_group
-from ...lsc_model import liveness
+from ...models.lsc import liveness
 from .base import irmod_param, irmod_placement, lsc_irmod
 from .vectorize import repeats
 from .base import blocks_and_sections
-from ...models.load_store_operations import lsc_loop, loop_walk, lsc_load, lsc_store
+from ...models.lsc.operations import lsc_loop, loop_walk, lsc_load, lsc_store
 from ...models.lsc.index import lsc_reg_index
-from ...lsc_model.addressing import sym
+from ...models.lsc.addressing import offpoly
 from asmgen.asmblocks.op import register_type as rgt
 from ...support.domains import operand_values
+from ...models.lsc.offset_polynomial import offset_polynomial as offpoly
 
 
 
@@ -70,7 +71,7 @@ class unroll_loops(lsc_irmod):
                     expand_copies(program, op)
                     depth = preload_depth(int(self.values["preload"]), op.subtiling.unroll,
                                           op.subtiling.registers)
-                    if depth:
+                    if depth and pipelined(op, depth):
                         op.info["preload"] = depth
                 changed += 1
         return changed
@@ -168,7 +169,7 @@ def expand_copies(program, loop):
     if unroll < 2 or loop.info.get("unrolled"):
         return
     index = loop.info.get("index")
-    # the block's own vector temporaries: written before read (lsc_model.liveness)
+    # the block's own vector temporaries: written before read (models.lsc.liveness)
     local = liveness.local(loop.block)
     base, walks = list(loop.block), list(loop.walks)
     for b in base:
@@ -193,7 +194,7 @@ def expand_copies(program, loop):
                 if w not in moved:
                     old = loop.walks[w]
                     anchor = _clone(old.anchor)
-                    anchor.offset = program.offsets.shifted(old.anchor.offset, index, sym.const(u))
+                    anchor.offset = program.offsets.shifted(old.anchor.offset, index, offpoly.const(u))
                     moved[w] = len(walks)
                     walks.append(loop_walk(anchor=anchor, step=old.step))
                 n.add_property("walk", moved[w])
@@ -217,3 +218,19 @@ def preload_depth(asked: int, unroll: int, registers: int) -> int:
                 not any(u % registers in preloaded for u in range(depth, unroll)):
             return depth
     return 0
+
+
+def pipelined(loop, depth: int) -> bool:
+    """
+    Whether the first depth copies have anything to move ahead: a memory load,
+    a slice moved out of a tile - a loop whose copies are stores and
+    arithmetic only has nothing to pipeline, and pipelining it would repeat
+    its body for a last iteration that loads nothing
+    """
+    from ...models.lsc.operations import lsc_load, lsc_move
+    from asmgen.asmblocks.op import register_type as rgt
+    return any(b.properties.get("copy", 0) < depth and
+               (isinstance(b, lsc_load) or
+                (isinstance(b, lsc_move) and "slice" in b.properties
+                 and (b.rtypes or [])[:1] == [rgt.TILE]))
+               for b in loop.block)

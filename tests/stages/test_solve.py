@@ -11,6 +11,7 @@ from ukrgen.injectors.blis.cgen import asm_source
 from ukrgen.flow.stage_engine import stage_engine
 from ukrgen.flow.stages.setup import setup_stage
 from ukrgen.flow.stages.datatype import datatype_stage
+from ukrgen.flow.stages.storage import storage_stage
 from ukrgen.flow.stages.solve import (
     solve_stage, produced_rtype, consumed_rtype, check_part_chain, to_io)
 from ukrgen.flow.stages.ukr import gemm_composition
@@ -26,7 +27,7 @@ def run(params):
             if p in params:
                 s.set_param(p, params[p])
     ctx = ukr_context()
-    res = stage_engine([setup_stage, datatype_stage, solve_stage], ctx, prolog=prolog).run()
+    res = stage_engine([setup_stage, storage_stage, datatype_stage, solve_stage], ctx, prolog=prolog).run()
     return ctx, res
 
 

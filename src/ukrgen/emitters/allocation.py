@@ -109,7 +109,8 @@ class register_allocator:
             elif rgt.TILE == rtype:
                 # a tile (SME ZA): from its own file
                 # the element type's tiles, or fewer where max-tiles says so
-                tiles = e.gen.max_tregs(dt)
+                # the tracker's count for the element size's tiles
+                tiles = e.rt.max_regs.get(e.gen.treg_tag(dt), 0)
                 cap = e.ctx.params.get("max-tiles")
                 cap = int(cap.value or 0) if cap is not None else 0
                 from ..flow.stages.isaparam import register_cap
@@ -125,12 +126,28 @@ class register_allocator:
                 held = sum(1 for (t, n) in e.numbers.values() if t == tag)
                 if not e.rt.available(tag) or held >= tiles:
                     raise specialization_error(
-                        f"{key[0]}: no tile left - {dt.name} has {e.gen.max_tregs(dt)} tiles"
+                        f"{key[0]}: no tile left - {dt.name} has "
+                        f"{e.rt.max_regs.get(e.gen.treg_tag(dt), 0)} tiles"
                         f"{f', max-tiles {cap}' if cap > 0 else ''}, "
                         f"all taken; fusing the loops over slices (fuse_slices, forward_slices) "
                         f"keeps tiles out of use, or a smaller microtile needs fewer")
                 number = e.rt.reserve_any_reg(tag)
                 e.phys[key] = e.gen.treg(number, dt)
+            elif rgt.MASK == rtype:
+                # a mask: its file where the ISA has one (SVE's and SME's
+                # p0-p15), a vector register where masks are vectors (AVX2)
+                if "mreg" in e.rt.registered_types and e.rt.available("mreg"):
+                    # a governing predicate is p0-p7: the lowest free, where
+                    # the tracker hands out the highest first
+                    used = e.rt.get_used_regs("mreg")
+                    number = next(i for i in range(e.gen.max_mregs()) if i not in used)
+                    e.rt.reserve_specific_reg("mreg", number)
+                    tag = "mreg"
+                    e.phys[key] = e.gen.mreg(number)
+                else:
+                    number = e.rt.reserve_any_reg("vreg")
+                    tag = "vreg"
+                    e.phys[key] = e.gen.vreg(number)
             else:
                 raise specialization_error(f"{rtype.name} registers are not specialized yet")
             e.numbers[key] = (tag, number)
@@ -143,7 +160,7 @@ class register_allocator:
         (a group's registers stay: a lone member must not be handed out)
         """
         e = self.e
-        if key[0] in e.program.groups:
+        if key in e.kept or key[0] in e.program.groups:
             return
         if key in e.phys:
             tag, number = e.numbers.pop(key)

@@ -32,7 +32,13 @@ from ...support.dm_resolutions.direct import direct_provider
 from ...support.dm_resolutions.strided import strided_provider
 from ...support.tiles import index_extents, ONE
 from ...support.dm_resolutions.scalar_reduce import scalar_reduce_provider
-from ...support.dm_solver import resolved_operation_chain, repeat_fits
+from ...support.dm_solver import (
+        resolved_operation_chain,
+        repeat_fits,
+        store_candidate,
+        store_choice,
+        chosen_to
+    )
 from ...support.encoding import encode_all
 
 
@@ -67,47 +73,6 @@ def clear_candidates() -> None:
     Forget the candidates kept - the next solve of each asks again
     """
     _CANDIDATES.clear()
-
-
-@dataclass(frozen=True)
-class store_candidate:
-    """
-    One way to write a component to memory
-
-    :param component: component stored
-    :param rtype: register type it is stored from
-    :param rsln: data movement resolution doing it
-    """
-    component : str
-    rtype : rgt
-    rsln : transformation_resolution
-    loc : dml = dml.MEMORY
-
-    def encode(self) -> str:
-        return f"{self.component}.{self.rtype.name}:{self.rsln.unique_tag}"
-
-
-@dataclass(frozen=True)
-class store_choice:
-    """
-    One way to store every component of a store STO
-    """
-    stores : tuple[store_candidate, ...]
-
-    def encode(self) -> str:
-        return " ; ".join(s.encode() for s in self.stores)
-
-
-@dataclass(frozen=True)
-class chosen_to:
-    """
-    The implementation chosen for one STO in one part
-
-    :param encoding: its selection string
-    :param impl: the implementation - an operation chain or a store choice
-    """
-    encoding : str
-    impl : resolved_operation_chain | store_choice
 
 
 @dataclass(frozen=True)

@@ -283,6 +283,22 @@ class resolution_registry:
                         tfr_key(tfs=tfs, rtype=rtype, ddir=ddir, loc=dm_location.REGISTER),
                         transformation_resolution(unique_tag=self.RESIDENT_TAG, steps=[]))
 
+        # A scalar-reduced operand too, where it is in a floating-point
+        # register: a scalar instruction's operand is one element by
+        # construction, and the register type its key carries is the one its
+        # transformation leaves it with - FP (dm_solver's
+        # deduce_operand_rtype). Under the vector register type the same entry
+        # would say something else: that a vector register holding several
+        # elements is one element of the requirement, an accumulator a vector
+        # operation fills lane by lane - a kernel whose accumulator is one
+        # element and whose store writes the whole register. Registering those
+        # would take Neon's gemm from 704 candidates to 2332.
+        for ddir in (dm_direction.IN, dm_direction.OUT):
+            self.add_resolution(
+                tfr_key(tfs=frozenset({tf.SCALAR_REDUCE}), rtype=rgt.FP,
+                        ddir=ddir, loc=dm_location.REGISTER),
+                transformation_resolution(unique_tag=self.RESIDENT_TAG, steps=[]))
+
 
     def add_resolution(self, key : tfr_key, rsln : transformation_resolution):
         """

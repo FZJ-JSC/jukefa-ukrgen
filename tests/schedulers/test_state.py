@@ -78,11 +78,11 @@ class test_check_state(unittest.TestCase):
             self.entry, self.exit = [], []
 
     def check(self, *blocks):
-        from ukrgen.lsc_model.state import check_state
+        from ukrgen.models.lsc.state import check_state
         return check_state(self.program(*blocks), {"vlen": "max"})
 
     def test_mask_set_once(self):
-        from ukrgen.models.load_store_operations import lsc_state
+        from ukrgen.models.lsc.operations import lsc_state
         self.assertEqual([], self.check(self.block(prologue=[lsc_state({"mask(m)": "tail(m)"})],
                                                    body=[self.reader("mask(m)")])))
 
@@ -91,7 +91,7 @@ class test_check_state(unittest.TestCase):
         self.assertTrue(any("reads mask(m) before it's set" in p for p in problems), problems)
 
     def test_setup_state_restored(self):
-        from ukrgen.models.load_store_operations import lsc_state
+        from ukrgen.models.lsc.operations import lsc_state
         problems = self.check(self.block(body=[lsc_state({"vlen": "tail(m)"})]))
         self.assertTrue(any("ends with other state" in p for p in problems), problems)
         self.assertEqual([], self.check(self.block(body=[lsc_state({"vlen": "tail(m)"}),
